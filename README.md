@@ -27,6 +27,7 @@ Build-Schritt.
 | --- | --- |
 | `opnsense_haproxy.py` | Logik und CLI |
 | `haproxy_gui.py` | Fenster (tkinter) |
+| `HAProxy-Starter.bat` | Doppelklick-Start für Windows |
 
 ## Einrichten
 
@@ -135,7 +136,14 @@ Namen schon woanders hin, wird er **nicht** überschrieben, sondern gemeldet.
 
 Braucht `tkinter`. Das gehört zu Python, wird auf Linux aber separat verpackt —
 falls es fehlt, sagt das Programm beim Start, was zu installieren ist
-(`sudo apt install python3-tk` auf Debian/Ubuntu).
+(`sudo apt install python3-tk` auf Debian/Ubuntu). Unter Windows ist tkinter
+im Installer von python.org bereits enthalten.
+
+**Windows:** Ordner herunterladen und `HAProxy-Starter.bat` doppelklicken. Der
+Starter sucht Python, prüft Version und tkinter und meldet im Klartext, was
+fehlt, statt sich wortlos zu schließen. Voraussetzung ist einmalig Python 3.8
+oder neuer von <https://www.python.org/downloads/> — beim Setup **„Add
+python.exe to PATH"** ankreuzen.
 
 Beim allerersten Start fragt ein Dialog nach Name, Adresse, API-Key und Secret
 — und, wenn du den Haken setzt, nach AdGuard Home — und legt die

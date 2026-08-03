@@ -1,0 +1,4 @@
+# batch files must keep CRLF, otherwise cmd.exe can mis-handle labels
+*.bat text eol=crlf
+*.py  text eol=lf
+*.md  text eol=lf
