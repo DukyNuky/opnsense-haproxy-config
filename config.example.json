@@ -10,12 +10,13 @@
       "verify_ssl": false,
 
       "frontend": "https_frontend",
+      "haproxy_ip": "192.168.1.1",
 
       "adguard": {
         "url": "https://adguard.example.com",
         "username": "admin",
         "password": "PASTE_ADGUARD_PASSWORD_HERE",
-        "target": "192.168.1.1",
+        "target": "",
         "verify_ssl": false
       },
 

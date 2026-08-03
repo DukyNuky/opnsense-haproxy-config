@@ -28,17 +28,19 @@ Build-Schritt.
 | `opnsense_haproxy.py` | Logik und CLI |
 | `haproxy_gui.py` | Fenster (tkinter) |
 | `HAProxy-Starter.bat` | Doppelklick-Start für Windows |
+| `icon.png` / `icon.ico` | Symbol für Fenster und Starter |
 
 ## Herunterladen
 
-**[opnsense-haproxy-1.1.0.zip](releases/opnsense-haproxy-1.1.0.zip?raw=1)** —
+**[opnsense-haproxy-1.2.0.zip](releases/opnsense-haproxy-1.2.0.zip?raw=1)** —
 entpacken und loslegen; unter Windows `HAProxy-Starter.bat` doppelklicken. Was
 sich seit der letzten Fassung geändert hat, steht im
 [Änderungsverzeichnis](CHANGELOG.md).
 
 Wer lieber den aktuellen Stand von `main` will, nimmt den grünen **Code**-Knopf
 oben oder ein Tag unter [Tags](../../tags). Ist das Programm einmal da, holt es
-sich neue Fassungen selbst — siehe [Updates](#updates).
+sich neue Fassungen selbst — siehe [Updates](#updates). Damit es nicht im
+Download-Ordner liegen bleibt, gibt es [Installieren](#installieren).
 
 ## Einrichten
 
@@ -69,7 +71,8 @@ Namen, eigenem Public Service und — falls vorhanden — eigenem AdGuard:
   "active": "Zuhause",
   "profiles": [
     { "name": "Zuhause", "url": "…", "key": "…", "secret": "…",
-      "adguard": { "url": "…", "target": "192.168.1.1" } },
+      "haproxy_ip": "192.168.1.1",
+      "adguard": { "url": "…" } },
     { "name": "Zweitstandort", "url": "…", "key": "…", "secret": "…" }
   ]
 }
@@ -113,19 +116,32 @@ weiterhin den vollen Namen ein.
 ./opnsense_haproxy.py domains        # zeigt, was zur Auswahl steht
 ```
 
+### IP von HAProxy
+
+Pro Verbindung gehört zur OPNsense die Adresse, unter der HAProxy erreichbar
+ist — im Fenster das Feld **IP von HAProxy**, in der Datei `haproxy_ip`. Darauf
+zeigen alle DNS-Einträge, die das Programm anlegt:
+
+```json
+{ "name": "Zuhause", "url": "…", "haproxy_ip": "192.168.1.1" }
+```
+
+Sie ist der Vorschlag, nicht das letzte Wort: ein `target` im
+`adguard`-Abschnitt sticht sie für diese Verbindung aus, `--dns-target` für
+einen einzelnen Aufruf.
+
 ### DNS-Umschreibung in AdGuard Home
 
-Optional. Ist in der Konfiguration ein `adguard`-Abschnitt mit `url` und
-`target` hinterlegt, wird zu jedem neuen Host eine DNS-Umschreibung angelegt,
-die auf `target` zeigt — also üblicherweise auf die IP von HAProxy. Beim
-Entfernen verschwindet der Eintrag wieder.
+Optional. Ist in der Konfiguration ein `adguard`-Abschnitt mit `url`
+hinterlegt, wird zu jedem neuen Host eine DNS-Umschreibung auf die
+`haproxy_ip` angelegt. Beim Entfernen verschwindet der Eintrag wieder.
 
 ```json
 "adguard": {
   "url": "https://adguard.example.de",
   "username": "admin",
   "password": "…",
-  "target": "192.168.1.1",
+  "target": "",
   "verify_ssl": false
 }
 ```
@@ -163,12 +179,32 @@ der Umschalter für die Verbindungen, daneben das Zahnrad zum Bearbeiten.
 
 Links das Formular — Basis-Domain, Hostname, Server-IP, Port, ein Schalter für
 SSL zum Backend und einer für den AdGuard-Eintrag. Unter dem Hostnamen steht
-laufend mit, welcher Name daraus wird. Rechts alles, was aktuell an den Public
-Services hängt, mit **Entfernen** pro Eintrag. **Vorschau** zeigt, was angelegt
-würde, ohne etwas zu ändern. Unten läuft das Protokoll mit denselben Zeilen wie
-die CLI, farblich nach Anlegen, Löschen und Fehler getrennt. Hell/Dunkel
-schaltet der Knopf oben rechts um; Theme und Fenstergröße werden gemerkt.
-Der Knopf **⇩** daneben sucht nach Updates, siehe unten.
+laufend mit, welcher Name daraus wird. **Vorschau** zeigt, was angelegt würde,
+ohne etwas zu ändern. Unten läuft das Protokoll mit denselben Zeilen wie die
+CLI, farblich nach Anlegen, Löschen und Fehler getrennt. Hell/Dunkel schaltet
+der Knopf oben rechts um; Theme und Fenstergröße werden gemerkt. Was die
+Knöpfe dort tun, sagt ein Hinweis, wenn die Maus einen Moment darauf liegt.
+
+Rechts steht alles, was aktuell an den Public Services hängt. **Der Hostname
+ist ein Link** — ein Klick öffnet die Seite im Browser, mit dem Schema und dem
+Port, auf denen der Public Service tatsächlich lauscht. Daneben steht, was
+AdGuard zu diesem Namen weiß:
+
+| | |
+| --- | --- |
+| **DNS ✓** | Es gibt eine Umschreibung, und sie zeigt auf die HAProxy-IP. |
+| **DNS → …** | Es gibt eine, sie zeigt aber woanders hin. |
+| **kein DNS** | AdGuard kennt den Namen nicht. |
+
+Der Knopf daneben bringt das in Ordnung: **DNS eintragen**, **auf HAProxy
+zeigen** oder **DNS löschen** — je nachdem, was gerade fehlt. Das geht nur an
+AdGuard, an HAProxy ändert sich dabei nichts. **Entfernen** räumt umgekehrt den
+ganzen Eintrag ab. Ohne eingerichtetes AdGuard bleibt die Spalte leer.
+
+Rules, die in OPNsense von Hand angelegt wurden, sind dabei: ihr Hostname wird
+auch aus einem `hdr_beg` gelesen, sie sind also anklickbar und bekommen ihren
+DNS-Knopf. **Entfernen** gibt es für sie nicht — dafür müssten die Objekte so
+heißen, wie dieses Programm sie benennt.
 
 Alle API-Aufrufe laufen in einem Hintergrund-Thread, das Fenster friert also
 nicht ein, während die OPNsense antwortet. Was gerade passiert, steht unter der
@@ -179,6 +215,45 @@ Der Dialog hinter dem Zahnrad bearbeitet immer **eine** Verbindung: oben die
 OPNsense, darunter — hinter einem Haken — das dazugehörige AdGuard Home. Ist
 der Haken aus, bleibt DNS für diese Verbindung unberührt. Ab der zweiten
 Verbindung gibt es dort auch einen Löschen-Knopf.
+
+## Installieren
+
+Damit das Programm nicht im Download-Ordner wohnen bleibt, legt es sich selbst
+an einen festen Platz — der Knopf **⤓** oben rechts im Fenster, oder:
+
+```sh
+./opnsense_haproxy.py install
+```
+
+Das kopiert die Programmdateien nach `~/.local/share/opnsense-haproxy` (als
+root nach `/opt/opnsense-haproxy`), verlinkt die Befehle `haproxy-gui` und
+`opnsense-haproxy` in `~/.local/bin` und trägt das Programm mit seinem Symbol
+ins Anwendungsmenü ein — von dort lässt es sich an die **Taskleiste** anheften.
+Ein anderer Ordner geht genauso:
+
+```sh
+./opnsense_haproxy.py install /opt/haproxy-tool     # wohin
+./opnsense_haproxy.py install --bin ~/bin           # wo die Befehle landen
+./opnsense_haproxy.py install --desktop             # auch auf den Schreibtisch
+./opnsense_haproxy.py install --no-menu             # ohne Menü-Eintrag
+./opnsense_haproxy.py install --no-commands         # ohne Befehle
+```
+
+Liegt der Ordner für die Befehle nicht im `PATH`, sagt das Programm das —
+dann fehlt nur die Zeile `export PATH="$HOME/.local/bin:$PATH"` in `~/.bashrc`.
+
+Der Menü-Eintrag ist eine gewöhnliche `.desktop`-Datei in
+`~/.local/share/applications`; sie zeigt auf `haproxy_gui.py` im Zielordner und
+auf `icon.png` daneben. Zum Entfernen reichen die Datei, der Zielordner und die
+beiden Verweise in `~/.local/bin`.
+
+**Windows:** derselbe Knopf legt eine Verknüpfung mit `icon.ico` im Startmenü
+an (auf Wunsch auch auf dem Schreibtisch) und kopiert das Programm nach
+`%LOCALAPPDATA%\Programs\opnsense-haproxy`. Gestartet wird über `pythonw.exe`,
+es bleibt also kein Konsolenfenster offen.
+
+Zugangsdaten fasst das Installieren nicht an — die liegen ohnehin in
+`~/.config/opnsense-haproxy/`.
 
 ## Updates
 
@@ -203,8 +278,9 @@ Auf der Kommandozeile:
 ```
 
 Ersetzt werden ausschließlich `opnsense_haproxy.py`, `haproxy_gui.py`,
-`HAProxy-Starter.bat`, `README.md` und `config.example.json` — alles andere aus
-dem Download wird ignoriert, Zugangsdaten und Einstellungen bleiben unangetastet.
+`HAProxy-Starter.bat`, die beiden Symbole, `README.md`, `CHANGELOG.md` und
+`config.example.json` — alles andere aus dem Download wird ignoriert,
+Zugangsdaten und Einstellungen bleiben unangetastet.
 Die bisherigen Dateien landen vorher in `backup-<version>/` daneben, falls du
 zurück willst. Heruntergeladener Python-Code wird vor dem Schreiben auf Syntax
 geprüft; ist das Archiv unvollständig oder beschädigt, wird nichts angefasst.
@@ -214,7 +290,9 @@ und verweist auf `git pull` — sonst wären eigene Änderungen weg.
 
 Ein neues Paket zum Herunterladen baut `./make_release.py`: es liest die
 Versionsnummer aus `opnsense_haproxy.py` und legt
-`releases/opnsense-haproxy-<version>.zip` an.
+`releases/opnsense-haproxy-<version>.zip` an. Das Symbol zeichnet
+`./make_icon.py` neu — reine Standardbibliothek, jede Form als Abstand
+beschrieben, daraus fallen `icon.png` und `icon.ico` heraus.
 
 ## Kommandozeile
 
@@ -262,11 +340,13 @@ Weitere Befehle:
 ./opnsense_haproxy.py remove app.example.com      # alle vier Objekte wieder weg
 ./opnsense_haproxy.py apply                       # Configtest + Reload
 ./opnsense_haproxy.py status                      # läuft HAProxy?
+./opnsense_haproxy.py install                     # fester Platz + Starter
 ./opnsense_haproxy.py update                      # neue Version von GitHub holen
 ./opnsense_haproxy.py gui                         # Fenster
 ```
 
-Für bequemeren Aufruf:
+Für bequemeren Aufruf legt `install` die Befehle schon an. Von Hand geht es
+auch:
 
 ```sh
 chmod +x opnsense_haproxy.py

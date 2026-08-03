@@ -17,13 +17,14 @@ import os
 import re
 import shutil
 import ssl
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -328,15 +329,51 @@ class AdGuard:
     def delete_rewrite(self, domain, answer):
         self.call("rewrite/delete", {"domain": domain, "answer": answer})
 
+    def rewrite_map(self):
+        """Every rewrite as ``{domain: answer}``, for looking many names up."""
+        return {str(entry.get("domain", "")).lower(): str(entry.get("answer", ""))
+                for entry in self.rewrites()}
+
+
+def set_rewrite(adguard, host, target):
+    """Make the rewrite for ``host`` answer with ``target``.
+
+    AdGuard has no update call, so a rewrite pointing somewhere else has to be
+    deleted and written again. Returns what happened, for the log.
+    """
+    existing = adguard.find_rewrite(host)
+    if existing is not None:
+        previous = str(existing.get("answer", ""))
+        if previous == target:
+            return "unchanged"
+        adguard.delete_rewrite(host, previous)
+        adguard.add_rewrite(host, target)
+        return "changed"
+    adguard.add_rewrite(host, target)
+    return "added"
+
+
+def clear_rewrite(adguard, host):
+    """Remove the rewrite for ``host``, if there is one."""
+    existing = adguard.find_rewrite(host)
+    if existing is None:
+        return "missing"
+    adguard.delete_rewrite(host, str(existing.get("answer", "")))
+    return "removed"
+
 
 def adguard_from_config(config, overrides=None):
     """Build an AdGuard client from the config file, or None when unconfigured.
 
     Returns ``(client, settings)``; ``settings["error"]`` is set instead of
     raising when the address is unusable, so a UI can say so and carry on.
+    The connection's ``haproxy_ip`` is what the rewrites answer with unless the
+    AdGuard section names a target of its own.
     """
     settings = dict(config.get("adguard") or {})
     settings.update({k: v for k, v in (overrides or {}).items() if v})
+    if not settings.get("target"):
+        settings["target"] = str(config.get("haproxy_ip") or "").strip()
     if not settings.get("url"):
         return None, settings
     try:
@@ -766,15 +803,63 @@ def run_step(operation, client, opts, adguard=None, log=None):
             "dry_run": getattr(opts, "dry_run", False)}
 
 
+def derive_path(conditions):
+    return next((str(c["value"]) for c in conditions
+                 if c["expression"] == "path_beg"), "")
+
+
+def derive_host(conditions):
+    """The name a browser would ask for, however the rule happens to match it.
+
+    ``hdr_beg`` is in here because rules clicked together by hand often use it,
+    and one of those still points at a host worth opening -- but only when it
+    holds a whole name, not just the ``wiki`` of a ``wiki.*`` prefix match.
+    """
+    for wanted in ("hdr", "ssl_sni", "hdr_beg"):
+        for condition in conditions:
+            value = str(condition["value"] or "")
+            if condition["expression"] == wanted and "." in value:
+                return value
+    return None
+
+
 def derive_target(conditions):
-    """Rebuild the host (plus path) a rule matches, so it can be removed again."""
+    """The host (plus path) a rule matches, so it can be removed again.
+
+    Only an exact match counts: ``remove`` looks the objects up by the names
+    they would have been given, and a prefix match was never one of ours.
+    """
     host = next((c["value"] for c in conditions
                  if c["expression"] in ("hdr", "ssl_sni")), None)
     if not host:
         return None
-    path = next((c["value"] for c in conditions
-                 if c["expression"] == "path_beg"), "")
-    return f"{host}{path}"
+    return f"{host}{derive_path(conditions)}"
+
+
+def bind_port(bind):
+    """The port a public service listens on, from its bind address.
+
+    ``bind`` may hold several addresses (``0.0.0.0:443, [::]:443``); they share
+    a port in every sane setup, so the first one answers the question.
+    """
+    first = str(bind or "").split(",")[0].strip()
+    port = first.rsplit(":", 1)[-1] if ":" in first else ""
+    return port if port.isdigit() else ""
+
+
+def public_url(service, host, path=""):
+    """The address a browser would use to reach a rule's host.
+
+    A public service on 80 is plain HTTP, everything else is HTTPS -- that is
+    what these frontends are for. A port other than the two default ones has to
+    be part of the address, or the link goes somewhere else entirely.
+    """
+    if not host:
+        return ""
+    port = bind_port(service.get("bind"))
+    scheme = "http" if port == "80" else "https"
+    suffix = "" if port in ("", "80", "443") else f":{port}"
+    return f"{scheme}://{host}{suffix}{path or ''}"
 
 
 def inventory(client):
@@ -786,7 +871,9 @@ def inventory(client):
             "uuid": row["uuid"],
             "name": row.get("name", ""),
             "mode": selected_value(frontend.get("mode")) or "http",
-            "bind": frontend.get("bind", ""),
+            # bind arrives as an option map on newer plugin versions and as a
+            # plain string on older ones; both end up as "addr:port, addr:port"
+            "bind": ", ".join(selected_values(frontend.get("bind"))),
             "enabled": str(frontend.get("enabled", "1")) == "1",
             "rules": [_read_rule(client, uuid)
                       for uuid in selected_values(frontend.get("linkedActions"))],
@@ -796,7 +883,7 @@ def inventory(client):
 
 def _read_rule(client, action_uuid):
     rule = {"uuid": action_uuid, "name": "", "type": "", "conditions": [],
-            "backend": None, "target": None}
+            "backend": None, "target": None, "host": None, "path": ""}
     try:
         action = client.get("action", action_uuid)
     except ApiError:
@@ -813,6 +900,8 @@ def _read_rule(client, action_uuid):
         expression = selected_value(acl.get("expression"))
         rule["conditions"].append({"expression": expression,
                                    "value": acl.get(expression, "")})
+    rule["host"] = derive_host(rule["conditions"])
+    rule["path"] = derive_path(rule["conditions"])
     rule["target"] = derive_target(rule["conditions"])
 
     backend_uuid = selected_value(action.get("use_backend"))
@@ -887,7 +976,8 @@ GITHUB_API = "https://api.github.com"
 # archive can drop something new into the user's folder -- and config.json /
 # gui.json are never in the list, so personal settings survive every update.
 UPDATE_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "HAProxy-Starter.bat",
-                "README.md", "CHANGELOG.md", "config.example.json")
+                "README.md", "CHANGELOG.md", "config.example.json",
+                "icon.png", "icon.ico")
 ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py")
 
 # The whole project is well under a megabyte; anything beyond this is either a
@@ -1095,6 +1185,275 @@ def install_update(release, folder=None, report=None, timeout=60):
 
 
 # --------------------------------------------------------------------------
+# Installing
+# --------------------------------------------------------------------------
+
+# Everything an installation consists of. The icons are in here because the
+# desktop starter points at icon.png -- an installation without them would show
+# a blank tile in the task bar.
+INSTALL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "icon.png",
+                 "icon.ico", "HAProxy-Starter.bat", "README.md",
+                 "CHANGELOG.md", "config.example.json")
+RUNNABLE = ("opnsense_haproxy.py", "haproxy_gui.py")
+
+# The names the commands get in the bin folder. Underscores and a .py suffix
+# are fine for files but awkward to type.
+LAUNCHERS = {"opnsense-haproxy": "opnsense_haproxy.py",
+             "haproxy-gui": "haproxy_gui.py"}
+
+DESKTOP_FILE = "opnsense-haproxy.desktop"
+# tkinter is told to use this as its window class, so the task bar can tell
+# which running window belongs to the starter
+WM_CLASS = "opnsense-haproxy"
+
+DESKTOP_ENTRY = """\
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=HAProxy · OPNsense
+GenericName=Reverse Proxy
+Comment=HAProxy-Einträge auf OPNsense anlegen
+Exec={exec}
+Icon={icon}
+Terminal=false
+Categories=Network;
+Keywords=HAProxy;OPNsense;Proxy;Reverse Proxy;AdGuard;DNS;
+StartupWMClass={wmclass}
+"""
+
+
+def running_as_root():
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def default_install_dir():
+    """Where the program belongs on this system, unless told otherwise."""
+    if os.name == "nt":
+        root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return os.path.join(root, "Programs", "opnsense-haproxy")
+    if running_as_root():
+        return "/opt/opnsense-haproxy"
+    return os.path.expanduser("~/.local/share/opnsense-haproxy")
+
+
+def default_bin_dir():
+    """The folder the commands are linked into -- one that is usually on PATH."""
+    if os.name == "nt":
+        return ""  # Windows has no such place; the shortcut is the way in
+    return "/usr/local/bin" if running_as_root() else os.path.expanduser("~/.local/bin")
+
+
+def applications_dir():
+    """Where a .desktop file has to sit to appear in the menu and task bar."""
+    if running_as_root():
+        return "/usr/share/applications"
+    root = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(root, "applications")
+
+
+def desktop_dir():
+    """The user's desktop folder, whatever it is called in their language."""
+    config = os.path.join(os.environ.get("XDG_CONFIG_HOME")
+                          or os.path.expanduser("~/.config"), "user-dirs.dirs")
+    try:
+        with open(config) as handle:
+            found = re.search(r'^XDG_DESKTOP_DIR="(.*)"\s*$', handle.read(), re.M)
+    except OSError:
+        found = None
+    if found:
+        path = found.group(1).replace("$HOME", os.path.expanduser("~"))
+        if os.path.isdir(path):
+            return path
+    for name in ("Desktop", "Schreibtisch"):
+        path = os.path.expanduser(f"~/{name}")
+        if os.path.isdir(path):
+            return path
+    return ""
+
+
+def on_path(folder):
+    """Is this folder one the shell would find a command in?"""
+    if not folder:
+        return False
+    wanted = os.path.normcase(os.path.abspath(folder))
+    return any(os.path.normcase(os.path.abspath(part)) == wanted
+               for part in (os.environ.get("PATH") or "").split(os.pathsep) if part)
+
+
+def install_source(folder=None):
+    """The folder to copy from, checked for completeness before anything runs."""
+    folder = folder or install_dir()
+    missing = [name for name in RUNNABLE
+               if not os.path.exists(os.path.join(folder, name))]
+    if missing:
+        raise UsageError(f"{folder} is not a complete copy: {', '.join(missing)} missing")
+    return folder
+
+
+def copy_program(source, target, report=None):
+    """Put the program files into the target folder, keeping them runnable."""
+    say = report or (lambda _text: None)
+    os.makedirs(target, exist_ok=True)
+    copied = []
+    for name in INSTALL_FILES:
+        origin = os.path.join(source, name)
+        if not os.path.exists(origin):
+            continue  # icons and docs are welcome but not required
+        shutil.copy2(origin, os.path.join(target, name))
+        copied.append(name)
+    for name in RUNNABLE:
+        path = os.path.join(target, name)
+        if os.path.exists(path):
+            os.chmod(path, os.stat(path).st_mode | 0o111)
+    say(f"copied {len(copied)} files into {target}")
+    return copied
+
+
+def link_commands(target, bin_dir, report=None):
+    """Make the two scripts callable by name from anywhere.
+
+    A symlink is enough: Python resolves it before deciding where to look for
+    the modules next to the script, so ``gui`` still finds haproxy_gui.py.
+    """
+    say = report or (lambda _text: None)
+    os.makedirs(bin_dir, exist_ok=True)
+    linked = []
+    for command, script in sorted(LAUNCHERS.items()):
+        link = os.path.join(bin_dir, command)
+        script_path = os.path.join(target, script)
+        if os.path.islink(link) or os.path.exists(link):
+            os.remove(link)
+        os.symlink(script_path, link)
+        linked.append(link)
+    say(f"linked the commands in {bin_dir}")
+    return linked
+
+
+def write_desktop_entry(target, folder, report=None, refresh=False):
+    """Write the .desktop file that puts the program in the menu."""
+    say = report or (lambda _text: None)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, DESKTOP_FILE)
+    launcher = os.path.join(target, "haproxy_gui.py")
+    text = DESKTOP_ENTRY.format(
+        exec=f'"{launcher}"' if " " in launcher else launcher,
+        icon=os.path.join(target, "icon.png"), wmclass=WM_CLASS)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.chmod(path, 0o755)  # some desktops only trust an executable starter
+    say(f"wrote the starter {path}")
+    if refresh:
+        refresh_menu(folder)
+    return path
+
+
+def refresh_menu(folder):
+    """Nudge the desktop into noticing the new entry, where that tool exists."""
+    tool = shutil.which("update-desktop-database")
+    if not tool:
+        return
+    try:
+        subprocess.run([tool, folder], timeout=20, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass  # the entry is written; a stale cache sorts itself out
+
+
+def windows_shortcut(target, folder, report=None):
+    """A .lnk with the icon, built by the shell's own scripting object.
+
+    Windows has no file format we could just write here, but every installation
+    can create a shortcut through WScript.Shell.
+    """
+    say = report or (lambda _text: None)
+    os.makedirs(folder, exist_ok=True)
+    link = os.path.join(folder, "HAProxy · OPNsense.lnk")
+    runtime = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if not os.path.exists(runtime):
+        runtime = sys.executable
+    script = (
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut({link});"
+        "$s.TargetPath = {runtime};"
+        "$s.Arguments = {arguments};"
+        "$s.WorkingDirectory = {target};"
+        "$s.IconLocation = {icon};"
+        "$s.Description = 'HAProxy-Einträge auf OPNsense anlegen';"
+        "$s.Save()"
+    ).format(
+        link=_powershell_string(link),
+        runtime=_powershell_string(runtime),
+        arguments=_powershell_string(f'"{os.path.join(target, "haproxy_gui.py")}"'),
+        target=_powershell_string(target),
+        icon=_powershell_string(os.path.join(target, "icon.ico")),
+    )
+    try:
+        done = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            timeout=60, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise UsageError(f"could not create the shortcut: {exc}") from None
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout or "").strip()[:200]
+        raise UsageError(f"could not create the shortcut: {detail}")
+    say(f"created the shortcut {link}")
+    return link
+
+
+def _powershell_string(text):
+    """A literal PowerShell string -- single quotes, doubled to escape."""
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def install(target=None, bin_dir=None, commands=True, menu=True, desktop=False,
+            source=None, report=None):
+    """Copy the program somewhere permanent and add the starters asked for.
+
+    Returns what was written, so the caller can say so in its own words.
+    """
+    say = report or (lambda _text: None)
+    source = install_source(source)
+    target = os.path.abspath(os.path.expanduser(target or default_install_dir()))
+
+    if os.path.isdir(os.path.join(target, ".git")):
+        raise UsageError(f"{target} is a git working copy -- installing there "
+                         "would overwrite the checkout")
+    same = os.path.exists(target) and os.path.samefile(source, target)
+    if same:
+        say("the program is already there -- only the starters are written")
+    else:
+        copy_program(source, target, report)
+
+    result = {"target": target, "same": same, "commands": [], "menu": "",
+              "desktop": "", "bin": bin_dir or "", "path_hint": False}
+
+    if os.name == "nt":
+        if menu:
+            start = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                                 "Microsoft", "Windows", "Start Menu", "Programs")
+            result["menu"] = windows_shortcut(target, start, report)
+        if desktop:
+            folder = desktop_dir() or os.path.expanduser("~/Desktop")
+            result["desktop"] = windows_shortcut(target, folder, report)
+        return result
+
+    if commands:
+        folder = os.path.abspath(os.path.expanduser(bin_dir or default_bin_dir()))
+        result["commands"] = link_commands(target, folder, report)
+        result["bin"] = folder
+        result["path_hint"] = not on_path(folder)
+    if menu:
+        result["menu"] = write_desktop_entry(target, applications_dir(), report,
+                                             refresh=True)
+    if desktop:
+        folder = desktop_dir()
+        if not folder:
+            say("no desktop folder found -- skipped")
+        else:
+            result["desktop"] = write_desktop_entry(target, folder, report)
+    return result
+
+
+# --------------------------------------------------------------------------
 # Configuration / CLI
 # --------------------------------------------------------------------------
 
@@ -1116,7 +1475,7 @@ def load_config(path):
 
 
 PROFILE_KEYS = ("name", "url", "key", "secret", "verify_ssl", "frontend",
-                "adguard", "defaults")
+                "haproxy_ip", "adguard", "defaults")
 
 
 def profiles_of(config):
@@ -1238,17 +1597,26 @@ def cmd_init(args, _config):
     if frontend:
         config["frontend"] = frontend
 
+    haproxy_ip = ask("IP HAProxy answers on (used for the DNS rewrites)",
+                     allow_empty=True)
+    if haproxy_ip:
+        config["haproxy_ip"] = haproxy_ip
+
     adguard_url = ask("AdGuard Home URL (empty = no DNS rewrites)",
                       allow_empty=True)
     if adguard_url:
-        config["adguard"] = {
+        adguard = {
             "url": adguard_url,
             "username": ask("AdGuard user", allow_empty=True),
             "password": ask("AdGuard password", secret=True, allow_empty=True),
-            "target": ask("address the rewrites should point at"),
             "verify_ssl": ask("verify AdGuard's TLS certificate? (yes/no)",
                               "no").lower() in YES,
         }
+        target = ask("address the rewrites should point at",
+                     haproxy_ip, allow_empty=bool(haproxy_ip))
+        if target and target != haproxy_ip:
+            adguard["target"] = target  # this AdGuard points somewhere else
+        config["adguard"] = adguard
     profiles = [p for p in existing if p.get("name") != config["name"]]
     profiles.append(config)
     parent = os.path.dirname(os.path.abspath(path))
@@ -1324,7 +1692,8 @@ def _adguard_for(args, profile):
     if not args.dns_target:
         raise UsageError(
             "AdGuard is configured but no target address is set -- add "
-            '"target" to the adguard section or pass --dns-target')
+            '"haproxy_ip" to the profile (or "target" to the adguard '
+            "section) or pass --dns-target")
     return adguard
 
 
@@ -1400,6 +1769,28 @@ def cmd_update(args, _config):
     print(f"updated to {result['version']}: {', '.join(result['files'])}")
     print(f"the previous version is in {result['backup']}")
     print("restart the program to use it")
+    return 0
+
+
+def cmd_install(args, _config):
+    result = install(target=args.target, bin_dir=args.bin,
+                     commands=not args.no_commands, menu=not args.no_menu,
+                     desktop=args.desktop,
+                     report=lambda text: print(f"  {text}"))
+    if result["same"]:
+        print(f"\nalready installed in {result['target']}")
+    else:
+        print(f"\ninstalled into {result['target']}")
+    if result["commands"]:
+        print("commands  : " + ", ".join(sorted(os.path.basename(c)
+                                                for c in result["commands"])))
+    if result["menu"]:
+        print(f"starter   : {result['menu']}")
+    if result["desktop"]:
+        print(f"desktop   : {result['desktop']}")
+    if result["path_hint"]:
+        print(f"\nnote: {result['bin']} is not on your PATH -- add it to your "
+              "shell profile, or call the commands with their full path")
     return 0
 
 
@@ -1493,6 +1884,21 @@ def build_parser():
     init = sub.add_parser("init", help="write the config file interactively")
     init.set_defaults(func=cmd_init)
 
+    installer = sub.add_parser(
+        "install",
+        help="copy the program somewhere permanent and add a desktop starter")
+    installer.add_argument("target", nargs="?",
+                           help=f"where to install (default: {default_install_dir()})")
+    installer.add_argument("--bin", help="folder for the commands "
+                                         f"(default: {default_bin_dir() or 'none'})")
+    installer.add_argument("--no-commands", action="store_true",
+                           help="do not link opnsense-haproxy / haproxy-gui")
+    installer.add_argument("--no-menu", action="store_true",
+                           help="do not add the program to the application menu")
+    installer.add_argument("--desktop", action="store_true",
+                           help="also put a starter on the desktop")
+    installer.set_defaults(func=cmd_install)
+
     update = sub.add_parser("update", help="look for a newer version on GitHub")
     update.add_argument("--check", action="store_true",
                         help="only report what is available, install nothing")
@@ -1506,8 +1912,8 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        # init writes the config, update does not need one
-        needs_config = args.command not in ("init", "update")
+        # init writes the config; update and install do not need one
+        needs_config = args.command not in ("init", "update", "install")
         config = load_config(args.config) if needs_config else {}
         return args.func(args, config)
     except (UsageError, ApiError) as exc:

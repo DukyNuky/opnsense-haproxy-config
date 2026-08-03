@@ -14,9 +14,11 @@ import queue
 import sys
 import threading
 import time
+import webbrowser
 
 try:
     import tkinter as tk
+    from tkinter import filedialog
     from tkinter import font as tkfont
     from tkinter import messagebox, ttk
 except ImportError:  # tkinter ships separately on most Linux distributions
@@ -93,6 +95,57 @@ class LiveLog(core.LogRecorder):
         text = " ".join(str(part) for part in parts).strip()
         if text:
             self.report(text)
+
+
+class Tooltip:
+    """Explains an icon button after a short hover -- tkinter has no such thing.
+
+    The colours are read when the tip appears rather than kept, so switching
+    between the light and dark theme needs no bookkeeping here.
+    """
+
+    DELAY = 550
+
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip = None
+        self.job = None
+        widget.bind("<Enter>", self._enter, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _enter(self, _event=None):
+        self._cancel()
+        self.job = self.widget.after(self.DELAY, self._show)
+
+    def _cancel(self):
+        if self.job is not None:
+            self.widget.after_cancel(self.job)
+            self.job = None
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self.tip is not None:
+            self.tip.destroy()
+            self.tip = None
+
+    def _show(self):
+        self.job = None
+        if self.tip is not None or not self.widget.winfo_exists():
+            return
+        app = self.widget.winfo_toplevel()
+        colors = getattr(app, "colors", THEMES["dark"])
+        self.tip = tk.Toplevel(self.widget, bg=colors["border_strong"])
+        self.tip.wm_overrideredirect(True)  # no title bar, no shadow, no focus
+        tk.Label(self.tip, text=self.text, bg=colors["surface2"],
+                 fg=colors["text"], padx=8, pady=4,
+                 font=getattr(app, "font_small", None)).pack(padx=1, pady=1)
+        self.tip.update_idletasks()
+        x = (self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+             - self.tip.winfo_width() // 2)
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.tip.wm_geometry(f"+{max(x, 0)}+{y}")
 
 
 class Switch(tk.Canvas):
@@ -221,7 +274,7 @@ class ProfileDialog(tk.Toplevel):
         # keep settings this dialog does not show, e.g. frontend and defaults
         self.extra = {k: v for k, v in profile.items()
                       if k not in ("name", "url", "key", "secret", "verify_ssl",
-                                   "adguard")}
+                                   "haproxy_ip", "adguard")}
         self.transient(parent)
         self.configure(bg=colors["bg"])
 
@@ -244,6 +297,7 @@ class ProfileDialog(tk.Toplevel):
             "url": tk.StringVar(value=profile.get("url", "https://opnsense.local")),
             "key": tk.StringVar(value=profile.get("key", "")),
             "secret": tk.StringVar(value=profile.get("secret", "")),
+            "haproxy_ip": tk.StringVar(value=profile.get("haproxy_ip", "")),
         }
         self.verify = tk.BooleanVar(value=profile.get("verify_ssl", False))
 
@@ -253,7 +307,9 @@ class ProfileDialog(tk.Toplevel):
                 ("Name der Verbindung", "name", False, "z.B. Zuhause oder Büro"),
                 ("Adresse", "url", False, ""),
                 ("API-Key", "key", False, ""),
-                ("API-Secret", "secret", True, "")):
+                ("API-Secret", "secret", True, ""),
+                ("IP von HAProxy", "haproxy_ip", False,
+                 "Darauf zeigen die DNS-Einträge, z.B. 192.168.1.1")):
             ttk.Label(body, text=label, style="FieldLabel.TLabel").grid(
                 row=next(rows), column=0, sticky="w", pady=(8, 3))
             ttk.Entry(body, textvariable=self.vars[name], width=40,
@@ -299,7 +355,7 @@ class ProfileDialog(tk.Toplevel):
                 ("Benutzer", "username", False, ""),
                 ("Passwort", "password", True, ""),
                 ("Ziel der Umschreibung", "target", False,
-                 "IP von HAProxy, z.B. 192.168.1.1")):
+                 "leer = die IP von HAProxy von oben")):
             ttk.Label(self.adg_box, text=label, style="FieldLabel.TLabel").grid(
                 row=next(adg_rows), column=0, sticky="w", pady=(6, 3))
             ttk.Entry(self.adg_box, textvariable=self.adg_vars[name], width=40,
@@ -391,15 +447,27 @@ class ProfileDialog(tk.Toplevel):
                                    f"'{values['name']}'.", parent=self)
             return
         config = {**values, "verify_ssl": self.verify.get()}
+        if not config["haproxy_ip"]:
+            config.pop("haproxy_ip")
         if self.use_adguard.get():
             adguard = {name: var.get().strip()
                        for name, var in self.adg_vars.items()}
-            if not adguard["url"] or not adguard["target"]:
+            if not adguard["url"]:
                 messagebox.showwarning(
                     "AdGuard unvollständig",
-                    "Adresse und Ziel der Umschreibung werden gebraucht — "
-                    "oder den Haken entfernen.", parent=self)
+                    "Ohne Adresse geht es nicht — oder den Haken entfernen.",
+                    parent=self)
                 return
+            if not adguard["target"] and not values["haproxy_ip"]:
+                messagebox.showwarning(
+                    "Kein Ziel für die DNS-Einträge",
+                    "Bitte oben die IP von HAProxy eintragen — oder hier ein "
+                    "eigenes Ziel für die Umschreibung.", parent=self)
+                return
+            if adguard["target"] == values["haproxy_ip"]:
+                # nothing of its own to say: let it follow the IP above, so
+                # changing that later moves the DNS entries along
+                adguard["target"] = ""
             config["adguard"] = {**adguard, "verify_ssl": self.adg_verify.get()}
         config.update({k: v for k, v in self.extra.items() if k not in config})
         # the caller owns the file; it knows about the other profiles
@@ -557,9 +625,183 @@ class UpdateDialog(tk.Toplevel):
         self.app.restart()
 
 
+class InstallDialog(tk.Toplevel):
+    """Puts the program somewhere permanent and adds the starters for it."""
+
+    def __init__(self, parent, colors):
+        super().__init__(parent)
+        self.title("Installieren")
+        self.app = parent
+        self.windows = os.name == "nt"
+        self.transient(parent)
+        self.configure(bg=colors["bg"])
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        body = ttk.Frame(self, style="Card.TFrame", padding=20)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        rows = itertools.count()
+
+        ttk.Label(body, text="Programm installieren", style="H2.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=440, justify="left",
+                  text="Kopiert das Programm in einen festen Ordner und legt "
+                       "einen Starter an. Zugangsdaten bleiben, wo sie sind — "
+                       "sie liegen ohnehin im eigenen Ordner unter ~/.config.").grid(
+            row=next(rows), column=0, sticky="w", pady=(3, 14))
+
+        self.var_target = tk.StringVar(value=core.default_install_dir())
+        ttk.Label(body, text="Zielordner", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        picker = ttk.Frame(body, style="Card.TFrame")
+        picker.grid(row=next(rows), column=0, sticky="ew", pady=(4, 12))
+        picker.columnconfigure(0, weight=1)
+        ttk.Entry(picker, textvariable=self.var_target, style="Card.TEntry",
+                  font=self.app.font_mono).grid(row=0, column=0, sticky="ew")
+        ttk.Button(picker, text="Wählen …", style="Ghost.TButton",
+                   command=self._browse).grid(row=0, column=1, padx=(8, 0))
+
+        self.var_menu = tk.BooleanVar(value=True)
+        self.var_desktop = tk.BooleanVar(value=False)
+        self.var_commands = tk.BooleanVar(value=not self.windows)
+
+        ttk.Checkbutton(body, variable=self.var_menu, style="Card.TCheckbutton",
+                        text="Ins Startmenü eintragen"
+                             if self.windows else
+                             "Ins Anwendungsmenü eintragen").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=440, justify="left",
+                  text="Von dort lässt sich das Programm an die Taskleiste "
+                       "anheften.").grid(row=next(rows), column=0, sticky="w",
+                                         pady=(2, 8))
+
+        ttk.Checkbutton(body, text="Verknüpfung auf dem Schreibtisch",
+                        variable=self.var_desktop,
+                        style="Card.TCheckbutton").grid(
+            row=next(rows), column=0, sticky="w", pady=(0, 8))
+
+        if not self.windows:
+            bin_dir = core.default_bin_dir()
+            ttk.Checkbutton(
+                body, text="Befehle fürs Terminal verlinken",
+                variable=self.var_commands, style="Card.TCheckbutton").grid(
+                row=next(rows), column=0, sticky="w")
+            ttk.Label(body, style="Hint.TLabel", wraplength=440, justify="left",
+                      text=f"haproxy-gui und opnsense-haproxy in {bin_dir}"
+                           + ("" if core.on_path(bin_dir)
+                              else "  ·  dieser Ordner ist nicht in deinem PATH")
+                      ).grid(row=next(rows), column=0, sticky="w", pady=(2, 0))
+
+        self.note = ttk.Label(body, style="Hint.TLabel", wraplength=440,
+                              justify="left", text="")
+        self.note.grid(row=next(rows), column=0, sticky="w", pady=(12, 0))
+        self.note.grid_remove()
+
+        self.progress = ttk.Progressbar(body, mode="indeterminate",
+                                        style="Bar.Horizontal.TProgressbar")
+        self.progress.grid(row=next(rows), column=0, sticky="ew", pady=(12, 0))
+        self.progress.grid_remove()
+
+        footer = ttk.Frame(self, style="Card.TFrame", padding=(20, 12, 20, 16))
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        buttons = ttk.Frame(footer, style="Card.TFrame")
+        buttons.grid(row=0, column=1, sticky="e")
+        self.close_button = ttk.Button(buttons, text="Abbrechen",
+                                       style="Ghost.TButton", command=self.destroy)
+        self.close_button.grid(row=0, column=0, padx=(0, 8))
+        self.action = ttk.Button(buttons, text="Installieren",
+                                 style="Accent.TButton", command=self._install)
+        self.action.grid(row=0, column=1)
+
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        self.geometry(f"{max(self.winfo_reqwidth(), 500)}x{self.winfo_reqheight()}")
+        self.resizable(False, False)
+        self.grab_set()
+
+    def _browse(self):
+        chosen = filedialog.askdirectory(parent=self, title="Zielordner",
+                                         mustexist=False,
+                                         initialdir=os.path.dirname(
+                                             self.var_target.get()) or "/")
+        if chosen:
+            self.var_target.set(chosen)
+
+    def _say(self, text):
+        self.note.configure(text=text)
+        self.note.grid()
+
+    def _install(self):
+        target = self.var_target.get().strip()
+        if not target:
+            self._say("Bitte einen Zielordner angeben.")
+            return
+        self.action.configure(state="disabled")
+        self.close_button.configure(state="disabled")
+        self.progress.grid()
+        self.progress.start(12)
+        self._say("wird installiert …")
+
+        options = {"target": target, "menu": self.var_menu.get(),
+                   "desktop": self.var_desktop.get(),
+                   "commands": self.var_commands.get()}
+
+        # progress travels through the window's queue, so every widget change
+        # still happens on the UI thread
+        def report(text):
+            self.app.results.put(("done", lambda _p: self._say(text), None,
+                                  None, None))
+
+        def task():
+            try:
+                self.app.results.put(("done", self._done, None,
+                                      core.install(report=report, **options),
+                                      None))
+            except Exception as exc:  # noqa: BLE001 - shown in the dialog
+                # bound as a default: Python clears `exc` when the except block
+                # ends, long before the UI thread runs this
+                self.app.results.put(("done",
+                                      lambda _p, error=exc: self._failed(error),
+                                      None, None, None))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _failed(self, error):
+        self.progress.stop()
+        self.progress.grid_remove()
+        self.close_button.configure(state="normal", text="Schließen")
+        self.action.configure(state="normal", text="Nochmal versuchen")
+        self._say(f"Fehlgeschlagen: {error}")
+
+    def _done(self, result):
+        self.progress.stop()
+        self.progress.grid_remove()
+        lines = ["Fertig." if not result["same"]
+                 else "Das Programm lag schon dort — die Starter sind neu.",
+                 f"Ordner: {result['target']}"]
+        if result["menu"]:
+            lines.append("Im Menü eingetragen — von dort an die Taskleiste "
+                         "anheften.")
+        if result["desktop"]:
+            lines.append("Verknüpfung auf dem Schreibtisch angelegt.")
+        if result["commands"]:
+            lines.append("Befehle: " + ", ".join(
+                sorted(os.path.basename(path) for path in result["commands"])))
+        if result["path_hint"]:
+            lines.append(f"Hinweis: {result['bin']} liegt nicht in deinem PATH. "
+                         "Die Befehle gibt es dann nur mit vollem Pfad.")
+        self._say("\n".join(lines))
+        self.close_button.configure(state="normal", text="Schließen")
+        self.action.grid_remove()
+
+
 class App(tk.Tk):
     def __init__(self, args):
-        super().__init__()
+        # the class name is what the task bar matches the desktop starter
+        # against, so a pinned icon and the running window belong together
+        super().__init__(className=core.WM_CLASS)
         self.args = args
         self.config_path = args.config
         self.settings = {}
@@ -569,6 +811,8 @@ class App(tk.Tk):
         self.adguard = None
         self.adguard_target = ""
         self.adguard_problem = ""
+        self.rewrites = {}
+        self.rewrites_error = ""
         self.services = []
         self.healthchecks = []
         self.domains = []
@@ -586,6 +830,7 @@ class App(tk.Tk):
         self.title(APP_TITLE)
         self.geometry(self.prefs.get("geometry", "1080x720"))
         self.minsize(880, 560)
+        self._set_icon()
 
         self._init_fonts()
         self._build()
@@ -595,6 +840,26 @@ class App(tk.Tk):
         self._pump_job = self.after(60, self._pump)
         self.after(100, self._connect)
         self.after(1500, self._update_on_start)
+
+    def _set_icon(self):
+        """Give the window and the task bar the program's own icon."""
+        folder = core.install_dir()
+        windows_icon = os.path.join(folder, "icon.ico")
+        if os.name == "nt" and os.path.exists(windows_icon):
+            try:
+                self.iconbitmap(windows_icon)
+                return
+            except tk.TclError:
+                pass  # fall through to the PNG, which Tk reads everywhere
+        picture = os.path.join(folder, "icon.png")
+        if not os.path.exists(picture):
+            return
+        try:
+            # kept on the instance: Tk does not hold on to the image itself
+            self._icon = tk.PhotoImage(file=picture)
+            self.iconphoto(True, self._icon)
+        except tk.TclError:
+            pass  # an unusual Tk build without PNG support is no reason to stop
 
     # -- theming -----------------------------------------------------------
 
@@ -609,6 +874,8 @@ class App(tk.Tk):
         self.font_mono.configure(size=10)
         self.font_mono_bold = self.font_mono.copy()
         self.font_mono_bold.configure(weight="bold")
+        self.font_link = self.font_mono_bold.copy()
+        self.font_link.configure(underline=True)  # only while the mouse is on it
 
     def _apply_theme(self):
         c = self.colors
@@ -641,6 +908,8 @@ class App(tk.Tk):
                         foreground=c["muted"], font=self.font_small)
         style.configure("Host.TLabel", background=c["surface2"],
                         foreground=c["text"], font=self.font_mono_bold)
+        style.configure("Link.TLabel", background=c["surface2"],
+                        foreground=c["accent"], font=self.font_mono_bold)
         style.configure("Target.TLabel", background=c["surface2"],
                         foreground=c["muted"], font=self.font_mono)
         style.configure("RowHint.TLabel", background=c["surface2"],
@@ -660,6 +929,12 @@ class App(tk.Tk):
                         padding=(6, 1))
         style.configure("BadgeMuted.TLabel", background=c["surface"],
                         foreground=c["muted"], font=self.font_small,
+                        padding=(6, 1))
+        style.configure("BadgeOk.TLabel", background=c["ok_soft"],
+                        foreground=c["ok"], font=self.font_small,
+                        padding=(6, 1))
+        style.configure("BadgeWarn.TLabel", background=c["danger_soft"],
+                        foreground=c["danger"], font=self.font_small,
                         padding=(6, 1))
 
         style.configure("Card.TEntry", fieldbackground=c["surface2"],
@@ -804,16 +1079,30 @@ class App(tk.Tk):
         self.status_pill = ttk.Label(actions, text="verbinde …",
                                      style="IdlePill.TLabel")
         self.status_pill.grid(row=0, column=1, padx=(0, 10))
-        ttk.Button(actions, text="↻", style="Icon.TButton",
-                   command=self.reload).grid(row=0, column=2)
+
+        reload_button = ttk.Button(actions, text="↻", style="Icon.TButton",
+                                   command=self.reload)
+        reload_button.grid(row=0, column=2)
         self.update_button = ttk.Button(actions, text="⇩", style="Icon.TButton",
                                         command=self._check_update)
         self.update_button.grid(row=0, column=3)
+        install_button = ttk.Button(actions, text="⤓", style="Icon.TButton",
+                                    command=self._open_install)
+        install_button.grid(row=0, column=4)
         self.theme_button = ttk.Button(actions, text="☀", style="Icon.TButton",
                                        command=self._toggle_theme)
-        self.theme_button.grid(row=0, column=4)
-        ttk.Button(actions, text="⚙", style="Icon.TButton",
-                   command=self._open_settings).grid(row=0, column=5)
+        self.theme_button.grid(row=0, column=5)
+        settings_button = ttk.Button(actions, text="⚙", style="Icon.TButton",
+                                     command=self._open_settings)
+        settings_button.grid(row=0, column=6)
+
+        for button, explanation in (
+                (reload_button, "Neu einlesen"),
+                (self.update_button, "Nach Updates suchen"),
+                (install_button, "Programm installieren und Starter anlegen"),
+                (self.theme_button, "Hell / Dunkel"),
+                (settings_button, "Verbindung bearbeiten")):
+            Tooltip(button, explanation)
 
         # a slim progress strip so long API calls never look like a freeze
         self.progress = ttk.Progressbar(head, mode="indeterminate",
@@ -1069,8 +1358,8 @@ class App(tk.Tk):
                 continue
 
             for rule in service["rules"]:
-                self._rule_row(body, rule).grid(row=row, column=0, sticky="ew",
-                                                pady=(0, 6), padx=(0, 6))
+                self._rule_row(body, service, rule).grid(
+                    row=row, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
                 row += 1
 
     def _placeholder(self, title, text):
@@ -1083,13 +1372,18 @@ class App(tk.Tk):
                   wraplength=380, justify="center").grid(row=1, column=0,
                                                          pady=(6, 0))
 
-    def _rule_row(self, parent, rule):
+    def _rule_row(self, parent, service, rule):
         card = tk.Frame(parent, bg=self.colors["surface2"], padx=12, pady=9)
         card.columnconfigure(0, weight=1)
 
-        host = rule["target"] or rule["name"] or "?"
-        ttk.Label(card, text=host, style="Host.TLabel").grid(row=0, column=0,
-                                                             sticky="w")
+        label = (rule["host"] or "") + rule["path"] \
+            or rule["target"] or rule["name"] or "?"
+        url = core.public_url(service, rule["host"], rule["path"])
+        if url:
+            self._link(card, label, url).grid(row=0, column=0, sticky="w")
+        else:
+            ttk.Label(card, text=label, style="Host.TLabel").grid(
+                row=0, column=0, sticky="w")
 
         server = (rule["backend"] or {}).get("servers") or []
         if server:
@@ -1104,6 +1398,7 @@ class App(tk.Tk):
                                                                  sticky="w",
                                                                  pady=(2, 0))
 
+        dns = self._dns_state(rule)
         marks = ttk.Frame(card, style="Sub.TFrame")
         marks.grid(row=0, column=1, rowspan=2, padx=(10, 8))
         column = 0
@@ -1114,12 +1409,92 @@ class App(tk.Tk):
         if server and server[0]["ssl"]:
             ttk.Label(marks, text="SSL", style="Badge.TLabel").grid(
                 row=0, column=column, padx=2)
+            column += 1
+        if dns:
+            badge = ttk.Label(marks, text=dns["badge"], style=dns["style"])
+            badge.grid(row=0, column=column, padx=2)
+            Tooltip(badge, dns["explains"])
 
+        buttons = ttk.Frame(card, style="Sub.TFrame")
+        buttons.grid(row=0, column=2, rowspan=2)
+        if dns and dns["button"]:
+            ttk.Button(buttons, text=dns["button"], style="Del.TButton",
+                       command=lambda r=rule, a=dns["action"]:
+                       self._dns_apply(r, a)).grid(row=0, column=0, padx=(0, 6))
         if rule["target"]:
-            ttk.Button(card, text="Entfernen", style="Del.TButton",
-                       command=lambda r=rule: self._remove(r)).grid(
-                row=0, column=2, rowspan=2)
+            ttk.Button(buttons, text="Entfernen", style="Del.TButton",
+                       command=lambda r=rule: self._remove(r)).grid(row=0,
+                                                                    column=1)
         return card
+
+    def _link(self, parent, text, url):
+        """The host name as a link: clicking it opens the site in the browser."""
+        link = ttk.Label(parent, text=text, style="Link.TLabel", cursor="hand2")
+        link.bind("<Button-1>", lambda _e: webbrowser.open(url))
+        link.bind("<Enter>", lambda _e: link.configure(font=self.font_link))
+        link.bind("<Leave>", lambda _e: link.configure(font=self.font_mono_bold))
+        Tooltip(link, f"{url}  öffnen")
+        return link
+
+    def _dns_state(self, rule):
+        """What AdGuard has to say about this host, and what to offer about it."""
+        host = rule["host"]
+        if not self.adguard or not host:
+            return None
+        if self.rewrites_error:
+            return {"badge": "DNS ?", "style": "BadgeMuted.TLabel", "button": "",
+                    "action": "", "explains": self.rewrites_error}
+        answer = self.rewrites.get(host.lower())
+        if answer == self.adguard_target:
+            return {"badge": "DNS ✓", "style": "BadgeOk.TLabel",
+                    "button": "DNS löschen", "action": "clear",
+                    "explains": f"{host} → {answer} in AdGuard"}
+        if answer:
+            return {"badge": f"DNS → {answer}", "style": "BadgeWarn.TLabel",
+                    "button": "auf HAProxy zeigen", "action": "set",
+                    "explains": f"{host} zeigt auf {answer}, nicht auf "
+                                f"{self.adguard_target}"}
+        return {"badge": "kein DNS", "style": "BadgeMuted.TLabel",
+                "button": "DNS eintragen", "action": "set",
+                "explains": f"AdGuard kennt {host} nicht"}
+
+    def _dns_apply(self, rule, action):
+        """Write or delete this host's DNS rewrite, then show the new state."""
+        if self.busy or not self.adguard:
+            return
+        host, adguard = rule["host"], self.adguard
+        target = self.adguard_target
+        if action == "clear" and not messagebox.askyesno(
+                APP_TITLE, f"DNS-Eintrag für {host} in AdGuard löschen?\n\n"
+                           "An HAProxy ändert sich nichts.", icon="warning"):
+            return
+
+        def work(report):
+            if action == "clear":
+                report(f"lösche DNS-Eintrag {host} …")
+                outcome = core.clear_rewrite(adguard, host)
+            else:
+                report(f"trage {host} → {target} in AdGuard ein …")
+                outcome = core.set_rewrite(adguard, host, target)
+            return {"outcome": outcome, "host": host, "target": target,
+                    "rewrites": adguard.rewrite_map()}
+
+        self._run_async(work, self._dns_done, activity="AdGuard …")
+
+    def _dns_done(self, result):
+        self._set_busy(False)
+        self.rewrites = result["rewrites"]
+        self.rewrites_error = ""
+        host, target = result["host"], result["target"]
+        said = {
+            "added": (f"+ DNS-Eintrag {host} → {target}", "info"),
+            "changed": (f"+ DNS-Eintrag {host} zeigt jetzt auf {target}", "info"),
+            "unchanged": (f"= DNS-Eintrag {host} → {target} war schon da", "info"),
+            "removed": (f"- DNS-Eintrag {host} gelöscht", "info"),
+            "missing": (f"= für {host} gab es keinen DNS-Eintrag", "info"),
+        }[result["outcome"]]
+        self._write_log("AdGuard", [{"text": said[0], "level": said[1]}], True)
+        self._render_inventory()
 
     # -- logging -----------------------------------------------------------
 
@@ -1368,13 +1743,17 @@ class App(tk.Tk):
         self.adguard, settings = core.adguard_from_config(self.profile)
         self.adguard_target = settings.get("target", "")
         self.adguard_problem = settings.get("error", "")
+        self.rewrites, self.rewrites_error = {}, ""
         if self.adguard and not self.adguard_target:
             self.adguard = None  # without a target there is nothing to write
-            self.adguard_problem = "AdGuard: kein Ziel eingetragen (⚙)"
+            self.adguard_problem = "AdGuard: keine HAProxy-IP eingetragen (⚙)"
         self._refresh_fqdn()
 
     def _open_settings(self):
         self._edit_profile(self.profile, is_new=not self.profile)
+
+    def _open_install(self):
+        InstallDialog(self, self.colors)
 
     def _edit_profile(self, profile, is_new=False):
         dialog = ProfileDialog(self, self.colors, profile, self.config_path,
@@ -1430,7 +1809,7 @@ class App(tk.Tk):
     def reload(self):
         if not self.api:
             return
-        client = self.api
+        client, adguard = self.api, self.adguard
 
         def work(report):
             report(f"verbinde mit {self.profile.get('name', 'OPNsense')} …")
@@ -1445,8 +1824,17 @@ class App(tk.Tk):
                 domains = core.base_domains(client)
             except core.ApiError:
                 domains = []  # the ACME plugin is optional
+            rewrites, rewrites_error = {}, ""
+            if adguard:
+                report("lese DNS-Einträge aus AdGuard …")
+                try:
+                    rewrites = adguard.rewrite_map()
+                except core.ApiError as exc:
+                    # AdGuard being away must not cost us the whole inventory
+                    rewrites_error = str(exc)
             return {"status": status, "services": services,
-                    "healthchecks": healthchecks, "domains": domains}
+                    "healthchecks": healthchecks, "domains": domains,
+                    "rewrites": rewrites, "rewrites_error": rewrites_error}
 
         self._run_async(work, self._state_loaded,
                         on_error=lambda exc: self._set_status(None),
@@ -1456,6 +1844,8 @@ class App(tk.Tk):
         self._set_busy(False)
         self.services = state["services"]
         self.healthchecks = state["healthchecks"]
+        self.rewrites = state["rewrites"]
+        self.rewrites_error = state["rewrites_error"]
         self._set_status(state["status"])
 
         names = [service["name"] for service in self.services]
