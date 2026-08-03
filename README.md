@@ -32,7 +32,7 @@ Build-Schritt.
 
 ## Herunterladen
 
-**[opnsense-haproxy-1.2.0.zip](releases/opnsense-haproxy-1.2.0.zip?raw=1)** —
+**[opnsense-haproxy-1.3.0.zip](releases/opnsense-haproxy-1.3.0.zip?raw=1)** —
 entpacken und loslegen; unter Windows `HAProxy-Starter.bat` doppelklicken. Was
 sich seit der letzten Fassung geändert hat, steht im
 [Änderungsverzeichnis](CHANGELOG.md).
@@ -45,7 +45,15 @@ Download-Ordner liegen bleibt, gibt es [Installieren](#installieren).
 ## Einrichten
 
 1. In OPNsense unter **System → Zugriff → Benutzer → API-Schlüssel** einen
-   Schlüssel anlegen. Der Benutzer braucht die Rechte für *Services: HAProxy*.
+   Schlüssel anlegen. Der Benutzer braucht zwei Rechte:
+   * **Services: HAProxy** — ohne das geht gar nichts.
+   * **Services: ACME Client** — dafür werden die Zertifikate gelesen, aus
+     denen die Basis-Domains kommen. Fehlt es, bleibt die Auswahlliste leer und
+     der volle Hostname muss von Hand eingetippt werden; alles andere
+     funktioniert weiter.
+
+   Die Rechte hängen am **Benutzer** unter System → Zugriff → Benutzer
+   (*Effective Privileges*), nicht am API-Schlüssel selbst.
 2. Konfiguration anlegen:
 
 ```sh
@@ -99,7 +107,8 @@ werden.
 
 Die Auswahlliste kommt aus dem **ACME-Client** (Plugin `os-acme-client`) und
 braucht keine eigene Einrichtung — die dort gepflegten Zertifikate werden
-gelesen:
+gelesen. Der API-Benutzer braucht dafür das Recht *Services: ACME Client*,
+sonst bleibt die Liste leer:
 
 * Ein Wildcard-Zertifikat `*.home.example.com` ergibt die Basis-Domain
   `home.example.com`, unter der jeder Hostname möglich ist.
@@ -109,8 +118,8 @@ Passt der zusammengesetzte Name nicht zum Zertifikat (`a.b.home.example.com`
 unter einem Wildcard, das nur eine Ebene abdeckt), gibt es eine Warnung —
 angelegt wird trotzdem, denn das Zertifikat kann auch von woanders kommen.
 
-Ist der ACME-Client nicht installiert, bleibt die Liste leer und du trägst
-weiterhin den vollen Namen ein.
+Ist der ACME-Client nicht installiert — oder fehlt dem API-Benutzer das Recht
+dafür — bleibt die Liste leer und du trägst weiterhin den vollen Namen ein.
 
 ```sh
 ./opnsense_haproxy.py domains        # zeigt, was zur Auswahl steht
@@ -174,16 +183,23 @@ python.exe to PATH"** ankreuzen.
 
 Beim allerersten Start fragt ein Dialog nach Name, Adresse, API-Key und Secret
 — und, wenn du den Haken setzt, nach AdGuard Home — und legt die
-Konfigurationsdatei an; danach verbindet es sich von selbst. Oben rechts steht
-der Umschalter für die Verbindungen, daneben das Zahnrad zum Bearbeiten.
+Konfigurationsdatei an. Oben rechts steht der Umschalter für die Verbindungen,
+daneben das Zahnrad zum Bearbeiten.
+
+**Von allein verbindet sich nichts.** Das Fenster geht auf und wartet; erst
+**Verbinden** oben rechts holt die Public Services, Zertifikate und
+DNS-Einträge. Danach heißt derselbe Knopf **Neu laden**. Beim Wechsel der
+Verbindung im Umschalter und nach dem Speichern im Zahnrad-Dialog wird
+gelesen — das ist ja schon die Ansage, dass es losgehen soll.
 
 Links das Formular — Basis-Domain, Hostname, Server-IP, Port, ein Schalter für
 SSL zum Backend und einer für den AdGuard-Eintrag. Unter dem Hostnamen steht
 laufend mit, welcher Name daraus wird. **Vorschau** zeigt, was angelegt würde,
 ohne etwas zu ändern. Unten läuft das Protokoll mit denselben Zeilen wie die
 CLI, farblich nach Anlegen, Löschen und Fehler getrennt. Hell/Dunkel schaltet
-der Knopf oben rechts um; Theme und Fenstergröße werden gemerkt. Was die
-Knöpfe dort tun, sagt ein Hinweis, wenn die Maus einen Moment darauf liegt.
+der Mond/Sonne-Knopf oben rechts um; Theme und Fenstergröße werden gemerkt.
+Was ein Knopf tut, sagt ein Hinweis, wenn die Maus einen Moment darauf liegt.
+Die Versionsnummer steht neben dem Titel und unten rechts am Protokoll.
 
 Rechts steht alles, was aktuell an den Public Services hängt. **Der Hostname
 ist ein Link** — ein Klick öffnet die Seite im Browser, mit dem Schema und dem
@@ -219,7 +235,7 @@ Verbindung gibt es dort auch einen Löschen-Knopf.
 ## Installieren
 
 Damit das Programm nicht im Download-Ordner wohnen bleibt, legt es sich selbst
-an einen festen Platz — der Knopf **⤓** oben rechts im Fenster, oder:
+an einen festen Platz — **⤓ Installieren** oben rechts im Fenster, oder:
 
 ```sh
 ./opnsense_haproxy.py install
@@ -257,7 +273,7 @@ Zugangsdaten fasst das Installieren nicht an — die liegen ohnehin in
 
 ## Updates
 
-Der Knopf **⇩** oben rechts fragt bei GitHub nach einer neueren Fassung. Gibt es
+**⇩ Update** oben rechts fragt bei GitHub nach einer neueren Fassung. Gibt es
 keine, sagt er das; gibt es eine, zeigt ein Fenster die Versionsnummer und —
 sofern hinterlegt — was sich geändert hat, und installiert sie auf Wunsch.
 Danach ist ein Neustart des Programms nötig, den der Dialog gleich anbietet.

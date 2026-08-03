@@ -1,5 +1,28 @@
 # Änderungen
 
+## 1.3.0 — 4. August 2026
+
+**Nichts passiert mehr von allein, und man sieht wieder, worauf man drückt.**
+
+- **Beim Start wird nicht mehr verbunden.** Das Fenster geht auf und wartet;
+  erst **Verbinden** oben rechts liest Public Services, Zertifikate und
+  DNS-Einträge. Danach heißt derselbe Knopf **Neu laden**. Beim Umschalten der
+  Verbindung und nach dem Speichern im Zahnrad-Dialog wird weiterhin gelesen —
+  das ist ja die Ansage, dass es losgehen soll.
+- **Die Knöpfe oben rechts sind Knöpfe geworden**: größer, mit eigener Fläche
+  und Rand statt schwebender Zeichen, und die beiden Pfeile nach unten heißen
+  jetzt **⇩ Update** und **⤓ Installieren** — vorher waren sie nicht
+  auseinanderzuhalten.
+- **Die Links springen nicht mehr.** Sie waren unterstrichen, sobald die Maus
+  darauf lag, und ein unterstrichener Zeichensatz misst sich anders — die ganze
+  Zeile rutschte. Jetzt sind sie durchgehend unterstrichen, und nur die Farbe
+  reagiert.
+- **Versionsnummer** neben dem Titel und unten rechts am Protokoll, dort
+  zusammen mit **DukyNuky** als Verweis aufs Projekt.
+
+Ergänzt in der Anleitung: der API-Benutzer braucht neben *Services: HAProxy*
+auch *Services: ACME Client*, sonst bleibt die Liste der Basis-Domains leer.
+
 ## 1.2.0 — 4. August 2026
 
 **Ein fester Platz, ein Symbol, und AdGuard im Blick.**

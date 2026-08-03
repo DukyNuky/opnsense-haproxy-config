@@ -33,6 +33,7 @@ except ImportError:  # tkinter ships separately on most Linux distributions
 import opnsense_haproxy as core
 
 APP_TITLE = "HAProxy · OPNsense"
+AUTHOR_URL = "https://github.com/DukyNuky/opnsense-haproxy-config"
 NO_BASE = "— keine —"
 NEW_PROFILE = "＋ neue Verbindung …"
 EDIT_PROFILE = "⚙ diese bearbeiten …"
@@ -813,6 +814,7 @@ class App(tk.Tk):
         self.adguard_problem = ""
         self.rewrites = {}
         self.rewrites_error = ""
+        self.connected = False
         self.services = []
         self.healthchecks = []
         self.domains = []
@@ -874,8 +876,11 @@ class App(tk.Tk):
         self.font_mono.configure(size=10)
         self.font_mono_bold = self.font_mono.copy()
         self.font_mono_bold.configure(weight="bold")
+        # Links are underlined for good: switching the font on hover changes
+        # what the label reports as its size, and the whole row jumps.
         self.font_link = self.font_mono_bold.copy()
-        self.font_link.configure(underline=True)  # only while the mouse is on it
+        self.font_link.configure(underline=True)
+        self.font_icon = tkfont.Font(family=base.cget("family"), size=12)
 
     def _apply_theme(self):
         c = self.colors
@@ -902,6 +907,11 @@ class App(tk.Tk):
                         font=self.font_h2)
         style.configure("Muted.TLabel", background=c["bg"], foreground=c["muted"],
                         font=self.font_small)
+        style.configure("Version.TLabel", background=c["surface2"],
+                        foreground=c["muted"], font=self.font_small,
+                        padding=(7, 2))
+        style.configure("Mark.TLabel", background=c["surface"],
+                        foreground=c["muted"], font=self.font_small)
         style.configure("Hint.TLabel", background=c["surface"],
                         foreground=c["muted"], font=self.font_small)
         style.configure("FieldLabel.TLabel", background=c["surface"],
@@ -909,7 +919,7 @@ class App(tk.Tk):
         style.configure("Host.TLabel", background=c["surface2"],
                         foreground=c["text"], font=self.font_mono_bold)
         style.configure("Link.TLabel", background=c["surface2"],
-                        foreground=c["accent"], font=self.font_mono_bold)
+                        foreground=c["accent"], font=self.font_link)
         style.configure("Target.TLabel", background=c["surface2"],
                         foreground=c["muted"], font=self.font_mono)
         style.configure("RowHint.TLabel", background=c["surface2"],
@@ -975,17 +985,25 @@ class App(tk.Tk):
                   background=[("active", c["border"]), ("disabled", c["surface"])],
                   foreground=[("disabled", c["muted"])])
 
-        style.configure("Icon.TButton", background=c["bg"], foreground=c["muted"],
-                        borderwidth=0, focuscolor=c["bg"], padding=(9, 6),
-                        font=self.font_base)
-        style.map("Icon.TButton", background=[("active", c["surface2"])],
-                  foreground=[("active", c["text"])])
+        # The header buttons sit on the window background, where a borderless
+        # button is barely there. A surface of their own and a border make them
+        # read as something to press.
+        style.configure("Tool.TButton", background=c["surface"],
+                        foreground=c["text"], borderwidth=1,
+                        bordercolor=c["border_strong"], lightcolor=c["surface"],
+                        darkcolor=c["surface"], focuscolor=c["surface"],
+                        padding=(12, 8), font=self.font_icon)
+        style.map("Tool.TButton",
+                  background=[("active", c["surface2"])],
+                  bordercolor=[("active", c["accent"])],
+                  foreground=[("disabled", c["muted"])])
 
         # the same button, but noticeable once there is something to install
         style.configure("Update.TButton", background=c["accent_soft"],
-                        foreground=c["accent"], borderwidth=0,
-                        focuscolor=c["accent_soft"], padding=(9, 6),
-                        font=self.font_small)
+                        foreground=c["accent"], borderwidth=1,
+                        bordercolor=c["accent"], lightcolor=c["accent_soft"],
+                        darkcolor=c["accent_soft"], focuscolor=c["accent_soft"],
+                        padding=(12, 8), font=self.font_icon)
         style.map("Update.TButton", background=[("active", c["accent"])],
                   foreground=[("active", c["accent_text"])])
 
@@ -1033,6 +1051,7 @@ class App(tk.Tk):
         self.inventory.apply_theme(c)
         self.form_scroll.apply_theme(c)
         self.theme_button.configure(text="☀" if self.theme_name == "dark" else "🌙")
+        self._paint_connect_button()
         self._paint_update_button()
         self._render_inventory()
 
@@ -1062,44 +1081,58 @@ class App(tk.Tk):
         titles.grid(row=0, column=0, sticky="w")
         ttk.Label(titles, text="HAProxy", style="H1.TLabel").grid(row=0, column=0,
                                                                  sticky="w")
+        ttk.Label(titles, text=f"v{core.VERSION}", style="Version.TLabel").grid(
+            row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Label(titles, text="OPNsense Reverse Proxy",
-                  style="Muted.TLabel").grid(row=1, column=0, sticky="w")
+                  style="Muted.TLabel").grid(row=1, column=0, columnspan=2,
+                                             sticky="w")
 
         actions = ttk.Frame(head, style="Head.TFrame")
         actions.grid(row=0, column=2, sticky="e")
 
         self.var_profile = tk.StringVar()
         self.profile_box = ttk.Combobox(actions, textvariable=self.var_profile,
-                                        state="readonly", width=18,
+                                        state="readonly", width=16,
                                         style="Card.TCombobox")
-        self.profile_box.grid(row=0, column=0, padx=(0, 10))
+        self.profile_box.grid(row=0, column=0, padx=(0, 8))
         self.profile_box.bind("<<ComboboxSelected>>",
                               lambda _e: self._switch_profile())
 
-        self.status_pill = ttk.Label(actions, text="verbinde …",
+        self.status_pill = ttk.Label(actions, text="nicht verbunden",
                                      style="IdlePill.TLabel")
-        self.status_pill.grid(row=0, column=1, padx=(0, 10))
+        self.status_pill.grid(row=0, column=1, padx=(0, 8))
 
-        reload_button = ttk.Button(actions, text="↻", style="Icon.TButton",
-                                   command=self.reload)
-        reload_button.grid(row=0, column=2)
-        self.update_button = ttk.Button(actions, text="⇩", style="Icon.TButton",
+        # Labels rather than symbols alone: "update" and "install" are two
+        # arrows pointing down, and nobody should have to guess which is which.
+        self.connect_button = ttk.Button(actions, text="Verbinden",
+                                         style="Accent.TButton",
+                                         command=self._connect_now)
+        self.connect_button.grid(row=0, column=2, padx=(0, 6))
+        self.update_button = ttk.Button(actions, text="⇩ Update",
+                                        style="Tool.TButton",
                                         command=self._check_update)
-        self.update_button.grid(row=0, column=3)
-        install_button = ttk.Button(actions, text="⤓", style="Icon.TButton",
+        self.update_button.grid(row=0, column=3, padx=(0, 6))
+        install_button = ttk.Button(actions, text="⤓ Installieren",
+                                    style="Tool.TButton",
                                     command=self._open_install)
-        install_button.grid(row=0, column=4)
-        self.theme_button = ttk.Button(actions, text="☀", style="Icon.TButton",
-                                       command=self._toggle_theme)
-        self.theme_button.grid(row=0, column=5)
-        settings_button = ttk.Button(actions, text="⚙", style="Icon.TButton",
-                                     command=self._open_settings)
+        install_button.grid(row=0, column=4, padx=(0, 6))
+        # Without a width of their own, ttk hands every button the same
+        # eleven-character minimum -- which leaves the two symbols swimming in
+        # a button four times their size.
+        self.theme_button = ttk.Button(actions, text="☀", style="Tool.TButton",
+                                       width=3, command=self._toggle_theme)
+        self.theme_button.grid(row=0, column=5, padx=(0, 6))
+        settings_button = ttk.Button(actions, text="⚙", style="Tool.TButton",
+                                     width=3, command=self._open_settings)
         settings_button.grid(row=0, column=6)
 
         for button, explanation in (
-                (reload_button, "Neu einlesen"),
-                (self.update_button, "Nach Updates suchen"),
-                (install_button, "Programm installieren und Starter anlegen"),
+                (self.connect_button, "Mit der OPNsense verbinden und alles "
+                                      "neu einlesen"),
+                (self.update_button, "Auf GitHub nach einer neueren Version "
+                                     "sehen"),
+                (install_button, "Programm an einen festen Platz legen und "
+                                 "Starter anlegen"),
                 (self.theme_button, "Hell / Dunkel"),
                 (settings_button, "Verbindung bearbeiten")):
             Tooltip(button, explanation)
@@ -1303,6 +1336,9 @@ class App(tk.Tk):
         bar.columnconfigure(1, weight=1)
         self.log_title = ttk.Label(bar, text="Protokoll", style="H2.TLabel")
         self.log_title.grid(row=0, column=0, sticky="w")
+        self._link(bar, f"DukyNuky · v{core.VERSION}", AUTHOR_URL,
+                   style="Mark.TLabel").grid(row=0, column=1, sticky="e",
+                                             padx=(0, 12))
         ttk.Button(bar, text="leeren", style="Del.TButton",
                    command=self._clear_log).grid(row=0, column=2, sticky="e")
 
@@ -1324,8 +1360,17 @@ class App(tk.Tk):
         body.columnconfigure(0, weight=1)
 
         if not self.api:
-            self._placeholder("Nicht verbunden",
-                              "Über ⚙ die Zugangsdaten der OPNsense eintragen.")
+            self._placeholder("Keine Zugangsdaten",
+                              "Über ⚙ die Zugangsdaten der OPNsense eintragen.",
+                              button="Zugangsdaten eintragen",
+                              command=self._connect_now)
+            return
+        if not self.connected:
+            self._placeholder(
+                "Nicht verbunden",
+                f"Es wird nichts von allein geladen. „{self.profile.get('name', '')}“ "
+                "wird gelesen, sobald du es sagst.",
+                button="Verbinden", command=self._connect_now)
             return
         if not self.services:
             self._placeholder("Kein Public Service",
@@ -1362,7 +1407,7 @@ class App(tk.Tk):
                     row=row, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
                 row += 1
 
-    def _placeholder(self, title, text):
+    def _placeholder(self, title, text, button="", command=None):
         holder = ttk.Frame(self.inventory.body, style="Card.TFrame", padding=30)
         holder.grid(row=0, column=0, sticky="ew")
         holder.columnconfigure(0, weight=1)
@@ -1371,6 +1416,9 @@ class App(tk.Tk):
         ttk.Label(holder, text=text, style="Hint.TLabel", anchor="center",
                   wraplength=380, justify="center").grid(row=1, column=0,
                                                          pady=(6, 0))
+        if button:
+            ttk.Button(holder, text=button, style="Accent.TButton",
+                       command=command).grid(row=2, column=0, pady=(16, 0))
 
     def _rule_row(self, parent, service, rule):
         card = tk.Frame(parent, bg=self.colors["surface2"], padx=12, pady=9)
@@ -1427,12 +1475,16 @@ class App(tk.Tk):
                                                                     column=1)
         return card
 
-    def _link(self, parent, text, url):
-        """The host name as a link: clicking it opens the site in the browser."""
-        link = ttk.Label(parent, text=text, style="Link.TLabel", cursor="hand2")
+    def _link(self, parent, text, url, style="Link.TLabel"):
+        """A name that opens a page in the browser when it is clicked.
+
+        Only the colour reacts to the mouse. Anything that changes the font
+        changes the size the label asks for, and the row underneath it moves.
+        """
+        link = ttk.Label(parent, text=text, style=style, cursor="hand2")
         link.bind("<Button-1>", lambda _e: webbrowser.open(url))
-        link.bind("<Enter>", lambda _e: link.configure(font=self.font_link))
-        link.bind("<Leave>", lambda _e: link.configure(font=self.font_mono_bold))
+        link.bind("<Enter>", lambda _e: link.configure(foreground=self.colors["text"]))
+        link.bind("<Leave>", lambda _e: link.configure(foreground=""))
         Tooltip(link, f"{url}  öffnen")
         return link
 
@@ -1572,7 +1624,8 @@ class App(tk.Tk):
     def _set_busy(self, busy, activity=""):
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for button in (self.submit_button, self.preview_button):
+        for button in (self.submit_button, self.preview_button,
+                       self.connect_button):
             button.configure(state=state)
         self.configure(cursor="watch" if busy else "")
         if busy:
@@ -1609,7 +1662,7 @@ class App(tk.Tk):
             self.update_button.configure(
                 text=f"⇩ {self.update_release['version']}", style="Update.TButton")
         else:
-            self.update_button.configure(text="⇩", style="Icon.TButton")
+            self.update_button.configure(text="⇩ Update", style="Tool.TButton")
 
     def _update_on_start(self):
         """Ask GitHub at most once a day, and remember the answer in between."""
@@ -1698,7 +1751,7 @@ class App(tk.Tk):
         self.profiles = core.profiles_of(config)
         self._fill_profiles()
         self._use_profile(core.pick_profile(config, self.args.profile),
-                          first_run=True)
+                          first_run=True, connect=False)
 
     def _fill_profiles(self):
         """Always show the switcher -- it is the only way to add a connection."""
@@ -1707,23 +1760,46 @@ class App(tk.Tk):
                                    state="readonly")
         self.profile_box.grid()
 
-    def _use_profile(self, profile, first_run=False):
-        """Connect with the given profile, or ask for one when it is unusable."""
+    def _use_profile(self, profile, first_run=False, connect=True):
+        """Take up the given profile, or ask for one when it is unusable.
+
+        ``connect`` is false on start-up: opening the window should not reach
+        out to anything by itself. The connect button does that.
+        """
         self.profile = profile or {}
+        self.connected = False
+        self.services, self.domains = [], []
         self.var_profile.set(self.profile.get("name", ""))
         try:
             self.api = core.build_client(self.args, self.profile)
         except core.UsageError:
             self.api = None
-            self.services, self.domains = [], []
             self._set_status(None, "keine Zugangsdaten")
             self._refresh_fqdn()
+            self._paint_connect_button()
             self._render_inventory()
             if first_run:
                 self._edit_profile(self.profile, is_new=not self.profiles)
             return
         self._build_adguard()
+        if not connect:
+            self._set_status(None, "nicht verbunden", idle=True)
+            self._paint_connect_button()
+            self._render_inventory()
+            return
         self.reload()
+
+    def _connect_now(self):
+        """The connect button: get credentials first if there are none yet."""
+        if not self.api:
+            self._edit_profile(self.profile, is_new=not self.profiles)
+            return
+        self.reload()
+
+    def _paint_connect_button(self):
+        self.connect_button.configure(
+            text="Neu laden" if self.connected else "Verbinden",
+            style="Tool.TButton" if self.connected else "Accent.TButton")
 
     def _switch_profile(self):
         choice = self.var_profile.get()
@@ -1837,16 +1913,24 @@ class App(tk.Tk):
                     "rewrites": rewrites, "rewrites_error": rewrites_error}
 
         self._run_async(work, self._state_loaded,
-                        on_error=lambda exc: self._set_status(None),
+                        on_error=self._connect_failed,
                         activity="verbinde …")
+
+    def _connect_failed(self, _error):
+        self.connected = False
+        self._set_status(None)
+        self._paint_connect_button()
+        self._render_inventory()
 
     def _state_loaded(self, state):
         self._set_busy(False)
+        self.connected = True
         self.services = state["services"]
         self.healthchecks = state["healthchecks"]
         self.rewrites = state["rewrites"]
         self.rewrites_error = state["rewrites_error"]
         self._set_status(state["status"])
+        self._paint_connect_button()
 
         names = [service["name"] for service in self.services]
         self.frontend_box.configure(values=names,
@@ -1871,10 +1955,11 @@ class App(tk.Tk):
         self._refresh_fqdn()
         self._render_inventory()
 
-    def _set_status(self, status, error=None):
+    def _set_status(self, status, error=None, idle=False):
         if error or status is None:
-            self.status_pill.configure(text=error or "nicht erreichbar",
-                                       style="BadPill.TLabel")
+            self.status_pill.configure(
+                text=error or "nicht erreichbar",
+                style="IdlePill.TLabel" if idle else "BadPill.TLabel")
             return
         running = "running" in str(status).lower()
         self.status_pill.configure(
@@ -1905,6 +1990,12 @@ class App(tk.Tk):
 
     def _submit(self, dry_run):
         if self.busy or not self.api:
+            return
+        if not self.connected:
+            messagebox.showinfo(APP_TITLE,
+                                "Bitte zuerst verbinden — ohne die Public "
+                                "Services von der OPNsense weiß das Programm "
+                                "nicht, wo die Rule hin soll.")
             return
         opts = self._form_options(dry_run)
         if not opts.target:
