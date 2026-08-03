@@ -887,7 +887,7 @@ GITHUB_API = "https://api.github.com"
 # archive can drop something new into the user's folder -- and config.json /
 # gui.json are never in the list, so personal settings survive every update.
 UPDATE_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "HAProxy-Starter.bat",
-                "README.md", "config.example.json")
+                "README.md", "CHANGELOG.md", "config.example.json")
 ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py")
 
 # The whole project is well under a megabyte; anything beyond this is either a

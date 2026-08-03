@@ -3,5 +3,7 @@
 # cmd.exe, where goto/label handling gets unreliable.
 *.bat -text
 
+*.zip binary
+
 *.py  text eol=lf
 *.md  text eol=lf

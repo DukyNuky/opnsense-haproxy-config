@@ -29,6 +29,17 @@ Build-Schritt.
 | `haproxy_gui.py` | Fenster (tkinter) |
 | `HAProxy-Starter.bat` | Doppelklick-Start für Windows |
 
+## Herunterladen
+
+**[opnsense-haproxy-1.1.0.zip](releases/opnsense-haproxy-1.1.0.zip?raw=1)** —
+entpacken und loslegen; unter Windows `HAProxy-Starter.bat` doppelklicken. Was
+sich seit der letzten Fassung geändert hat, steht im
+[Änderungsverzeichnis](CHANGELOG.md).
+
+Wer lieber den aktuellen Stand von `main` will, nimmt den grünen **Code**-Knopf
+oben oder ein Tag unter [Tags](../../tags). Ist das Programm einmal da, holt es
+sich neue Fassungen selbst — siehe [Updates](#updates).
+
 ## Einrichten
 
 1. In OPNsense unter **System → Zugriff → Benutzer → API-Schlüssel** einen
@@ -200,6 +211,10 @@ geprüft; ist das Archiv unvollständig oder beschädigt, wird nichts angefasst.
 
 Liegt das Programm in einer git-Arbeitskopie, verweigert das Update den Dienst
 und verweist auf `git pull` — sonst wären eigene Änderungen weg.
+
+Ein neues Paket zum Herunterladen baut `./make_release.py`: es liest die
+Versionsnummer aus `opnsense_haproxy.py` und legt
+`releases/opnsense-haproxy-<version>.zip` an.
 
 ## Kommandozeile
 
