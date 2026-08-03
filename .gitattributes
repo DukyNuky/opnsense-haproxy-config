@@ -4,6 +4,8 @@
 *.bat -text
 
 *.zip binary
+*.png binary
+*.ico binary
 
 *.py  text eol=lf
 *.md  text eol=lf
