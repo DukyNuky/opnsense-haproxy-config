@@ -1,0 +1,38 @@
+{
+  "active": "Zuhause",
+
+  "profiles": [
+    {
+      "name": "Zuhause",
+      "url": "https://opnsense.example.com",
+      "key": "PASTE_API_KEY_HERE",
+      "secret": "PASTE_API_SECRET_HERE",
+      "verify_ssl": false,
+
+      "frontend": "https_frontend",
+
+      "adguard": {
+        "url": "https://adguard.example.com",
+        "username": "admin",
+        "password": "PASTE_ADGUARD_PASSWORD_HERE",
+        "target": "192.168.1.1",
+        "verify_ssl": false
+      },
+
+      "defaults": {
+        "ssl": false,
+        "base_domain": "",
+        "healthcheck": null,
+        "prefix": ""
+      }
+    },
+
+    {
+      "name": "Zweitstandort",
+      "url": "https://opnsense.example.net",
+      "key": "PASTE_API_KEY_HERE",
+      "secret": "PASTE_API_SECRET_HERE",
+      "verify_ssl": true
+    }
+  ]
+}

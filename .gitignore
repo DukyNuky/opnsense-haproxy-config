@@ -1,0 +1,6 @@
+# local configuration -- holds API keys and passwords
+config.json
+gui.json
+
+__pycache__/
+*.py[cod]

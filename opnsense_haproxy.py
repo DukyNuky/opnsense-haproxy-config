@@ -1,0 +1,1258 @@
+#!/usr/bin/env python3
+"""Provision a complete HAProxy host entry on OPNsense with a single command.
+
+One `add` call creates the real server, the backend pool, the host condition,
+the rule, links the rule into the public service (frontend) and reloads
+HAProxy -- the five steps that otherwise have to be clicked through by hand.
+
+Only the Python standard library is required.
+"""
+
+import argparse
+import base64
+import getpass
+import json
+import os
+import re
+import ssl
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
+
+# API endpoint suffixes per object kind; the plugin names them inconsistently
+# (plural for search, singular everywhere else), so keep the mapping explicit.
+SEARCH_ENDPOINT = {
+    "server": "searchServers",
+    "backend": "searchBackends",
+    "frontend": "searchFrontends",
+    "acl": "searchAcls",
+    "action": "searchActions",
+    "healthcheck": "searchHealthchecks",
+}
+ENDPOINT_NAME = {
+    "server": "Server",
+    "backend": "Backend",
+    "frontend": "Frontend",
+    "acl": "Acl",
+    "action": "Action",
+    "healthcheck": "Healthcheck",
+}
+
+# Frontends in "http" mode inspect the Host header; "ssl"/"tcp" frontends only
+# ever see the TLS handshake, so they have to match on SNI instead.
+SNI_MODES = ("ssl", "tcp")
+
+YES = ("y", "yes", "j", "ja", "true", "1")
+
+
+class ApiError(RuntimeError):
+    pass
+
+
+class UsageError(RuntimeError):
+    pass
+
+
+def base_url(raw, what="address", default_scheme="https", keep_path=False):
+    """Make sense of an address the way people actually type or paste it.
+
+    Adds the scheme when it is missing (urllib refuses anything else) and
+    drops the fragment and query a copied browser URL carries along, e.g.
+    ``https://adguard.example/#dns_rewrites``.
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise UsageError(f"no {what} given")
+    text = text.split("#", 1)[0].split("?", 1)[0].strip()
+    if "://" not in text:
+        text = f"{default_scheme}://{text}"
+    parsed = urllib.parse.urlsplit(text)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise UsageError(f"'{raw}' is not a usable {what}")
+    path = parsed.path.rstrip("/") if keep_path else ""
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+# --------------------------------------------------------------------------
+# API client
+# --------------------------------------------------------------------------
+
+
+class Client:
+    def __init__(self, url, key, secret, verify=True, timeout=30):
+        self.base = base_url(url, "OPNsense address", keep_path=True)
+        self.timeout = timeout
+        self._auth = base64.b64encode(f"{key}:{secret}".encode()).decode()
+        self._ctx = None
+        if not verify:
+            self._ctx = ssl.create_default_context()
+            self._ctx.check_hostname = False
+            self._ctx.verify_mode = ssl.CERT_NONE
+
+    def call(self, path, payload=None, method=None):
+        """Call an OPNsense API endpoint; ``path`` starts at the module name."""
+        url = f"{self.base}/api/{path}"
+        headers = {
+            "Authorization": f"Basic {self._auth}",
+            "Accept": "application/json",
+        }
+        data = None
+        if payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+        if method is None:
+            method = "POST" if data is not None else "GET"
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as resp:
+                body = resp.read().decode()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace").strip()[:400]
+            if exc.code == 401:
+                raise ApiError("401 Unauthorized -- check API key/secret") from None
+            raise ApiError(f"{exc.code} {exc.reason} on {path}: {detail}") from None
+        except urllib.error.URLError as exc:
+            raise ApiError(f"cannot reach {self.base}: {exc.reason}") from None
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            raise ApiError(f"non-JSON reply from {path}: {body[:200]}") from None
+
+    # -- generic model helpers ---------------------------------------------
+
+    def search(self, kind):
+        reply = self.call(
+            f"haproxy/settings/{SEARCH_ENDPOINT[kind]}",
+            {"current": 1, "rowCount": -1, "searchPhrase": ""},
+        )
+        return reply.get("rows", [])
+
+    def find(self, kind, name):
+        for row in self.search(kind):
+            if row.get("name") == name:
+                return row
+        return None
+
+    def get(self, kind, uuid):
+        reply = self.call(f"haproxy/settings/get{ENDPOINT_NAME[kind]}/{uuid}")
+        return reply[kind]
+
+    def add(self, kind, body):
+        reply = self.call(f"haproxy/settings/add{ENDPOINT_NAME[kind]}", {kind: body})
+        if reply.get("result") != "saved":
+            raise ApiError(f"creating {kind} failed: {_validation_text(reply)}")
+        return reply["uuid"]
+
+    def update(self, kind, uuid, body):
+        reply = self.call(f"haproxy/settings/set{ENDPOINT_NAME[kind]}/{uuid}", {kind: body})
+        if reply.get("result") not in ("saved", "ok"):
+            raise ApiError(f"updating {kind} failed: {_validation_text(reply)}")
+
+    def delete(self, kind, uuid):
+        reply = self.call(f"haproxy/settings/del{ENDPOINT_NAME[kind]}/{uuid}", {})
+        if reply.get("result") not in ("deleted", "ok"):
+            raise ApiError(f"deleting {kind} failed: {_validation_text(reply)}")
+
+    # -- service -----------------------------------------------------------
+
+    def configtest(self):
+        return self.call("haproxy/service/configtest", method="POST").get("result", "")
+
+    def reconfigure(self):
+        return self.call("haproxy/service/reconfigure", method="POST")
+
+    def status(self):
+        return self.call("haproxy/service/status")
+
+
+def _validation_text(reply):
+    problems = reply.get("validations")
+    if problems:
+        return "; ".join(f"{k}: {v}" for k, v in problems.items())
+    return json.dumps(reply)
+
+
+# --------------------------------------------------------------------------
+# Base domains, taken from the ACME client's certificates
+# --------------------------------------------------------------------------
+
+
+def certificate_names(row):
+    """Every FQDN one ACME certificate covers: its name plus the alt names."""
+    names = [str(row.get("name", "")).strip()]
+    alt = row.get("altNames", "")
+    if isinstance(alt, dict):  # search may report list fields as option maps
+        alt = ",".join(alt.keys())
+    names += [part.strip() for part in re.split(r"[,\s]+", str(alt or ""))]
+    return [name.lower() for name in names if name]
+
+
+def base_domains(client):
+    """Offerable base domains, derived from the ACME client certificates.
+
+    A wildcard certificate for ``*.example.com`` makes ``example.com`` usable
+    for any host below it; a plain certificate only covers the exact names it
+    lists, which are offered as-is.
+    """
+    try:
+        reply = client.call("acmeclient/certificates/search",
+                            {"current": 1, "rowCount": -1, "searchPhrase": ""})
+    except ApiError as exc:
+        raise ApiError(f"cannot read ACME certificates ({exc}) -- is the "
+                       "os-acme-client plugin installed?") from None
+
+    found = {}
+    for row in reply.get("rows", []):
+        if str(row.get("enabled", "1")) != "1":
+            continue
+        names = certificate_names(row)
+        for name in names:
+            domain = name[2:] if name.startswith("*.") else name
+            if not domain or domain in found:
+                continue
+            found[domain] = {
+                "domain": domain,
+                "wildcard": name.startswith("*."),
+                "certificate": row.get("name", ""),
+                "covers": names,
+            }
+    return [found[key] for key in sorted(found)]
+
+
+def covered_by(domain_entry, fqdn):
+    """Would the certificate behind this base domain actually cover the host?"""
+    fqdn = fqdn.lower()
+    for name in domain_entry["covers"]:
+        if name == fqdn:
+            return True
+        if name.startswith("*.") and fqdn.endswith(name[1:]):
+            # a wildcard matches exactly one extra label
+            return fqdn.count(".") == name.count(".")
+    return False
+
+
+def with_base(target, base):
+    """Let an empty target (or ``@``) mean the base domain itself."""
+    text = (target or "").strip()
+    head = text.split("/", 1)[0]
+    if base and head in ("", "@"):
+        return base + text[len(head):]
+    return text
+
+
+def build_fqdn(host, base):
+    """Combine the host part with a chosen base domain."""
+    host = (host or "").strip().strip(".").lower()
+    base = (base or "").strip().strip(".").lower()
+    if not base:
+        return host
+    if not host or host == "@":
+        return base
+    if host == base or host.endswith(f".{base}"):
+        return host
+    return f"{host}.{base}"
+
+
+# --------------------------------------------------------------------------
+# AdGuard Home
+# --------------------------------------------------------------------------
+
+
+class AdGuard:
+    """The handful of AdGuard Home calls needed to keep a DNS rewrite in sync."""
+
+    def __init__(self, url, username="", password="", verify=True, timeout=15):
+        root = base_url(url, "AdGuard address", keep_path=True)
+        # people paste the UI URL, which may or may not already end in /control
+        self.base = root if root.endswith("/control") else root + "/control"
+        self.timeout = timeout
+        self._auth = None
+        if username or password:
+            self._auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+        self._ctx = None
+        if not verify:
+            self._ctx = ssl.create_default_context()
+            self._ctx.check_hostname = False
+            self._ctx.verify_mode = ssl.CERT_NONE
+
+    def call(self, path, payload=None):
+        url = f"{self.base}/{path}"
+        headers = {"Accept": "application/json"}
+        if self._auth:
+            headers["Authorization"] = f"Basic {self._auth}"
+        data = None
+        if payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=headers,
+                                     method="POST" if data is not None else "GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout,
+                                        context=self._ctx) as resp:
+                body = resp.read().decode()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace").strip()[:300]
+            if exc.code in (401, 403):
+                raise ApiError("AdGuard rejected the login -- check user/password") \
+                    from None
+            raise ApiError(f"AdGuard {exc.code} on {path}: {detail}") from None
+        except urllib.error.URLError as exc:
+            raise ApiError(f"cannot reach AdGuard at {self.base}: {exc.reason}") \
+                from None
+        if not body.strip():
+            return {}
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            return {}
+
+    def rewrites(self):
+        reply = self.call("rewrite/list")
+        return reply if isinstance(reply, list) else []
+
+    def find_rewrite(self, domain):
+        return next((entry for entry in self.rewrites()
+                     if str(entry.get("domain", "")).lower() == domain.lower()), None)
+
+    def add_rewrite(self, domain, answer):
+        self.call("rewrite/add", {"domain": domain, "answer": answer})
+
+    def delete_rewrite(self, domain, answer):
+        self.call("rewrite/delete", {"domain": domain, "answer": answer})
+
+
+def adguard_from_config(config, overrides=None):
+    """Build an AdGuard client from the config file, or None when unconfigured.
+
+    Returns ``(client, settings)``; ``settings["error"]`` is set instead of
+    raising when the address is unusable, so a UI can say so and carry on.
+    """
+    settings = dict(config.get("adguard") or {})
+    settings.update({k: v for k, v in (overrides or {}).items() if v})
+    if not settings.get("url"):
+        return None, settings
+    try:
+        client = AdGuard(settings["url"], settings.get("username", ""),
+                         settings.get("password", ""),
+                         verify=settings.get("verify_ssl", True))
+    except UsageError as exc:
+        settings["error"] = str(exc)
+        return None, settings
+    return client, settings
+
+
+def link_actions(client, frontend_uuid, action_uuids):
+    """Rewrite only a frontend's rule list, leaving every other field alone.
+
+    setFrontend applies exactly the fields it is given (BaseField::setNodes
+    skips keys that are absent), so there is no need to read the frontend and
+    write it back whole -- and no way to do that safely either: several field
+    types report something on GET that they do not accept on POST, which the
+    API answers with a 500.
+    """
+    client.update("frontend", frontend_uuid,
+                  {"linkedActions": ",".join(action_uuids)})
+
+
+# --------------------------------------------------------------------------
+# Naming
+# --------------------------------------------------------------------------
+
+
+def slug(text, allow_dots=True):
+    """Reduce a string to what the plugin's name masks accept."""
+    keep = r"0-9a-zA-Z._\-" if allow_dots else r"0-9a-zA-Z_\-"
+    cleaned = re.sub(rf"[^{keep}]", "_", text)
+    return re.sub(r"_+", "_", cleaned).strip("_")
+
+
+class Names:
+    """The object names derived from one host (plus optional path).
+
+    Server and backend names may contain dots, condition and rule names may
+    not -- the plugin's validation masks differ, so two variants are kept.
+    """
+
+    def __init__(self, host, path, prefix=""):
+        base = f"{host}{path}"
+        self.prefix = prefix or ""
+        self.dotted = slug(base, allow_dots=True)
+        self.plain = slug(base, allow_dots=False)
+
+    @property
+    def server(self):
+        return f"{self.prefix}srv_{self.dotted}"
+
+    @property
+    def backend(self):
+        return f"{self.prefix}be_{self.dotted}"
+
+    @property
+    def acl_host(self):
+        return f"{self.prefix}acl_{self.plain}"
+
+    @property
+    def acl_path(self):
+        return f"{self.prefix}acl_{self.plain}_path"
+
+    @property
+    def action(self):
+        return f"{self.prefix}rule_{self.plain}"
+
+
+def parse_target(raw):
+    """Accept ``host``, ``https://host`` or ``https://host/path`` alike."""
+    text = raw.strip()
+    text = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", "", text)
+    host, _, path = text.partition("/")
+    host = host.split("@")[-1].split(":")[0].lower()
+    if not host or not re.fullmatch(r"[0-9a-zA-Z._\-]+", host):
+        raise UsageError(f"'{raw}' does not contain a usable hostname")
+    path = ("/" + path.strip("/")) if path.strip("/") else ""
+    return host, path
+
+
+# --------------------------------------------------------------------------
+# Provisioning
+# --------------------------------------------------------------------------
+
+
+def pick_frontend(client, wanted):
+    rows = client.search("frontend")
+    if not rows:
+        raise UsageError("this OPNsense has no public service (frontend) yet")
+    if wanted:
+        for row in rows:
+            if row.get("name") == wanted:
+                return client.get("frontend", row["uuid"]), row["uuid"], row["name"]
+        known = ", ".join(sorted(r.get("name", "?") for r in rows))
+        raise UsageError(f"no public service named '{wanted}' (have: {known})")
+    if len(rows) > 1:
+        known = ", ".join(sorted(r.get("name", "?") for r in rows))
+        raise UsageError(
+            f"several public services exist -- pick one with --frontend (have: {known})"
+        )
+    return client.get("frontend", rows[0]["uuid"]), rows[0]["uuid"], rows[0]["name"]
+
+
+def selected_value(field):
+    """Read the selected key out of an option/relation field of a get* reply."""
+    if isinstance(field, dict):
+        for key, value in field.items():
+            if str(value.get("selected", 0)) == "1":
+                return key
+        return ""
+    return field or ""
+
+
+def selected_values(field):
+    if isinstance(field, dict):
+        return [k for k, v in field.items() if str(v.get("selected", 0)) == "1"]
+    return [v for v in str(field or "").split(",") if v]
+
+
+def provision(client, opts, out=print, adguard=None):
+    base = (getattr(opts, "base_domain", "") or "").strip().strip(".")
+    host, path = parse_target(with_base(opts.target, base))
+    if base:
+        host = build_fqdn(host, base)
+    names = Names(host, path, opts.prefix)
+
+    frontend, frontend_uuid, frontend_name = pick_frontend(client, opts.frontend)
+    frontend_mode = selected_value(frontend.get("mode")) or "http"
+    sni_mode = frontend_mode in SNI_MODES
+
+    if path and sni_mode:
+        raise UsageError(
+            f"public service '{frontend_name}' runs in {frontend_mode} mode and cannot "
+            "match on a path -- drop the path from the URL"
+        )
+
+    backend_mode = opts.backend_mode or ("tcp" if sni_mode else "http")
+    port = opts.port if opts.port else (443 if opts.ssl else 80)
+
+    healthcheck_uuid = ""
+    if opts.healthcheck:
+        row = client.find("healthcheck", opts.healthcheck)
+        if row is None:
+            raise UsageError(f"no health monitor named '{opts.healthcheck}'")
+        healthcheck_uuid = row["uuid"]
+
+    dns_target = (getattr(opts, "dns_target", "") or "").strip()
+    want_dns = bool(adguard and dns_target)
+
+    label = f"{host}{path}"
+    out(f"public service : {frontend_name} (mode {frontend_mode})")
+    out(f"match          : {'SNI' if sni_mode else 'Host header'} == {host}"
+        + (f" and path starts with {path}" if path else ""))
+    out(f"real server    : {opts.ip}:{port} ({'ssl' if opts.ssl else 'plain'}"
+        + (", verify cert" if opts.ssl and opts.ssl_verify else "")
+        + f", mode {backend_mode})")
+    if base:
+        out(f"base domain    : {base}")
+    if want_dns:
+        out(f"dns rewrite    : {host} -> {dns_target}")
+    out("objects        : "
+        + ", ".join([names.server, names.backend, names.acl_host]
+                    + ([names.acl_path] if path else [])
+                    + [names.action]))
+
+    if base:
+        entry = next((d for d in base_domains(client)
+                      if d["domain"] == base.lower()), None)
+        if entry is None:
+            out(f"warning        : no ACME certificate lists {base}",
+                file=sys.stderr)
+        elif not covered_by(entry, host):
+            out(f"warning        : certificate '{entry['certificate']}' does not "
+                f"cover {host} -- HTTPS will show a name mismatch",
+                file=sys.stderr)
+
+    clashes = [
+        f"{what} '{name}'"
+        for kind, what, name in (
+            ("server", "real server", names.server),
+            ("backend", "backend pool", names.backend),
+            ("acl", "condition", names.acl_host),
+            ("action", "rule", names.action),
+        )
+        if client.find(kind, name)
+    ]
+    if clashes:
+        raise UsageError(
+            "already provisioned (" + ", ".join(clashes) + ") -- "
+            f"use `remove {host}{path}` first if you want to recreate it"
+        )
+
+    if opts.dry_run:
+        out("\ndry run -- nothing was changed")
+        return 0
+
+    created = []  # (kind, uuid) in creation order, for rollback
+    try:
+        server_uuid = client.add("server", {
+            "enabled": "1",
+            "name": names.server,
+            "description": f"managed: {label}",
+            "address": opts.ip,
+            "port": str(port),
+            "mode": "active",
+            "type": "static",
+            "ssl": "1" if opts.ssl else "0",
+            "sslVerify": "1" if (opts.ssl and opts.ssl_verify) else "0",
+        })
+        created.append(("server", server_uuid))
+        out(f"+ real server   {names.server}")
+
+        backend_body = {
+            "enabled": "1",
+            "name": names.backend,
+            "description": f"managed: {label}",
+            "mode": backend_mode,
+            "linkedServers": server_uuid,
+            "healthCheckEnabled": "1" if healthcheck_uuid else "0",
+            "healthCheck": healthcheck_uuid,
+        }
+        if backend_mode == "http":
+            backend_body["forwardFor"] = "1" if opts.forward_for else "0"
+        backend_uuid = client.add("backend", backend_body)
+        created.append(("backend", backend_uuid))
+        out(f"+ backend pool  {names.backend}")
+
+        acl_uuids = []
+        if sni_mode:
+            host_acl = {"name": names.acl_host, "expression": "ssl_sni", "ssl_sni": host}
+        else:
+            host_acl = {"name": names.acl_host, "expression": "hdr", "hdr": host}
+        host_acl["description"] = f"managed: {label}"
+        acl_uuid = client.add("acl", host_acl)
+        created.append(("acl", acl_uuid))
+        acl_uuids.append(acl_uuid)
+        out(f"+ condition     {names.acl_host}")
+
+        if path:
+            path_uuid = client.add("acl", {
+                "name": names.acl_path,
+                "description": f"managed: {label}",
+                "expression": "path_beg",
+                "path_beg": path,
+            })
+            created.append(("acl", path_uuid))
+            acl_uuids.append(path_uuid)
+            out(f"+ condition     {names.acl_path}")
+
+        action_uuid = client.add("action", {
+            "enabled": "1",
+            "name": names.action,
+            "description": f"managed: {label}",
+            "testType": "if",
+            "operator": "and",
+            "linkedAcls": ",".join(acl_uuids),
+            "type": "use_backend",
+            "use_backend": backend_uuid,
+        })
+        created.append(("action", action_uuid))
+        out(f"+ rule          {names.action}")
+
+        linked = selected_values(frontend.get("linkedActions"))
+        link_actions(client, frontend_uuid, linked + [action_uuid])
+        created.append(("link", (frontend_uuid, linked)))
+        out(f"+ linked rule into public service '{frontend_name}'")
+
+        if want_dns:
+            existing = adguard.find_rewrite(host)
+            if existing is None:
+                adguard.add_rewrite(host, dns_target)
+                created.append(("dns", (host, dns_target)))
+                out(f"+ dns rewrite   {host} -> {dns_target}")
+            elif str(existing.get("answer", "")) == dns_target:
+                out(f"= dns rewrite   {host} -> {dns_target} (already there)")
+            else:
+                out(f"! dns rewrite   {host} already points at "
+                    f"{existing.get('answer')} -- left untouched", file=sys.stderr)
+    except Exception:
+        out("\nsomething went wrong -- rolling back", file=sys.stderr)
+        rollback(client, created, out, adguard)
+        raise
+
+    return apply_changes(client, opts, out)
+
+
+def rollback(client, created, out, adguard=None):
+    for kind, ref in reversed(created):
+        try:
+            if kind == "dns":
+                if adguard:
+                    adguard.delete_rewrite(*ref)
+                    out(f"- removed dns rewrite {ref[0]}", file=sys.stderr)
+            elif kind == "link":
+                frontend_uuid, previous = ref
+                link_actions(client, frontend_uuid, previous)
+                out("- unlinked rule from public service", file=sys.stderr)
+            else:
+                client.delete(kind, ref)
+                out(f"- removed {kind} {ref}", file=sys.stderr)
+        except ApiError as exc:
+            out(f"! could not undo {kind} {ref}: {exc}", file=sys.stderr)
+
+
+def apply_changes(client, opts, out):
+    if opts.no_apply:
+        out("\nsaved but not applied -- run `apply` when you are ready")
+        return 0
+    out("\nchecking configuration ...")
+    report = client.configtest()
+    lowered = report.lower()
+    # haproxy -c prints ALERT/EMERG lines and "Fatal errors" when it refuses a
+    # config, and "Configuration file is valid" when it accepts one.
+    if any(marker in lowered for marker in ("[alert]", "[emerg]", "fatal errors")):
+        out(report.strip() or "(no output)", file=sys.stderr)
+        out("config test failed -- not reloading HAProxy", file=sys.stderr)
+        return 1
+    if "configuration file is valid" not in lowered:
+        out(f"warning: unexpected config test output: {report.strip()[:200]}",
+            file=sys.stderr)
+    for line in report.splitlines():
+        if "[warning]" in line.lower():
+            out(f"  {line.strip()}")
+    out("configuration is valid, reloading HAProxy ...")
+    reply = client.reconfigure()
+    if reply.get("status", "ok").lower() not in ("ok", "done"):
+        out(f"reload reported: {json.dumps(reply)}", file=sys.stderr)
+        return 1
+    out("done")
+    return 0
+
+
+def deprovision(client, opts, out=print, adguard=None):
+    base = (getattr(opts, "base_domain", "") or "").strip().strip(".")
+    host, path = parse_target(with_base(opts.target, base))
+    if base:
+        host = build_fqdn(host, base)
+    names = Names(host, path, opts.prefix)
+
+    targets = [
+        ("action", names.action),
+        ("acl", names.acl_host),
+        ("acl", names.acl_path),
+        ("backend", names.backend),
+        ("server", names.server),
+    ]
+    found = []
+    for kind, name in targets:
+        row = client.find(kind, name)
+        if row:
+            found.append((kind, name, row["uuid"]))
+
+    rewrite = adguard.find_rewrite(host) if adguard else None
+
+    if not found and rewrite is None:
+        out(f"nothing found for {host}{path}")
+        return 0
+
+    label = {"action": "rule", "acl": "condition", "backend": "backend pool",
+             "server": "real server"}
+    for kind, name, _ in found:
+        out(f"will delete {label[kind]:14s} {name}")
+    if rewrite is not None:
+        out(f"will delete {'dns rewrite':14s} {host} -> {rewrite.get('answer')}")
+    if opts.dry_run:
+        out("\ndry run -- nothing was changed")
+        return 0
+    if not opts.yes and not confirm("delete these objects?"):
+        out("aborted")
+        return 1
+
+    action_uuids = {uuid for kind, _, uuid in found if kind == "action"}
+    if action_uuids:
+        for row in client.search("frontend"):
+            frontend = client.get("frontend", row["uuid"])
+            linked = selected_values(frontend.get("linkedActions"))
+            remaining = [u for u in linked if u not in action_uuids]
+            if len(remaining) != len(linked):
+                link_actions(client, row["uuid"], remaining)
+                out(f"- unlinked rule from public service '{row.get('name')}'")
+
+    for kind, name, uuid in found:
+        client.delete(kind, uuid)
+        out(f"- deleted {label[kind]} {name}")
+
+    if rewrite is not None:
+        adguard.delete_rewrite(host, str(rewrite.get("answer", "")))
+        out(f"- deleted dns rewrite {host}")
+
+    return apply_changes(client, opts, out)
+
+
+class LogRecorder:
+    """Captures the lines provision/deprovision would have printed.
+
+    Each entry is ``{"text": ..., "level": "info"|"error"}`` so a UI can colour
+    them the way the terminal does.
+    """
+
+    def __init__(self):
+        self.lines = []
+
+    def __call__(self, *parts, file=None):
+        text = " ".join(str(part) for part in parts)
+        level = "error" if file is sys.stderr else "info"
+        for line in text.split("\n"):
+            self.lines.append({"text": line, "level": level})
+
+
+def run_step(operation, client, opts, adguard=None, log=None):
+    """Run provision/deprovision and return its log even when it fails.
+
+    The rollback messages are the interesting part of a failure, so they have
+    to survive into the result instead of being replaced by the exception.
+    Pass ``log`` to watch the lines arrive while the work is still running.
+    """
+    log = log if log is not None else LogRecorder()
+    try:
+        code = operation(client, opts, out=log, adguard=adguard)
+    except (UsageError, ApiError) as exc:
+        return {"ok": False, "error": str(exc), "log": log.lines,
+                "dry_run": getattr(opts, "dry_run", False)}
+    return {"ok": code == 0, "error": None, "log": log.lines,
+            "dry_run": getattr(opts, "dry_run", False)}
+
+
+def derive_target(conditions):
+    """Rebuild the host (plus path) a rule matches, so it can be removed again."""
+    host = next((c["value"] for c in conditions
+                 if c["expression"] in ("hdr", "ssl_sni")), None)
+    if not host:
+        return None
+    path = next((c["value"] for c in conditions
+                 if c["expression"] == "path_beg"), "")
+    return f"{host}{path}"
+
+
+def inventory(client):
+    """Collect every public service with the rules, pools and servers behind it."""
+    services = []
+    for row in sorted(client.search("frontend"), key=lambda r: r.get("name", "")):
+        frontend = client.get("frontend", row["uuid"])
+        services.append({
+            "uuid": row["uuid"],
+            "name": row.get("name", ""),
+            "mode": selected_value(frontend.get("mode")) or "http",
+            "bind": frontend.get("bind", ""),
+            "enabled": str(frontend.get("enabled", "1")) == "1",
+            "rules": [_read_rule(client, uuid)
+                      for uuid in selected_values(frontend.get("linkedActions"))],
+        })
+    return services
+
+
+def _read_rule(client, action_uuid):
+    rule = {"uuid": action_uuid, "name": "", "type": "", "conditions": [],
+            "backend": None, "target": None}
+    try:
+        action = client.get("action", action_uuid)
+    except ApiError:
+        rule["name"] = f"(unreadable rule {action_uuid})"
+        return rule
+
+    rule["name"] = action.get("name", "")
+    rule["type"] = selected_value(action.get("type"))
+    for acl_uuid in selected_values(action.get("linkedAcls")):
+        try:
+            acl = client.get("acl", acl_uuid)
+        except ApiError:
+            continue
+        expression = selected_value(acl.get("expression"))
+        rule["conditions"].append({"expression": expression,
+                                   "value": acl.get(expression, "")})
+    rule["target"] = derive_target(rule["conditions"])
+
+    backend_uuid = selected_value(action.get("use_backend"))
+    if not backend_uuid:
+        return rule
+    backend = client.get("backend", backend_uuid)
+    rule["backend"] = {
+        "name": backend.get("name", ""),
+        "mode": selected_value(backend.get("mode")),
+        "servers": [],
+    }
+    for server_uuid in selected_values(backend.get("linkedServers")):
+        server = client.get("server", server_uuid)
+        rule["backend"]["servers"].append({
+            "name": server.get("name", ""),
+            "address": server.get("address", ""),
+            "port": server.get("port", ""),
+            "ssl": str(server.get("ssl", "0")) == "1",
+        })
+    return rule
+
+
+def show(client, opts, out=print):
+    """Print each public service with the rules and pools behind it."""
+    services = inventory(client)
+    if not services:
+        out("no public services configured")
+        return 0
+    for service in services:
+        state = "" if service["enabled"] else "  [disabled]"
+        out(f"\n{service['name']}  ({service['mode']}, "
+            f"bind {service['bind'] or '?'}){state}")
+        if not service["rules"]:
+            out("    (no rules)")
+        for rule in service["rules"]:
+            if rule["backend"] is None:
+                out(f"    {rule['name']}  ->  {rule['type'] or '?'}")
+                continue
+            conditions = " & ".join(f"{c['expression']}={c['value']}"
+                                    for c in rule["conditions"])
+            out(f"    {rule['name']}  [{conditions}]")
+            out(f"        pool {rule['backend']['name']} "
+                f"({rule['backend']['mode']})")
+            for server in rule["backend"]["servers"]:
+                scheme = "https" if server["ssl"] else "http"
+                out(f"        -> {server['name']}  "
+                    f"{scheme}://{server['address']}:{server['port']}")
+    return 0
+
+
+def show_domains(client, opts, out=print):
+    """List the base domains the ACME certificates make available."""
+    entries = base_domains(client)
+    if not entries:
+        out("no ACME certificates found")
+        return 0
+    for entry in entries:
+        kind = "wildcard" if entry["wildcard"] else "exact"
+        out(f"{entry['domain']:40s} {kind:9s} certificate '{entry['certificate']}'")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Configuration / CLI
+# --------------------------------------------------------------------------
+
+
+def load_config(path):
+    if path and not os.path.exists(path):
+        raise UsageError(f"config file not found: {path}")
+    path = path or DEFAULT_CONFIG
+    if not os.path.exists(path):
+        return {}
+    with open(path) as handle:
+        text = handle.read().strip()
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise UsageError(f"{path} is not valid JSON: {exc}") from None
+
+
+PROFILE_KEYS = ("name", "url", "key", "secret", "verify_ssl", "frontend",
+                "adguard", "defaults")
+
+
+def profiles_of(config):
+    """The configured profiles.
+
+    A file written before profiles existed holds one connection at the top
+    level; it is presented as a single profile so nothing has to be migrated
+    by hand.
+    """
+    listed = config.get("profiles")
+    if isinstance(listed, list) and listed:
+        result = []
+        for index, entry in enumerate(listed, start=1):
+            profile = dict(entry)
+            profile.setdefault("name", profile.get("url") or f"Profil {index}")
+            result.append(profile)
+        return result
+    if any(config.get(key) for key in ("url", "key", "secret")):
+        flat = {k: v for k, v in config.items() if k in PROFILE_KEYS}
+        flat.setdefault("name", "Standard")
+        return [flat]
+    return []
+
+
+def pick_profile(config, name=None):
+    """The profile to work with: the requested one, the active one, or the first."""
+    profiles = profiles_of(config)
+    if not profiles:
+        return {}
+    if name:
+        for profile in profiles:
+            if profile.get("name") == name:
+                return profile
+        known = ", ".join(p.get("name", "?") for p in profiles)
+        raise UsageError(f"no profile named '{name}' (have: {known})")
+    active = config.get("active")
+    for profile in profiles:
+        if profile.get("name") == active:
+            return profile
+    return profiles[0]
+
+
+def as_profile_file(profiles, active=None):
+    """The config file layout for a set of profiles."""
+    return {"profiles": list(profiles),
+            "active": active or (profiles[0].get("name") if profiles else "")}
+
+
+def build_client(args, profile):
+    url = args.url or os.environ.get("OPNSENSE_URL") or profile.get("url")
+    key = args.key or os.environ.get("OPNSENSE_KEY") or profile.get("key")
+    secret = args.secret or os.environ.get("OPNSENSE_SECRET") or profile.get("secret")
+    missing = [n for n, v in (("url", url), ("key", key), ("secret", secret)) if not v]
+    if missing:
+        raise UsageError(
+            f"missing {', '.join(missing)} -- run `{os.path.basename(sys.argv[0])} init` "
+            "or pass --url/--key/--secret"
+        )
+    verify = profile.get("verify_ssl", True)
+    if getattr(args, "insecure", False):
+        verify = False
+    return Client(url, key, secret, verify=verify)
+
+
+def confirm(question):
+    if not sys.stdin.isatty():
+        return False
+    try:
+        return input(f"{question} [y/N] ").strip().lower() in YES
+    except EOFError:
+        return False
+
+
+def ask(question, default=None, secret=False, allow_empty=False):
+    """Prompt for a value; fall back to the default when there is no terminal."""
+    if not sys.stdin.isatty():
+        if allow_empty:
+            return default or ""
+        if default in (None, ""):
+            raise UsageError(f"no terminal to ask for: {question}")
+        return default
+    suffix = f" [{default}]" if default not in (None, "") else ""
+    while True:
+        raw = (getpass.getpass if secret else input)(f"{question}{suffix}: ").strip()
+        if raw:
+            return raw
+        if allow_empty or default not in (None, ""):
+            return default or ""
+
+
+def cmd_init(args, _config):
+    path = args.config or DEFAULT_CONFIG
+    existing = []
+    if os.path.exists(path):
+        try:
+            existing = profiles_of(load_config(path))
+        except UsageError:
+            existing = []
+        if existing:
+            known = ", ".join(p.get("name", "?") for p in existing)
+            print(f"{path} already holds: {known}")
+            if not confirm("add another profile?"):
+                print("aborted")
+                return 1
+        elif not confirm(f"{path} exists -- overwrite?"):
+            print("aborted")
+            return 1
+
+    default_name = "Standard" if not existing else f"Profil {len(existing) + 1}"
+    config = {
+        "name": ask("profile name", default_name),
+        "url": ask("OPNsense base URL", "https://opnsense.local"),
+        "key": ask("API key"),
+        "secret": ask("API secret", secret=True),
+        "verify_ssl": ask("verify TLS certificate? (yes/no)", "no").lower() in YES,
+    }
+    frontend = ask("default public service (leave empty to auto-detect)",
+                   allow_empty=True)
+    if frontend:
+        config["frontend"] = frontend
+
+    adguard_url = ask("AdGuard Home URL (empty = no DNS rewrites)",
+                      allow_empty=True)
+    if adguard_url:
+        config["adguard"] = {
+            "url": adguard_url,
+            "username": ask("AdGuard user", allow_empty=True),
+            "password": ask("AdGuard password", secret=True, allow_empty=True),
+            "target": ask("address the rewrites should point at"),
+            "verify_ssl": ask("verify AdGuard's TLS certificate? (yes/no)",
+                              "no").lower() in YES,
+        }
+    profiles = [p for p in existing if p.get("name") != config["name"]]
+    profiles.append(config)
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    with open(path, "w") as handle:
+        json.dump(as_profile_file(profiles, config["name"]), handle, indent=2)
+        handle.write("\n")
+    os.chmod(path, 0o600)
+    print(f"\nwrote {path} (mode 600) -- profile '{config['name']}'")
+
+    client = Client(config["url"], config["key"], config["secret"],
+                    verify=config["verify_ssl"])
+    try:
+        status = client.status()
+        print(f"connection ok -- haproxy is {status.get('status', 'unknown')}")
+    except ApiError as exc:
+        print(f"warning: could not talk to the API yet: {exc}", file=sys.stderr)
+    return 0
+
+
+def cmd_add(args, config):
+    profile = pick_profile(config, args.profile)
+    client = build_client(args, profile)
+    defaults = profile.get("defaults", {})
+    if not args.target:
+        args.target = ask("URL / hostname")
+    if not args.ip:
+        args.ip = ask("real server IP")
+    if args.port is None and args.ssl is None:
+        answer = ask("use SSL to the backend? (yes/no)",
+                     "yes" if defaults.get("ssl") else "no")
+        args.ssl = answer.lower() in YES
+    if args.ssl is None:
+        args.ssl = bool(defaults.get("ssl", False))
+    if args.port is None:
+        args.port = ask("real server port", str(443 if args.ssl else 80))
+    args.port = int(args.port)
+    if not 1 <= args.port <= 65535:
+        raise UsageError("port must be between 1 and 65535")
+    args.frontend = args.frontend or profile.get("frontend")
+    args.healthcheck = args.healthcheck or defaults.get("healthcheck")
+    args.prefix = args.prefix if args.prefix is not None else defaults.get("prefix", "")
+    args.base_domain = args.base_domain or defaults.get("base_domain", "")
+    adguard = _adguard_for(args, profile)
+    return provision(client, args, out=_out, adguard=adguard)
+
+
+def cmd_remove(args, config):
+    profile = pick_profile(config, args.profile)
+    client = build_client(args, profile)
+    defaults = profile.get("defaults", {})
+    if not args.target:
+        args.target = ask("URL / hostname")
+    args.prefix = args.prefix if args.prefix is not None else \
+        defaults.get("prefix", "")
+    args.base_domain = args.base_domain or defaults.get("base_domain", "")
+    return deprovision(client, args, out=_out,
+                       adguard=_adguard_for(args, profile))
+
+
+def _adguard_for(args, profile):
+    """The AdGuard client to use, unless DNS handling is switched off."""
+    if getattr(args, "no_dns", False):
+        return None
+    adguard, settings = adguard_from_config(
+        profile, {"url": getattr(args, "adguard_url", None)})
+    if adguard is None:
+        if settings.get("error"):
+            raise UsageError(settings["error"])
+        return None
+    args.dns_target = (getattr(args, "dns_target", None)
+                       or settings.get("target", ""))
+    if not args.dns_target:
+        raise UsageError(
+            "AdGuard is configured but no target address is set -- add "
+            '"target" to the adguard section or pass --dns-target')
+    return adguard
+
+
+def cmd_list(args, config):
+    return show(_client_for(args, config), args, out=_out)
+
+
+def cmd_domains(args, config):
+    return show_domains(_client_for(args, config), args, out=_out)
+
+
+def cmd_profiles(args, config):
+    """List the configured profiles, marking the active one."""
+    profiles = profiles_of(config)
+    if not profiles:
+        _out("no profiles configured -- run `init`")
+        return 0
+    chosen = pick_profile(config, args.profile).get("name")
+    for profile in profiles:
+        mark = "*" if profile.get("name") == chosen else " "
+        adguard = (profile.get("adguard") or {}).get("url", "")
+        _out(f"{mark} {profile.get('name', '?'):24s} {profile.get('url', '?')}"
+             + (f"   adguard: {adguard}" if adguard else ""))
+    return 0
+
+
+def _client_for(args, config):
+    return build_client(args, pick_profile(config, args.profile))
+
+
+def cmd_apply(args, config):
+    return apply_changes(_client_for(args, config), args, out=_out)
+
+
+def cmd_gui(args, config):
+    try:
+        import haproxy_gui
+    except ImportError:
+        raise UsageError("haproxy_gui.py must sit next to this script") from None
+    return haproxy_gui.App(args).mainloop() or 0
+
+
+def cmd_status(args, config):
+    client = _client_for(args, config)
+    status = client.status()
+    print(f"haproxy: {status.get('status', 'unknown')}")
+    return 0
+
+
+def _out(*parts, file=None):
+    print(*parts, file=file or sys.stdout)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="opnsense-haproxy",
+        description="Create a full HAProxy host entry on OPNsense in one step.",
+    )
+    parser.add_argument("--config", help=f"config file (default: {DEFAULT_CONFIG})")
+    parser.add_argument("-P", "--profile",
+                        help="which configured OPNsense to talk to "
+                             "(see the `profiles` command)")
+    parser.add_argument("--url", help="OPNsense base URL, e.g. https://opnsense.local")
+    parser.add_argument("--key", help="API key")
+    parser.add_argument("--secret", help="API secret")
+    parser.add_argument("--insecure", action="store_true",
+                        help="do not verify the OPNsense TLS certificate")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    add = sub.add_parser("add", help="provision a new host")
+    add.add_argument("target", nargs="?",
+                     help="URL or hostname, e.g. app.example.com or https://x.tld/api")
+    add.add_argument("-i", "--ip", help="IP or hostname of the real server")
+    add.add_argument("-p", "--port", help="port of the real server (default 80/443)")
+    add.add_argument("--ssl", dest="ssl", action="store_const", const=True,
+                     help="use SSL towards the backend")
+    add.add_argument("--no-ssl", dest="ssl", action="store_const", const=False,
+                     help="plain HTTP towards the backend")
+    add.add_argument("--ssl-verify", action="store_true",
+                     help="verify the backend certificate (off by default, "
+                          "internal hosts usually have self-signed certs)")
+    add.add_argument("-b", "--base-domain", default="",
+                     help="base domain the host lives under; the target may then "
+                          "be just the host part (see the `domains` command)")
+    add.add_argument("-f", "--frontend", help="public service to attach the rule to")
+    add.add_argument("--dns-target",
+                     help="address the AdGuard rewrite should answer with")
+    add.add_argument("--no-dns", action="store_true",
+                     help="do not touch AdGuard, even when it is configured")
+    add.add_argument("--adguard-url", help="AdGuard Home base URL")
+    add.add_argument("--backend-mode", choices=("http", "tcp"),
+                     help="backend pool mode (default: derived from the frontend)")
+    add.add_argument("--healthcheck", help="name of an existing health monitor")
+    add.add_argument("--no-forward-for", dest="forward_for", action="store_false",
+                     help="do not add X-Forwarded-For (HTTP backends only)")
+    add.add_argument("--prefix", help="prefix for generated object names")
+    add.add_argument("-n", "--dry-run", action="store_true",
+                     help="show what would be created and stop")
+    add.add_argument("--no-apply", action="store_true",
+                     help="save but do not test/reload HAProxy")
+    add.set_defaults(func=cmd_add, forward_for=True)
+
+    remove = sub.add_parser("remove", help="delete a previously provisioned host")
+    remove.add_argument("target", nargs="?", help="URL or hostname")
+    remove.add_argument("-b", "--base-domain", default="",
+                        help="base domain used when it was created")
+    remove.add_argument("--prefix", help="prefix used when it was created")
+    remove.add_argument("--no-dns", action="store_true",
+                        help="leave the AdGuard rewrite in place")
+    remove.add_argument("--adguard-url", help="AdGuard Home base URL")
+    remove.add_argument("-n", "--dry-run", action="store_true")
+    remove.add_argument("-y", "--yes", action="store_true", help="do not ask")
+    remove.add_argument("--no-apply", action="store_true")
+    remove.set_defaults(func=cmd_remove, dns_target=None)
+
+    listing = sub.add_parser("list", help="show public services and what is behind them")
+    listing.set_defaults(func=cmd_list)
+
+    domains = sub.add_parser("domains",
+                             help="list base domains from the ACME certificates")
+    domains.set_defaults(func=cmd_domains)
+
+    profiles = sub.add_parser("profiles", help="list the configured connections")
+    profiles.set_defaults(func=cmd_profiles)
+
+    apply_cmd = sub.add_parser("apply", help="test the config and reload HAProxy")
+    apply_cmd.set_defaults(func=cmd_apply, no_apply=False)
+
+    gui = sub.add_parser("gui", help="open the desktop window")
+    gui.set_defaults(func=cmd_gui)
+
+    status = sub.add_parser("status", help="show the HAProxy service state")
+    status.set_defaults(func=cmd_status)
+
+    init = sub.add_parser("init", help="write the config file interactively")
+    init.set_defaults(func=cmd_init)
+
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    try:
+        config = {} if args.command == "init" else load_config(args.config)
+        return args.func(args, config)
+    except (UsageError, ApiError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("\naborted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
