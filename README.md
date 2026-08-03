@@ -157,6 +157,7 @@ Services hängt, mit **Entfernen** pro Eintrag. **Vorschau** zeigt, was angelegt
 würde, ohne etwas zu ändern. Unten läuft das Protokoll mit denselben Zeilen wie
 die CLI, farblich nach Anlegen, Löschen und Fehler getrennt. Hell/Dunkel
 schaltet der Knopf oben rechts um; Theme und Fenstergröße werden gemerkt.
+Der Knopf **⇩** daneben sucht nach Updates, siehe unten.
 
 Alle API-Aufrufe laufen in einem Hintergrund-Thread, das Fenster friert also
 nicht ein, während die OPNsense antwortet. Was gerade passiert, steht unter der
@@ -167,6 +168,38 @@ Der Dialog hinter dem Zahnrad bearbeitet immer **eine** Verbindung: oben die
 OPNsense, darunter — hinter einem Haken — das dazugehörige AdGuard Home. Ist
 der Haken aus, bleibt DNS für diese Verbindung unberührt. Ab der zweiten
 Verbindung gibt es dort auch einen Löschen-Knopf.
+
+## Updates
+
+Der Knopf **⇩** oben rechts fragt bei GitHub nach einer neueren Fassung. Gibt es
+keine, sagt er das; gibt es eine, zeigt ein Fenster die Versionsnummer und —
+sofern hinterlegt — was sich geändert hat, und installiert sie auf Wunsch.
+Danach ist ein Neustart des Programms nötig, den der Dialog gleich anbietet.
+
+Einmal am Tag schaut das Programm beim Start selbst nach, ohne zu fragen und
+ohne das Fenster aufzuhalten. Findet es etwas, trägt der Knopf die neue
+Versionsnummer und ist farbig hinterlegt — mehr passiert von allein nicht.
+Ist GitHub nicht erreichbar, bleibt das folgenlos. Wer das nicht möchte, setzt
+in `~/.config/opnsense-haproxy/gui.json` `"update_check": false`; der Knopf
+funktioniert weiter.
+
+Auf der Kommandozeile:
+
+```sh
+./opnsense_haproxy.py update --check    # nur nachsehen
+./opnsense_haproxy.py update            # nachsehen und nach Rückfrage installieren
+./opnsense_haproxy.py --version
+```
+
+Ersetzt werden ausschließlich `opnsense_haproxy.py`, `haproxy_gui.py`,
+`HAProxy-Starter.bat`, `README.md` und `config.example.json` — alles andere aus
+dem Download wird ignoriert, Zugangsdaten und Einstellungen bleiben unangetastet.
+Die bisherigen Dateien landen vorher in `backup-<version>/` daneben, falls du
+zurück willst. Heruntergeladener Python-Code wird vor dem Schreiben auf Syntax
+geprüft; ist das Archiv unvollständig oder beschädigt, wird nichts angefasst.
+
+Liegt das Programm in einer git-Arbeitskopie, verweigert das Update den Dienst
+und verweist auf `git pull` — sonst wären eigene Änderungen weg.
 
 ## Kommandozeile
 
@@ -214,6 +247,7 @@ Weitere Befehle:
 ./opnsense_haproxy.py remove app.example.com      # alle vier Objekte wieder weg
 ./opnsense_haproxy.py apply                       # Configtest + Reload
 ./opnsense_haproxy.py status                      # läuft HAProxy?
+./opnsense_haproxy.py update                      # neue Version von GitHub holen
 ./opnsense_haproxy.py gui                         # Fenster
 ```
 

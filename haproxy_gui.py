@@ -13,6 +13,7 @@ import os
 import queue
 import sys
 import threading
+import time
 
 try:
     import tkinter as tk
@@ -411,6 +412,151 @@ class ProfileDialog(tk.Toplevel):
 # --------------------------------------------------------------------------
 
 
+BLOCKED_TEXT = {
+    "git": "Dieser Ordner ist eine git-Arbeitskopie. Bitte mit „git pull“ "
+           "aktualisieren, damit eigene Änderungen nicht überschrieben werden.",
+    "readonly": "Die Programmdateien in diesem Ordner dürfen nicht geändert "
+                "werden. Starte das Programm mit den nötigen Rechten oder lege "
+                "es in einen eigenen Ordner.",
+}
+
+
+class UpdateDialog(tk.Toplevel):
+    """Shows what GitHub has to offer and installs it when asked to."""
+
+    def __init__(self, parent, colors, release):
+        super().__init__(parent)
+        self.title("Update")
+        self.app = parent
+        self.release = release
+        self.installed = None
+        self.folder = core.install_dir()
+        self.blocked = core.update_blocked(self.folder)
+        self.transient(parent)
+        self.configure(bg=colors["bg"])
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        body = ttk.Frame(self, style="Card.TFrame", padding=20)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        rows = itertools.count()
+
+        ttk.Label(body, text=f"Version {release['version']} ist verfügbar",
+                  style="H2.TLabel").grid(row=next(rows), column=0, sticky="w")
+        ttk.Label(body, style="Hint.TLabel",
+                  text=f"installiert: {core.VERSION}   ·   {release['page']}").grid(
+            row=next(rows), column=0, sticky="w", pady=(2, 12))
+
+        if release.get("notes"):
+            notes = tk.Text(body, height=9, width=58, wrap="word", relief="flat",
+                            bg=colors["surface2"], fg=colors["text"],
+                            padx=10, pady=8, font=self.app.font_base)
+            notes.insert("1.0", release["notes"])
+            notes.configure(state="disabled")
+            notes.grid(row=next(rows), column=0, sticky="ew")
+        else:
+            ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                      text="Zu dieser Version gibt es keine Beschreibung. "
+                           "Was sich geändert hat, steht auf der Seite oben.").grid(
+                row=next(rows), column=0, sticky="w")
+
+        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                  text=f"Ersetzt werden nur die Programmdateien in {self.folder}. "
+                       "Die bisherige Fassung wird vorher in einen Unterordner "
+                       "kopiert, deine Zugangsdaten bleiben unangetastet.").grid(
+            row=next(rows), column=0, sticky="w", pady=(12, 0))
+
+        self.note = ttk.Label(body, style="Hint.TLabel", wraplength=420,
+                              justify="left", text="")
+        self.note.grid(row=next(rows), column=0, sticky="w", pady=(8, 0))
+        self.note.grid_remove()
+
+        self.progress = ttk.Progressbar(body, mode="indeterminate",
+                                        style="Bar.Horizontal.TProgressbar")
+        self.progress.grid(row=next(rows), column=0, sticky="ew", pady=(12, 0))
+        self.progress.grid_remove()
+
+        footer = ttk.Frame(self, style="Card.TFrame", padding=(20, 12, 20, 16))
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        buttons = ttk.Frame(footer, style="Card.TFrame")
+        buttons.grid(row=0, column=1, sticky="e")
+        self.later = ttk.Button(buttons, text="Später", style="Ghost.TButton",
+                                command=self.destroy)
+        self.later.grid(row=0, column=0, padx=(0, 8))
+        self.action = ttk.Button(buttons, text="Jetzt installieren",
+                                 style="Accent.TButton", command=self._install)
+        self.action.grid(row=0, column=1)
+
+        if self.blocked:
+            self._say(BLOCKED_TEXT.get(self.blocked,
+                                       "Hier kann nicht aktualisiert werden."))
+            self.action.configure(state="disabled")
+
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        width = max(self.winfo_reqwidth(), 460)
+        self.geometry(f"{width}x{self.winfo_reqheight()}")
+        self.resizable(False, False)
+        self.grab_set()
+
+    def _say(self, text):
+        self.note.configure(text=text)
+        self.note.grid()
+
+    def _install(self):
+        self.action.configure(state="disabled")
+        self.later.configure(state="disabled")
+        self.progress.grid()
+        self.progress.start(12)
+        self._say("Update wird geladen …")
+
+        # Progress arrives from the worker through the window's own queue, so
+        # every widget change still happens on the UI thread.
+        def report(text):
+            self.app.results.put(("done", lambda _p: self._say(text), None,
+                                  None, None))
+
+        def task():
+            try:
+                result = core.install_update(self.release, self.folder, report)
+                self.app.results.put(("done", self._done, None, result, None))
+            except Exception as exc:  # noqa: BLE001 - shown in the dialog
+                # bound as a default: Python clears `exc` when the except block
+                # ends, long before the UI thread runs this
+                self.app.results.put(("done", lambda _p, error=exc: self._failed(error),
+                                      None, None, None))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _failed(self, error):
+        self.progress.stop()
+        self.progress.grid_remove()
+        self.later.configure(state="normal", text="Schließen")
+        self.action.configure(state="normal", text="Nochmal versuchen")
+        self._say(f"Fehlgeschlagen: {error}\nEs wurde nichts verändert.")
+
+    def _done(self, result):
+        self.installed = result
+        self.progress.stop()
+        self.progress.grid_remove()
+        self.app.update_release = None
+        self.app.prefs["update_found"] = ""
+        self.app._paint_update_button()
+        self._say(f"Version {result['version']} ist installiert. "
+                  "Sie wird nach einem Neustart des Programms verwendet.\n"
+                  f"Die vorherige Fassung liegt in "
+                  f"{os.path.basename(result['backup'])}.")
+        self.later.configure(state="normal", text="Später neu starten")
+        self.action.configure(state="normal", text="Jetzt neu starten",
+                              command=self._restart)
+
+    def _restart(self):
+        self.destroy()
+        self.app.restart()
+
+
 class App(tk.Tk):
     def __init__(self, args):
         super().__init__()
@@ -430,12 +576,15 @@ class App(tk.Tk):
         self.results = queue.Queue()
         self.port_touched = False
 
-        prefs = load_prefs()
-        self.theme_name = prefs.get("theme", "dark")
+        self.update_release = None
+        self.update_checking = False
+
+        self.prefs = load_prefs()
+        self.theme_name = self.prefs.get("theme", "dark")
         self.colors = THEMES[self.theme_name]
 
         self.title(APP_TITLE)
-        self.geometry(prefs.get("geometry", "1080x720"))
+        self.geometry(self.prefs.get("geometry", "1080x720"))
         self.minsize(880, 560)
 
         self._init_fonts()
@@ -445,6 +594,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._pump_job = self.after(60, self._pump)
         self.after(100, self._connect)
+        self.after(1500, self._update_on_start)
 
     # -- theming -----------------------------------------------------------
 
@@ -556,6 +706,14 @@ class App(tk.Tk):
         style.map("Icon.TButton", background=[("active", c["surface2"])],
                   foreground=[("active", c["text"])])
 
+        # the same button, but noticeable once there is something to install
+        style.configure("Update.TButton", background=c["accent_soft"],
+                        foreground=c["accent"], borderwidth=0,
+                        focuscolor=c["accent_soft"], padding=(9, 6),
+                        font=self.font_small)
+        style.map("Update.TButton", background=[("active", c["accent"])],
+                  foreground=[("active", c["accent_text"])])
+
         style.configure("Del.TButton", background=c["surface2"],
                         foreground=c["muted"], borderwidth=1,
                         bordercolor=c["border"], lightcolor=c["surface2"],
@@ -600,6 +758,7 @@ class App(tk.Tk):
         self.inventory.apply_theme(c)
         self.form_scroll.apply_theme(c)
         self.theme_button.configure(text="☀" if self.theme_name == "dark" else "🌙")
+        self._paint_update_button()
         self._render_inventory()
 
     def _toggle_theme(self):
@@ -647,11 +806,14 @@ class App(tk.Tk):
         self.status_pill.grid(row=0, column=1, padx=(0, 10))
         ttk.Button(actions, text="↻", style="Icon.TButton",
                    command=self.reload).grid(row=0, column=2)
+        self.update_button = ttk.Button(actions, text="⇩", style="Icon.TButton",
+                                        command=self._check_update)
+        self.update_button.grid(row=0, column=3)
         self.theme_button = ttk.Button(actions, text="☀", style="Icon.TButton",
                                        command=self._toggle_theme)
-        self.theme_button.grid(row=0, column=3)
+        self.theme_button.grid(row=0, column=4)
         ttk.Button(actions, text="⚙", style="Icon.TButton",
-                   command=self._open_settings).grid(row=0, column=4)
+                   command=self._open_settings).grid(row=0, column=5)
 
         # a slim progress strip so long API calls never look like a freeze
         self.progress = ttk.Progressbar(head, mode="indeterminate",
@@ -1051,6 +1213,100 @@ class App(tk.Tk):
         self.activity.configure(text=text)
         self.activity.grid() if text else self.activity.grid_remove()
 
+    def _run_quiet(self, work, callback):
+        """Background work that must not disturb anything: no progress bar and
+        no error box. The update check runs this way -- it is never the reason
+        someone opened the window, so a failing one stays silent."""
+        def task():
+            try:
+                payload = work()
+            except Exception:  # noqa: BLE001 - GitHub being unreachable is normal
+                return
+            self.results.put(("done", callback, None, payload, None))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    # -- updates -----------------------------------------------------------
+
+    def _paint_update_button(self):
+        """The button carries the new version number once one is known."""
+        if self.update_release:
+            self.update_button.configure(
+                text=f"⇩ {self.update_release['version']}", style="Update.TButton")
+        else:
+            self.update_button.configure(text="⇩", style="Icon.TButton")
+
+    def _update_on_start(self):
+        """Ask GitHub at most once a day, and remember the answer in between."""
+        if not self.prefs.get("update_check", True):
+            return
+        known = self.prefs.get("update_found", "")
+        if known and core.parse_version(known) > core.parse_version(core.VERSION):
+            self.update_release = {"version": known}  # enough to show the badge
+            self._paint_update_button()
+
+        last = self.prefs.get("update_checked", 0)
+        if isinstance(last, (int, float)) and time.time() - last < 24 * 3600:
+            return
+        self.prefs["update_checked"] = int(time.time())
+        self._run_quiet(lambda: core.check_for_update(), self._update_found)
+
+    def _update_found(self, release):
+        self.update_release = release
+        self.prefs["update_found"] = release["version"] if release else ""
+        self._paint_update_button()
+
+    def _check_update(self):
+        """The button: always asks GitHub, and always says what it found."""
+        if self.update_checking:
+            return
+        self.update_checking = True
+        self._set_activity("suche nach Updates …")
+
+        def done(release):
+            self.update_checking = False
+            self.prefs["update_checked"] = int(time.time())
+            self._set_activity("")
+            self._update_found(release)
+            if release is None:
+                messagebox.showinfo(
+                    APP_TITLE,
+                    f"Version {core.VERSION} ist aktuell.\n\n"
+                    "Es gibt nichts Neueres auf GitHub.", parent=self)
+                return
+            UpdateDialog(self, self.colors, release)
+
+        def failed(error):
+            self.update_checking = False
+            self._set_activity("")
+            messagebox.showwarning(
+                APP_TITLE, f"Die Update-Prüfung ist fehlgeschlagen:\n\n{error}",
+                parent=self)
+
+        def task():
+            try:
+                self.results.put(("done", done, None,
+                                  core.check_for_update(), None))
+            except Exception as exc:  # noqa: BLE001 - shown in the box above
+                # bound as a default: `exc` is gone once the except block ends
+                self.results.put(("done", lambda _p, error=exc: failed(error),
+                                  None, None, None))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def restart(self):
+        """Start the freshly installed version in place of this one."""
+        self._save_prefs()
+        if self._pump_job is not None:
+            self.after_cancel(self._pump_job)
+            self._pump_job = None
+        self.destroy()
+        try:
+            script = os.path.abspath(sys.argv[0])
+            os.execl(sys.executable, sys.executable, script, *sys.argv[1:])
+        except OSError as exc:
+            print(f"please start the program again ({exc})", file=sys.stderr)
+
     # -- actions -----------------------------------------------------------
 
     def _connect(self):
@@ -1374,8 +1630,13 @@ class App(tk.Tk):
             self.advanced.grid_remove()
             self.advanced_button.configure(text="▸  Erweiterte Optionen")
 
+    def _save_prefs(self):
+        # keep everything else that is in there, e.g. the update bookkeeping
+        self.prefs.update({"theme": self.theme_name, "geometry": self.geometry()})
+        save_prefs(self.prefs)
+
     def _on_close(self):
-        save_prefs({"theme": self.theme_name, "geometry": self.geometry()})
+        self._save_prefs()
         if self._pump_job is not None:
             self.after_cancel(self._pump_job)
             self._pump_job = None

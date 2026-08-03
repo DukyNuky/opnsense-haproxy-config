@@ -11,14 +11,19 @@ Only the Python standard library is required.
 import argparse
 import base64
 import getpass
+import io
 import json
 import os
 import re
+import shutil
 import ssl
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
+
+VERSION = "1.1.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -871,6 +876,225 @@ def show_domains(client, opts, out=print):
 
 
 # --------------------------------------------------------------------------
+# Updating from GitHub
+# --------------------------------------------------------------------------
+
+REPO = "DukyNuky/opnsense-haproxy-config"
+GITHUB_API = "https://api.github.com"
+
+# Exactly these files are replaced by an update. Anything else in the download
+# is ignored, so neither a stray file in the repository nor a manipulated
+# archive can drop something new into the user's folder -- and config.json /
+# gui.json are never in the list, so personal settings survive every update.
+UPDATE_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "HAProxy-Starter.bat",
+                "README.md", "config.example.json")
+ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py")
+
+# The whole project is well under a megabyte; anything beyond this is either a
+# mistake or something we should not be unpacking.
+MAX_DOWNLOAD = 20 * 1024 * 1024
+
+
+def parse_version(text):
+    """'v1.2.3' -> (1, 2, 3, 0). Anything without digits sorts lowest."""
+    numbers = [int(n) for n in re.findall(r"\d+", text or "")][:4]
+    return tuple(numbers + [0] * (4 - len(numbers)))
+
+
+def _github(path, timeout=15):
+    request = urllib.request.Request(
+        f"{GITHUB_API}/{path}",
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": f"opnsense-haproxy/{VERSION}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as reply:
+            return json.loads(reply.read().decode())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise FileNotFoundError(path) from None
+        if exc.code in (403, 429):
+            raise ApiError("GitHub is rate limiting this connection -- "
+                           "please try again in an hour") from None
+        raise ApiError(f"GitHub answered {exc.code} {exc.reason}") from None
+    except urllib.error.URLError as exc:
+        raise ApiError(f"cannot reach GitHub: {exc.reason}") from None
+    except json.JSONDecodeError:
+        raise ApiError("GitHub sent a reply that is not JSON") from None
+
+
+def latest_release(repo=REPO, timeout=15):
+    """The newest published version: a Release if one exists, else the highest tag.
+
+    Tags are a deliberate fallback. Publishing a Release is a manual step in
+    the web interface that is easy to forget, while a pushed tag already
+    carries both the version number and a downloadable archive.
+    """
+    try:
+        data = _github(f"repos/{repo}/releases/latest", timeout)
+        tag = data.get("tag_name") or data.get("name") or ""
+        return {"version": tag.lstrip("vV"), "tag": tag,
+                "notes": (data.get("body") or "").strip(),
+                "zip": data.get("zipball_url") or "",
+                "page": data.get("html_url") or f"https://github.com/{repo}/releases"}
+    except FileNotFoundError:
+        pass  # no Release published -- ask the tags instead
+
+    tags = _github(f"repos/{repo}/tags", timeout)
+    if not isinstance(tags, list) or not tags:
+        raise ApiError(f"{repo} has no published version yet")
+    newest = max(tags, key=lambda entry: parse_version(entry.get("name")))
+    tag = newest.get("name", "")
+    return {"version": tag.lstrip("vV"), "tag": tag, "notes": "",
+            "zip": newest.get("zipball_url") or "",
+            "page": f"https://github.com/{repo}/releases/tag/{tag}"}
+
+
+def check_for_update(current=None, repo=REPO, timeout=15):
+    """Release information when GitHub is ahead of us, otherwise None."""
+    current = current or VERSION
+    release = latest_release(repo, timeout)
+    release["current"] = current
+    if parse_version(release["version"]) <= parse_version(current):
+        return None
+    return release
+
+
+def install_dir():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+UPDATE_BLOCKED_TEXT = {
+    "git": "this folder is a git working copy -- update it with `git pull` so "
+           "local changes are not overwritten",
+    "readonly": "the program files in this folder may not be changed",
+}
+
+
+def update_blocked(folder=None):
+    """Why replacing the files here would be wrong, or '' when it is fine.
+
+    The answer is a short code rather than a sentence, so that the window can
+    phrase it in German while the command line stays English.
+    """
+    folder = folder or install_dir()
+    if os.path.isdir(os.path.join(folder, ".git")):
+        return "git"
+    if not os.access(folder, os.W_OK):
+        return "readonly"
+    for name in UPDATE_FILES:
+        path = os.path.join(folder, name)
+        if os.path.exists(path) and not os.access(path, os.W_OK):
+            return "readonly"
+    return ""
+
+
+def update_blocked_text(code):
+    return UPDATE_BLOCKED_TEXT.get(code, "this folder cannot be updated")
+
+
+def _download(url, timeout=60, report=None):
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/vnd.github+json",
+                      "User-Agent": f"opnsense-haproxy/{VERSION}"})
+    chunks, size = [], 0
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as reply:
+            while True:
+                chunk = reply.read(64 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_DOWNLOAD:
+                    raise ApiError("the download is far bigger than expected -- stopped")
+                chunks.append(chunk)
+                if report:
+                    report(f"loading … {size // 1024} KB")
+    except urllib.error.HTTPError as exc:
+        raise ApiError(f"download failed: {exc.code} {exc.reason}") from None
+    except urllib.error.URLError as exc:
+        raise ApiError(f"download failed: {exc.reason}") from None
+    return b"".join(chunks)
+
+
+def unpack_release(blob):
+    """The files we care about, taken out of a GitHub source archive.
+
+    GitHub wraps the repository in one top level directory, so the first path
+    element is dropped. Entries are matched against UPDATE_FILES instead of
+    being trusted, which also settles the usual zip path traversal question:
+    no name from the archive is ever used to build a path.
+    """
+    files = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+            for entry in archive.infolist():
+                parts = entry.filename.split("/")
+                if entry.is_dir() or len(parts) != 2:
+                    continue  # only the top level of the repository
+                if parts[1] in UPDATE_FILES:
+                    files[parts[1]] = archive.read(entry)
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise ApiError(f"the downloaded archive is unreadable: {exc}") from None
+    return files
+
+
+def verify_download(files):
+    """Refuse anything incomplete or broken before a single file is replaced."""
+    missing = [name for name in ESSENTIAL_FILES if name not in files]
+    if missing:
+        raise ApiError(f"the download is incomplete: {', '.join(missing)} missing")
+    for name, data in files.items():
+        if not name.endswith(".py"):
+            continue
+        try:
+            compile(data.decode("utf-8"), name, "exec")  # syntax check, no run
+        except (UnicodeDecodeError, SyntaxError) as exc:
+            raise ApiError(f"{name} from the download is damaged: {exc}") from None
+
+
+def install_update(release, folder=None, report=None, timeout=60):
+    """Replace the program files with the downloaded release.
+
+    The previous files are copied into a backup folder first, so an update
+    that turns out badly can be undone by copying them back by hand.
+    """
+    folder = folder or install_dir()
+    blocked = update_blocked(folder)
+    if blocked:
+        raise UsageError(update_blocked_text(blocked))
+    if not release.get("zip"):
+        raise ApiError("this version has no downloadable archive")
+    say = report or (lambda _text: None)
+
+    say("downloading …")
+    files = unpack_release(_download(release["zip"], timeout, report))
+    verify_download(files)
+
+    backup = os.path.join(folder, f"backup-{release.get('current') or VERSION}")
+    say("keeping a copy of the current version …")
+    os.makedirs(backup, exist_ok=True)
+    for name in files:
+        current = os.path.join(folder, name)
+        if os.path.exists(current):
+            shutil.copy2(current, os.path.join(backup, name))
+
+    say("writing the new version …")
+    written = []
+    for name, data in sorted(files.items()):
+        target = os.path.join(folder, name)
+        mode = os.stat(target).st_mode if os.path.exists(target) else None
+        temporary = f"{target}.new"
+        with open(temporary, "wb") as handle:
+            handle.write(data)
+        if mode is not None:
+            os.chmod(temporary, mode)  # keep the executable bit
+        os.replace(temporary, target)  # atomic: no half written script survives
+        written.append(name)
+    return {"files": written, "backup": backup, "version": release["version"]}
+
+
+# --------------------------------------------------------------------------
 # Configuration / CLI
 # --------------------------------------------------------------------------
 
@@ -1150,6 +1374,35 @@ def cmd_status(args, config):
     return 0
 
 
+def cmd_update(args, _config):
+    print(f"installed : {VERSION}")
+    release = check_for_update()
+    if release is None:
+        print("this is the newest version")
+        return 0
+
+    print(f"available : {release['version']}  ({release['page']})")
+    if release["notes"]:
+        print()
+        for line in release["notes"].splitlines():
+            print(f"  {line}")
+    print()
+    if args.check:
+        return 0
+
+    blocked = update_blocked()
+    if blocked:
+        raise UsageError(update_blocked_text(blocked))
+    if not args.yes and not confirm(f"install {release['version']} now?"):
+        return 0
+
+    result = install_update(release, report=lambda text: print(f"  {text}"))
+    print(f"updated to {result['version']}: {', '.join(result['files'])}")
+    print(f"the previous version is in {result['backup']}")
+    print("restart the program to use it")
+    return 0
+
+
 def _out(*parts, file=None):
     print(*parts, file=file or sys.stdout)
 
@@ -1159,6 +1412,8 @@ def build_parser():
         prog="opnsense-haproxy",
         description="Create a full HAProxy host entry on OPNsense in one step.",
     )
+    parser.add_argument("--version", action="version",
+                        version=f"opnsense-haproxy {VERSION}")
     parser.add_argument("--config", help=f"config file (default: {DEFAULT_CONFIG})")
     parser.add_argument("-P", "--profile",
                         help="which configured OPNsense to talk to "
@@ -1238,13 +1493,22 @@ def build_parser():
     init = sub.add_parser("init", help="write the config file interactively")
     init.set_defaults(func=cmd_init)
 
+    update = sub.add_parser("update", help="look for a newer version on GitHub")
+    update.add_argument("--check", action="store_true",
+                        help="only report what is available, install nothing")
+    update.add_argument("-y", "--yes", action="store_true",
+                        help="install without asking")
+    update.set_defaults(func=cmd_update)
+
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        config = {} if args.command == "init" else load_config(args.config)
+        # init writes the config, update does not need one
+        needs_config = args.command not in ("init", "update")
+        config = load_config(args.config) if needs_config else {}
         return args.func(args, config)
     except (UsageError, ApiError) as exc:
         print(f"error: {exc}", file=sys.stderr)
