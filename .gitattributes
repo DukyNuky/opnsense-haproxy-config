@@ -1,4 +1,7 @@
-# batch files must keep CRLF, otherwise cmd.exe can mis-handle labels
-*.bat text eol=crlf
+# Store the batch file byte for byte, CRLF included. With "text eol=crlf" git
+# would keep LF in the repository, and a ZIP download would carry LF into
+# cmd.exe, where goto/label handling gets unreliable.
+*.bat -text
+
 *.py  text eol=lf
 *.md  text eol=lf
