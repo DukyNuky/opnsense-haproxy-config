@@ -32,10 +32,11 @@ Build-Schritt.
 
 ## Herunterladen
 
-**[opnsense-haproxy-1.3.0.zip](releases/opnsense-haproxy-1.3.0.zip?raw=1)** —
-entpacken und loslegen; unter Windows `HAProxy-Starter.bat` doppelklicken. Was
-sich seit der letzten Fassung geändert hat, steht im
-[Änderungsverzeichnis](CHANGELOG.md).
+**[opnsense-haproxy-1.3.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-1.3.0.zip)**
+— entpacken und loslegen; unter Windows `HAProxy-Starter.bat` doppelklicken.
+Was sich seit der letzten Fassung geändert hat, steht im
+[Änderungsverzeichnis](CHANGELOG.md); alle Fassungen liegen unter
+[Releases](https://github.com/DukyNuky/opnsense-haproxy-config/releases).
 
 Wer lieber den aktuellen Stand von `main` will, nimmt den grünen **Code**-Knopf
 oben oder ein Tag unter [Tags](../../tags). Ist das Programm einmal da, holt es
