@@ -104,9 +104,10 @@ mit einem **API-Schlüssel**. Das ist ein Paar aus zwei langen Zeichenketten —
 *Key* und *Secret* —, das nur für Programme gedacht ist und genau die Rechte
 hat, die du dem zugehörigen Benutzer gibst.
 
-Wichtig ist die Reihenfolge: **erst der Benutzer, dann der Schlüssel.** Den
-Schlüssel gibt es nur in der Bearbeitungsmaske eines Benutzers, der schon
-existiert.
+Wichtig ist die Reihenfolge: **erst der Benutzer, dann der Schlüssel.** Der
+Schlüssel wird dem fertigen Benutzer angehängt — und zwar aus der
+Benutzer*übersicht* heraus, nicht aus der Maske, in der du ihn gerade
+bearbeitest. Das ist die Stelle, an der die meisten suchen.
 
 **4a — Benutzer anlegen.** In der OPNsense-Oberfläche zu
 **System → Zugriff → Benutzer** gehen und rechts unten das **+** drücken.
@@ -130,11 +131,14 @@ Privileges*) scrollen. Über das **+** daneben zwei Rechte hinzufügen:
 Wieder **Speichern**. Die Rechte hängen am *Benutzer*, nicht am Schlüssel — ein
 Schlüssel kann nie mehr als sein Benutzer.
 
-**4c — Schlüssel erzeugen.** Jetzt, im selben Bearbeitungsfenster des
-Benutzers, den Abschnitt **API-Schlüssel** suchen. Dort steht rechts ein
-kleines **+** — das ist der ganze Vorgang. Ein Klick darauf, und OPNsense legt
+**4c — Schlüssel erzeugen.** Der Schlüssel wird **nicht** in der
+Bearbeitungsmaske angelegt — dort steht nichts davon. Zurück in der
+**Benutzerübersicht** (*System → Zugriff → Benutzer*): ganz rechts in der Zeile
+deines Benutzers stehen ein paar kleine Symbole. Eines davon sieht aus wie ein
+Viereck mit gezacktem Rand, wie eine **Briefmarke** — das ist „API-Schlüssel
+erstellen". Ein Klick darauf, und der ganze Vorgang ist erledigt: OPNsense legt
 den Schlüssel an und lädt sofort eine kleine Textdatei namens **`apikey.txt`**
-herunter. Darin stehen zwei Zeilen:
+herunter (schau im Download-Ordner deines Browsers). Darin stehen zwei Zeilen:
 
 ```
 key=Ab3dEf…
@@ -142,10 +146,8 @@ secret=Xy9zQ…
 ```
 
 **Diese Datei ist deine einzige Gelegenheit.** Das Secret zeigt OPNsense nie
-wieder an. Ist sie weg, löschst du den Schlüssel und legst mit dem **+** einen
-neuen an — das kostet nichts.
-
-Zum Schluss die Benutzermaske noch einmal **speichern**.
+wieder an. Ist sie weg, klickst du einfach noch einmal auf die Briefmarke — das
+kostet nichts, du hast dann nur zwei Schlüssel und kannst den alten löschen.
 
 ## Schritt 5: Verbindung eintragen
 
@@ -312,8 +314,8 @@ Selbstsignierte Zertifikate sind im Heimnetz normal.
 
 **„401" oder „Authentifizierung fehlgeschlagen".**
 Key und Secret vertauscht, oder das `key=` bzw. `secret=` aus der Datei
-mitkopiert. Beide Felder noch einmal sauber einfügen. Zur Not im OPNsense-
-Benutzer mit dem **+** einen neuen Schlüssel erzeugen.
+mitkopiert. Beide Felder noch einmal sauber einfügen. Zur Not in der
+Benutzerübersicht mit der Briefmarke einen neuen Schlüssel erzeugen.
 
 **„403" oder leere Listen.**
 Dem Benutzer fehlen die Rechte — siehe Schritt 4b. Sie hängen am Benutzer, auch

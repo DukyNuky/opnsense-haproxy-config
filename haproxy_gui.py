@@ -372,7 +372,8 @@ class ProfileDialog(tk.Toplevel):
         self._toggle_adguard()
 
         ttk.Label(body, style="Hint.TLabel", wraplength=330, justify="left",
-                  text="Schlüssel: System → Zugriff → Benutzer → API-Schlüssel. "
+                  text="Schlüssel: System → Zugriff → Benutzer, dann rechts in "
+                       "der Zeile des Benutzers das Briefmarken-Symbol. "
                        f"Gespeichert in {self.config_path}").grid(
             row=next(rows), column=0, sticky="w", pady=(12, 0))
 
