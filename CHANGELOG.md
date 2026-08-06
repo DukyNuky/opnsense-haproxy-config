@@ -1,5 +1,38 @@
 # Änderungen
 
+## 2.0.0 — 6. August 2026
+
+**Die Einstellungen sind aufgeräumt: drei Listen statt einem langen Formular,
+und beim Anlegen wird gefragt, wohin.**
+
+- **OPNsense, AdGuard und Portainer haben je eine eigene Liste.** Das Zahnrad ⚙
+  zeigt sie untereinander, jede mit **＋ Hinzufügen** und **Bearbeiten** je
+  Eintrag; bearbeitet wird immer nur ein System auf einmal, in einem Fenster,
+  das auf einen Blick zu lesen ist. Vorher stand alles drei in einem einzigen
+  Formular untereinander, und jede Verbindung brauchte ihr eigenes AdGuard —
+  dieselben Zugangsdaten mehrfach in der Datei.
+- **Ein AdGuard für mehrere Standorte.** Eine OPNsense nennt das AdGuard und
+  den Portainer, mit denen sie gewöhnlich arbeitet, beim Namen. Wer nichts
+  nennt, arbeitet ohne.
+- **Beim Anlegen wird gefragt, wohin.** Im Formular für den neuen Host steht
+  **DNS-Eintrag in** — dort geht auch ein anderes AdGuard oder gar keins, für
+  genau diesen Host. Aus dem Häkchen von früher ist damit eine Auswahl
+  geworden.
+- **Beim Deployen genauso.** Das Fenster für einen neuen Stack führt ganz oben
+  **Deployen auf** mit Portainer und Umgebung. Ein Stack landet nicht mehr
+  versehentlich auf dem falschen Docker-Host.
+- **Der Deploy ist ein eigenes Fenster.** Er saß bisher in einer schmalen
+  Spalte am linken Rand des Portainer-Tabs, in der Repository-Pfade und der
+  Block Umgebungsvariablen kaum Platz hatten. Jetzt ist er ein breiter Dialog
+  in zwei Spalten — und die Liste der Stacks bekommt die ganze Breite zurück.
+- **Lange Portlisten klappen ein.** Ab dem sechsten Port zeigt eine Karte die
+  ersten vier und darunter **▾ n weitere Ports**. Bei genau fünf bleibt alles
+  stehen; eine einzelne Zeile zu verstecken hilft niemandem.
+- **Die Konfigurationsdatei wird beim Lesen umgesetzt**, von Hand ist nichts zu
+  tun. Zwei Profile, die auf dasselbe AdGuard zeigten, teilen sich danach einen
+  Eintrag. Geschrieben wird die neue Form erst beim nächsten Speichern; die
+  Kommandozeile liest beide Fassungen, `-P` meint weiterhin die OPNsense.
+
 ## 1.4.1 — 6. August 2026
 
 **Nachreichen, was beim Sprung auf 1.4.0 liegengeblieben ist.**

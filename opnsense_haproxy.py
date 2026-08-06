@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "1.4.1"
+VERSION = "2.0.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -1480,13 +1480,25 @@ def load_config(path):
 PROFILE_KEYS = ("name", "url", "key", "secret", "verify_ssl", "frontend",
                 "haproxy_ip", "adguard", "portainer", "defaults")
 
+# The three kinds of system the file knows, each in a list of its own. An
+# OPNsense entry names the AdGuard and the Portainer it works with by name, so
+# one AdGuard can serve several firewalls without being written down twice.
+SYSTEM_KINDS = ("opnsense", "adguard", "portainer")
+OPNSENSE_KEYS = ("name", "url", "key", "secret", "verify_ssl", "frontend",
+                 "haproxy_ip", "defaults", "adguard", "portainer")
+ADGUARD_KEYS = ("name", "url", "username", "password", "target", "verify_ssl")
+PORTAINER_KEYS = ("name", "url", "api_key", "username", "password", "host_ip",
+                  "verify_ssl")
+SYSTEM_KEYS = {"opnsense": OPNSENSE_KEYS, "adguard": ADGUARD_KEYS,
+               "portainer": PORTAINER_KEYS}
 
-def profiles_of(config):
-    """The configured profiles.
 
-    A file written before profiles existed holds one connection at the top
-    level; it is presented as a single profile so nothing has to be migrated
-    by hand.
+def old_profiles(config):
+    """The bundles a file written before 2.0 holds, one per connection.
+
+    Up to 1.4 every connection carried its own AdGuard and Portainer inside it.
+    A file from before profiles existed holds a single connection at the top
+    level; it counts as one bundle so nothing has to be migrated by hand.
     """
     listed = config.get("profiles")
     if isinstance(listed, list) and listed:
@@ -1503,6 +1515,135 @@ def profiles_of(config):
     return []
 
 
+def _free_name(entries, wanted, fallback):
+    """A name no entry in this list uses yet."""
+    base = str(wanted or fallback).strip() or fallback
+    taken = {entry.get("name") for entry in entries}
+    candidate, suffix = base, 1
+    while candidate in taken:
+        suffix += 1
+        candidate = f"{base} {suffix}"
+    return candidate
+
+
+def _same_system(entries, section):
+    """The name of an entry that already describes this very system.
+
+    Two connections to the same AdGuard were two copies of it in the old
+    layout. They become one entry, named after whichever connection got there
+    first, so the migration does not multiply what was always one machine.
+    """
+    for entry in entries:
+        if (str(entry.get("url", "")).rstrip("/").lower()
+                == str(section.get("url", "")).rstrip("/").lower()
+                and entry.get("username", "") == section.get("username", "")
+                and entry.get("api_key", "") == section.get("api_key", "")):
+            return entry.get("name", "")
+    return ""
+
+
+def split_profiles(profiles):
+    """Old bundles into the three lists of 2.0.
+
+    Each connection keeps its own OPNsense entry and points at the AdGuard and
+    the Portainer it used by name.
+    """
+    result = {kind: [] for kind in SYSTEM_KINDS}
+    for profile in profiles:
+        entry = {k: v for k, v in profile.items()
+                 if k in OPNSENSE_KEYS and k not in ("adguard", "portainer")}
+        entry.setdefault("name", profile.get("url") or "OPNsense")
+        entry["name"] = _free_name(result["opnsense"], entry["name"], "OPNsense")
+        for kind in ("adguard", "portainer"):
+            section = profile.get(kind)
+            if not isinstance(section, dict) or not str(section.get("url", "")).strip():
+                continue
+            known = _same_system(result[kind], section)
+            if known:
+                entry[kind] = known
+                continue
+            named = {k: v for k, v in section.items() if k in SYSTEM_KEYS[kind]}
+            # a section that already carries a name keeps it: this also runs
+            # when a 2.0 file is taken apart and put back together again
+            named["name"] = _free_name(result[kind],
+                                       section.get("name") or profile.get("name"),
+                                       kind.capitalize())
+            result[kind].append(named)
+            entry[kind] = named["name"]
+        result["opnsense"].append(entry)
+    return result
+
+
+def systems_of(config):
+    """The three lists, whatever layout the file on disk is in.
+
+    A 2.0 file holds them directly. Anything older is migrated on the way in --
+    reading is never a reason to rewrite the file, so this happens every time
+    until something is saved.
+    """
+    if any(isinstance(config.get(kind), list) for kind in SYSTEM_KINDS):
+        return {kind: [dict(entry) for entry in (config.get(kind) or [])
+                       if isinstance(entry, dict)]
+                for kind in SYSTEM_KINDS}
+    return split_profiles(old_profiles(config))
+
+
+def find_system(systems, kind, name):
+    """One entry by name, or nothing when the name is unknown or empty."""
+    if not name:
+        return {}
+    for entry in systems.get(kind, []):
+        if entry.get("name") == name:
+            return entry
+    return {}
+
+
+def active_name(config, kind, systems=None):
+    """Which system of this kind to start with.
+
+    Falls back to the first one configured, so a file that names something
+    since deleted still opens on something usable.
+    """
+    systems = systems if systems is not None else systems_of(config)
+    entries = systems.get(kind, [])
+    active = config.get("active")
+    wanted = ""
+    if isinstance(active, dict):
+        wanted = str(active.get(kind, ""))
+    elif kind == "opnsense":
+        wanted = str(active or "")  # a 1.x file names the active profile here
+    for entry in entries:
+        if entry.get("name") == wanted:
+            return wanted
+    return entries[0].get("name", "") if entries else ""
+
+
+def merged_profile(systems, entry, adguard=None, portainer=None):
+    """One OPNsense entry with its AdGuard and Portainer filled in.
+
+    The rest of the program works on this shape -- the same one the file held
+    up to 1.4 -- so only the settings screen and this module have to know that
+    the three are kept apart on disk. Passing ``adguard`` or ``portainer``
+    overrides what the entry names, which is what the pickers before a deploy
+    hand in.
+    """
+    if not entry:
+        return {}
+    profile = {k: v for k, v in entry.items() if k not in ("adguard", "portainer")}
+    for kind, chosen in (("adguard", adguard), ("portainer", portainer)):
+        name = entry.get(kind, "") if chosen is None else chosen
+        section = find_system(systems, kind, name)
+        if section:
+            profile[kind] = dict(section)
+    return profile
+
+
+def profiles_of(config):
+    """Every OPNsense connection, each with its AdGuard and Portainer filled in."""
+    systems = systems_of(config)
+    return [merged_profile(systems, entry) for entry in systems["opnsense"]]
+
+
 def pick_profile(config, name=None):
     """The profile to work with: the requested one, the active one, or the first."""
     profiles = profiles_of(config)
@@ -1514,17 +1655,28 @@ def pick_profile(config, name=None):
                 return profile
         known = ", ".join(p.get("name", "?") for p in profiles)
         raise UsageError(f"no profile named '{name}' (have: {known})")
-    active = config.get("active")
+    wanted = active_name(config, "opnsense")
     for profile in profiles:
-        if profile.get("name") == active:
+        if profile.get("name") == wanted:
             return profile
     return profiles[0]
 
 
+def as_settings_file(systems, active=None):
+    """The file layout of 2.0: three lists and what is active in each."""
+    chosen = dict(active or {})
+    for kind in SYSTEM_KINDS:
+        entries = systems.get(kind, [])
+        if not any(entry.get("name") == chosen.get(kind) for entry in entries):
+            chosen[kind] = entries[0].get("name", "") if entries else ""
+    written = {kind: list(systems.get(kind, [])) for kind in SYSTEM_KINDS}
+    written["active"] = chosen
+    return written
+
+
 def as_profile_file(profiles, active=None):
-    """The config file layout for a set of profiles."""
-    return {"profiles": list(profiles),
-            "active": active or (profiles[0].get("name") if profiles else "")}
+    """The file layout for a set of old-style bundles, split on the way out."""
+    return as_settings_file(split_profiles(profiles), {"opnsense": active or ""})
 
 
 def build_client(args, profile):

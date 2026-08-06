@@ -21,6 +21,10 @@ import haproxy_gui as ui
 import opnsense_haproxy as core
 import portainer as pcore
 
+# How many published ports a card shows before the rest are folded away. One
+# more than this still shows in full -- hiding a single row helps nobody.
+PORTS_SHOWN = 4
+
 AUTO_OFF = "aus"
 AUTO_INTERVAL = "regelmäßig nachsehen"
 AUTO_WEBHOOK = "auf Webhook warten"
@@ -42,170 +46,21 @@ class PortainerTab(ttk.Frame):
         self.state = None
         self.endpoint_id = None
         self.last_deploy = None
+        self.link_after_deploy = True
+        self.dialog = None
+        # stacks whose port list is unfolded; the listing is rebuilt often, so
+        # the answer cannot live on the widgets themselves
+        self.unfolded = set()
 
-        self.columnconfigure(0, weight=0, minsize=380)
-        self.columnconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        self._build_form()
         self._build_list()
 
     # -- layout ------------------------------------------------------------
 
-    def _build_form(self):
-        holder = ttk.Frame(self, style="Card.TFrame")
-        holder.grid(row=0, column=0, sticky="nsew", padx=(18, 9), pady=(0, 9))
-        holder.rowconfigure(0, weight=1)
-        holder.columnconfigure(0, weight=1)
-        self.form_scroll = ui.ScrollFrame(holder, self.app.colors)
-        self.form_scroll.grid(row=0, column=0, sticky="nsew")
-        self.form_scroll.body.columnconfigure(0, weight=1)
-
-        outer = ttk.Frame(self.form_scroll.body, style="Card.TFrame",
-                          padding=(18, 16))
-        outer.grid(row=0, column=0, sticky="nsew")
-        outer.columnconfigure(0, weight=1)
-
-        ttk.Label(outer, text="Neuer Stack", style="H2.TLabel").grid(
-            row=0, column=0, sticky="w")
-        ttk.Label(outer, style="Hint.TLabel", wraplength=320, justify="left",
-                  text="Holt eine docker-compose.yml aus einem GitHub- oder "
-                       "GitLab-Repository und lässt Portainer sie "
-                       "ausrollen.").grid(row=1, column=0, sticky="w",
-                                          pady=(3, 14))
-
-        self.var_name = tk.StringVar()
-        self.var_repo = tk.StringVar()
-        self.var_ref = tk.StringVar()
-        self.var_compose = tk.StringVar(value=pcore.DEFAULT_COMPOSE_FILE)
-        self.var_user = tk.StringVar()
-        self.var_token = tk.StringVar()
-        self.var_auto = tk.StringVar(value=AUTO_OFF)
-        self.var_interval = tk.StringVar(value=pcore.DEFAULT_INTERVAL)
-        self.var_force_pull = tk.BooleanVar(value=True)
-        self.var_git_tls = tk.BooleanVar(value=True)
-        self.var_link = tk.BooleanVar(value=True)
-
-        rows = itertools.count(2)
-
-        for label, var, hint in (
-                ("Name des Stacks", self.var_name,
-                 "Kleinbuchstaben, wie bei Portainer — z.B. nextcloud"),
-                ("Repository", self.var_repo,
-                 "https://github.com/… oder https://gitlab.com/…"),
-                ("Branch oder Tag", self.var_ref,
-                 "leer = der Standardbranch des Repositories"),
-                ("Datei im Repository", self.var_compose, "")):
-            ttk.Label(outer, text=label, style="FieldLabel.TLabel").grid(
-                row=next(rows), column=0, sticky="w", pady=(8, 3))
-            ttk.Entry(outer, textvariable=var, style="Card.TEntry").grid(
-                row=next(rows), column=0, sticky="ew")
-            if hint:
-                ttk.Label(outer, text=hint, style="Hint.TLabel").grid(
-                    row=next(rows), column=0, sticky="w", pady=(2, 0))
-
-        head = ttk.Frame(outer, style="Card.TFrame")
-        head.grid(row=next(rows), column=0, sticky="ew", pady=(12, 3))
-        head.columnconfigure(0, weight=1)
-        ttk.Label(head, text="Umgebungsvariablen",
-                  style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w")
-        self.env_button = ttk.Button(head, text="aus dem Repository",
-                                     style="Del.TButton", command=self._load_env)
-        self.env_button.grid(row=0, column=1, sticky="e")
-        ui.Tooltip(self.env_button,
-                   "Liest die Compose-Datei und eine .env daneben und trägt "
-                   "ein, was der Stack braucht — dann sind nur noch die Werte "
-                   "anzupassen")
-        self.env_text = tk.Text(outer, height=8, wrap="none", bd=0,
-                                highlightthickness=1, padx=8, pady=6,
-                                font=self.app.font_mono)
-        self.env_text.grid(row=next(rows), column=0, sticky="ew")
-        ttk.Label(outer, style="Hint.TLabel", wraplength=320, justify="left",
-                  text="Eine Zeile je Variable, KEY=wert — genau wie im "
-                       "Textfeld von Portainer.").grid(
-            row=next(rows), column=0, sticky="w", pady=(2, 0))
-
-        ttk.Separator(outer, orient="horizontal").grid(
-            row=next(rows), column=0, sticky="ew", pady=14)
-
-        ttk.Label(outer, text="Privates Repository", style="Group.TLabel").grid(
-            row=next(rows), column=0, sticky="w")
-        ttk.Label(outer, style="Hint.TLabel", wraplength=320, justify="left",
-                  text="Nur ausfüllen, wenn das Repository nicht öffentlich "
-                       "ist. Die Angaben gehen an Portainer und werden hier "
-                       "nicht gespeichert.").grid(row=next(rows), column=0,
-                                                  sticky="w", pady=(3, 6))
-        for label, var, secret in (("Benutzer", self.var_user, False),
-                                   ("Passwort oder Token", self.var_token, True)):
-            ttk.Label(outer, text=label, style="FieldLabel.TLabel").grid(
-                row=next(rows), column=0, sticky="w", pady=(6, 3))
-            ttk.Entry(outer, textvariable=var, style="Card.TEntry",
-                      show="•" if secret else "").grid(row=next(rows), column=0,
-                                                       sticky="ew")
-        ttk.Checkbutton(outer, text="TLS-Zertifikat des Git-Servers prüfen",
-                        variable=self.var_git_tls,
-                        style="Card.TCheckbutton").grid(row=next(rows), column=0,
-                                                        sticky="w", pady=(8, 0))
-
-        ttk.Separator(outer, orient="horizontal").grid(
-            row=next(rows), column=0, sticky="ew", pady=14)
-
-        ttk.Label(outer, text="Automatisch aktualisieren",
-                  style="Group.TLabel").grid(row=next(rows), column=0, sticky="w")
-        ttk.Label(outer, style="Hint.TLabel", wraplength=320, justify="left",
-                  text="Portainer sieht selbst im Repository nach und rollt "
-                       "Änderungen aus.").grid(row=next(rows), column=0,
-                                               sticky="w", pady=(3, 6))
-        self.auto_box = ttk.Combobox(outer, textvariable=self.var_auto,
-                                     values=list(AUTO_MODES), state="readonly",
-                                     style="Card.TCombobox")
-        self.auto_box.grid(row=next(rows), column=0, sticky="ew")
-        self.auto_box.bind("<<ComboboxSelected>>", lambda _e: self._auto_changed())
-
-        self.auto_extra = ttk.Frame(outer, style="Card.TFrame")
-        self.auto_extra.grid(row=next(rows), column=0, sticky="ew")
-        self.auto_extra.columnconfigure(0, weight=1)
-        self.interval_label = ttk.Label(self.auto_extra, text="Abstand",
-                                        style="FieldLabel.TLabel")
-        self.interval_label.grid(row=0, column=0, sticky="w", pady=(8, 3))
-        self.interval_entry = ttk.Entry(self.auto_extra,
-                                        textvariable=self.var_interval,
-                                        style="Card.TEntry")
-        self.interval_entry.grid(row=1, column=0, sticky="ew")
-        self.interval_hint = ttk.Label(self.auto_extra, style="Hint.TLabel",
-                                       text="z.B. 5m, 30m oder 24h")
-        self.interval_hint.grid(row=2, column=0, sticky="w", pady=(2, 0))
-        ttk.Checkbutton(self.auto_extra,
-                        text="dabei die Images neu herunterladen",
-                        variable=self.var_force_pull,
-                        style="Card.TCheckbutton").grid(row=3, column=0,
-                                                        sticky="w", pady=(8, 0))
-        self._auto_changed()
-
-        ttk.Separator(outer, orient="horizontal").grid(
-            row=next(rows), column=0, sticky="ew", pady=14)
-
-        ttk.Checkbutton(outer,
-                        text="danach den Weg über HAProxy anbieten",
-                        variable=self.var_link,
-                        style="Card.TCheckbutton").grid(row=next(rows), column=0,
-                                                        sticky="w")
-        ttk.Label(outer, style="Hint.TLabel", wraplength=320, justify="left",
-                  text="Sobald der Stack läuft, wird für den ersten "
-                       "veröffentlichten Port ein HAProxy-Eintrag "
-                       "vorgeschlagen.").grid(row=next(rows), column=0,
-                                              sticky="w", pady=(2, 12))
-
-        buttons = ttk.Frame(outer, style="Card.TFrame")
-        buttons.grid(row=next(rows), column=0, sticky="ew", pady=(4, 0))
-        buttons.columnconfigure(0, weight=1)
-        self.deploy_button = ttk.Button(buttons, text="Stack deployen",
-                                        style="Accent.TButton",
-                                        command=self._deploy)
-        self.deploy_button.grid(row=0, column=0, sticky="ew")
-
     def _build_list(self):
         outer = ttk.Frame(self, style="Card.TFrame", padding=(16, 16, 8, 12))
-        outer.grid(row=0, column=1, sticky="nsew", padx=(9, 18), pady=(0, 9))
+        outer.grid(row=0, column=0, sticky="nsew", padx=18, pady=(0, 9))
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(2, weight=1)
 
@@ -214,14 +69,30 @@ class PortainerTab(ttk.Frame):
         head.columnconfigure(1, weight=1)
         ttk.Label(head, text="Stacks und Ports", style="H2.TLabel").grid(
             row=0, column=0, sticky="w")
+
+        picks = ttk.Frame(head, style="Card.TFrame")
+        picks.grid(row=0, column=2, sticky="e")
+        self.var_portainer = tk.StringVar()
+        self.portainer_box = ttk.Combobox(picks, textvariable=self.var_portainer,
+                                          state="readonly", width=18,
+                                          style="Card.TCombobox")
+        self.portainer_box.grid(row=0, column=0, sticky="e", padx=(0, 6))
+        self.portainer_box.bind("<<ComboboxSelected>>",
+                                lambda _e: self._portainer_changed())
+        ui.Tooltip(self.portainer_box, "Auf welchem Portainer gearbeitet wird")
         self.var_endpoint = tk.StringVar()
-        self.endpoint_box = ttk.Combobox(head, textvariable=self.var_endpoint,
+        self.endpoint_box = ttk.Combobox(picks, textvariable=self.var_endpoint,
                                          state="readonly", width=18,
                                          style="Card.TCombobox")
-        self.endpoint_box.grid(row=0, column=2, sticky="e")
+        self.endpoint_box.grid(row=0, column=1, sticky="e", padx=(0, 6))
         self.endpoint_box.bind("<<ComboboxSelected>>",
                                lambda _e: self._endpoint_changed())
         self.endpoint_box.grid_remove()
+        ui.Tooltip(self.endpoint_box, "Welche Docker-Umgebung dieses Portainers")
+        self.new_button = ttk.Button(picks, text="＋ Neuer Stack",
+                                     style="Accent.TButton",
+                                     command=self.open_deploy)
+        self.new_button.grid(row=0, column=2, sticky="e")
 
         ttk.Label(outer, style="Hint.TLabel",
                   text="Welche Ports nach außen offen sind — und damit die, "
@@ -231,16 +102,23 @@ class PortainerTab(ttk.Frame):
 
         self.listing = ui.ScrollFrame(outer, self.app.colors)
         self.listing.grid(row=2, column=0, sticky="nsew")
+        self._fill_portainers()
+
+    def _fill_portainers(self):
+        """The picker only earns its place once there is a second one."""
+        names = [entry.get("name", "?")
+                 for entry in self.app.systems.get("portainer", [])]
+        self.portainer_box.configure(values=names)
+        self.var_portainer.set(self.app.active.get("portainer", ""))
+        self.portainer_box.grid() if len(names) > 1 else self.portainer_box.grid_remove()
+
+    def _portainer_changed(self):
+        self.app.switch_portainer(self.var_portainer.get())
 
     def apply_theme(self):
-        colors = self.app.colors
-        self.listing.apply_theme(colors)
-        self.form_scroll.apply_theme(colors)
-        self.env_text.configure(bg=colors["surface2"], fg=colors["text"],
-                                insertbackground=colors["text"],
-                                selectbackground=colors["accent_soft"],
-                                highlightbackground=colors["border"],
-                                highlightcolor=colors["accent"])
+        self.listing.apply_theme(self.app.colors)
+        if self.dialog is not None and self.dialog.winfo_exists():
+            self.dialog.apply_theme(self.app.colors)
         self.render()
 
     # -- connection --------------------------------------------------------
@@ -256,6 +134,7 @@ class PortainerTab(ttk.Frame):
             profile.get("name", ""))
         self.endpoint_id = self.settings.get("endpoint_id") or remembered
         self.endpoint_box.grid_remove()
+        self._fill_portainers()
         self.render()
 
     @property
@@ -318,15 +197,21 @@ class PortainerTab(ttk.Frame):
         self.endpoint_box.grid() if len(names) > 1 else self.endpoint_box.grid_remove()
         self.app.remember_endpoint(self.endpoint_id)
         self.app.paint_connection()
+        self._fill_portainers()
+        if self.dialog is not None and self.dialog.winfo_exists():
+            self.dialog.refresh_target()
         self.render()
         if self.last_deploy:
             self._offer_link(self.last_deploy)
             self.last_deploy = None
 
     def _endpoint_changed(self):
-        chosen = self.var_endpoint.get()
+        self.choose_endpoint(self.var_endpoint.get())
+
+    def choose_endpoint(self, name):
+        """Work on another Docker environment of this Portainer."""
         for entry in (self.state or {}).get("endpoints", []):
-            if entry["name"] == chosen and entry["id"] != self.endpoint_id:
+            if entry["name"] == name and entry["id"] != self.endpoint_id:
                 self.endpoint_id = entry["id"]
                 self.reload()
                 return
@@ -341,10 +226,10 @@ class PortainerTab(ttk.Frame):
         if not self.configured:
             self._placeholder(
                 "Kein Portainer eingerichtet",
-                self.problem or "Trage unter ⚙ die Adresse deines Portainers "
-                                "ein, dann erscheinen hier alle Stacks mit "
-                                "ihren Ports.",
-                "Verbindung bearbeiten", self.app.open_settings)
+                self.problem or "Lege unter ⚙ einen Portainer an, dann "
+                                "erscheinen hier alle Stacks mit ihren "
+                                "Ports.",
+                "Einstellungen öffnen", self.app.open_settings)
             return
         if not self.connected:
             self._placeholder("Nicht verbunden",
@@ -437,9 +322,7 @@ class PortainerTab(ttk.Frame):
             ttk.Label(ports, style="RowHint.TLabel",
                       text="kein Port nach außen veröffentlicht").grid(
                 row=0, column=0, sticky="w")
-        for index, port in enumerate(stack["ports"]):
-            self._port_row(ports, port, stack["name"]).grid(
-                row=index, column=0, sticky="ew", pady=(0, 2))
+        self._port_list(ports, stack["ports"], stack["name"], stack["name"])
         return card
 
     def _container_card(self, parent, container):
@@ -458,12 +341,36 @@ class PortainerTab(ttk.Frame):
         ports = ttk.Frame(card, style="Sub.TFrame")
         ports.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         ports.columnconfigure(0, weight=1)
-        for index, port in enumerate(container["ports"]):
-            entry = {**port, "container": container["name"],
-                     "service": container["name"]}
-            self._port_row(ports, entry, "").grid(row=index, column=0,
-                                                  sticky="ew", pady=(0, 2))
+        listed = [{**port, "container": container["name"],
+                   "service": container["name"]} for port in container["ports"]]
+        self._port_list(ports, listed, "", "container:" + container["name"])
         return card
+
+    def _port_list(self, parent, ports, stack_name, key):
+        """The published ports, with the tail folded away when there are many.
+
+        A stack that publishes a dozen ports would otherwise push everything
+        below it off the screen, and the first few are the interesting ones.
+        """
+        shown = ports if (len(ports) <= PORTS_SHOWN + 1
+                          or key in self.unfolded) else ports[:PORTS_SHOWN]
+        for index, port in enumerate(shown):
+            self._port_row(parent, port, stack_name).grid(
+                row=index, column=0, sticky="ew", pady=(0, 2))
+        hidden = len(ports) - len(shown)
+        if not hidden and key not in self.unfolded:
+            return
+        if hidden:
+            text = f"▾  {hidden} weitere Ports"
+        else:
+            text = "▴  weniger anzeigen"
+        more = ttk.Button(parent, text=text, style="Ghost.TButton",
+                          command=lambda: self._unfold(key))
+        more.grid(row=len(shown), column=0, sticky="w", pady=(2, 0))
+
+    def _unfold(self, key):
+        self.unfolded.symmetric_difference_update({key})
+        self.render()
 
     def _port_row(self, parent, port, stack_name):
         """One published port: where it listens, and what HAProxy makes of it."""
@@ -518,41 +425,59 @@ class PortainerTab(ttk.Frame):
 
     # -- actions -----------------------------------------------------------
 
-    def _auto_changed(self):
-        mode = self.var_auto.get()
-        if mode == AUTO_OFF:
-            self.auto_extra.grid_remove()
-            return
-        self.auto_extra.grid()
-        showing = mode == AUTO_INTERVAL
-        for widget in (self.interval_label, self.interval_entry,
-                       self.interval_hint):
-            widget.grid() if showing else widget.grid_remove()
-
     def busy_buttons(self):
         """What the window switches off while something is running."""
-        return self.deploy_button, self.env_button
+        buttons = [self.new_button]
+        if self.dialog is not None and self.dialog.winfo_exists():
+            buttons.extend(self.dialog.busy_buttons())
+        return tuple(buttons)
 
-    def _load_env(self):
+    def open_deploy(self):
+        """The form for a new stack, in a window of its own.
+
+        It used to be a column squeezed against the left edge of the tab, where
+        a compose path and a block of variables had about three hundred pixels
+        between them. As a dialog it gets the room those fields need, and the
+        listing gets the whole width back.
+        """
+        if self.dialog is not None and self.dialog.winfo_exists():
+            self.dialog.lift()
+            self.dialog.focus_set()
+            return
+        if not self.client:
+            self.app.open_settings()
+            return
+        if not self.connected:
+            messagebox.showinfo(
+                ui.APP_TITLE,
+                "Bitte zuerst verbinden — ohne die Umgebung aus Portainer "
+                "weiß das Programm nicht, wohin der Stack soll.")
+            return
+        self.dialog = DeployDialog(self.app, self)
+
+    def portainer_names(self):
+        return [entry.get("name", "?")
+                for entry in self.app.systems.get("portainer", [])]
+
+    def endpoint_names(self):
+        return [entry["name"] for entry in (self.state or {}).get("endpoints", [])]
+
+    def _load_env(self, values):
         """Ask the repository what this stack expects, before deploying it."""
         if self.app.busy:
             return
-        if not self.connected:
-            messagebox.showinfo(ui.APP_TITLE,
-                                "Bitte zuerst verbinden — das Repository wird "
-                                "von Portainer gelesen, nicht von hier.")
-            return
-        if not self.var_repo.get().strip():
+        if not values["repository"]:
             messagebox.showwarning(ui.APP_TITLE,
-                                   "Bitte die Adresse des Repositories eintragen.")
+                                   "Bitte die Adresse des Repositories eintragen.",
+                                   parent=self.dialog)
             return
         opts = argparse.Namespace(
-            repository=self.var_repo.get().strip(),
-            reference=self.var_ref.get().strip(),
-            compose_file=self.var_compose.get().strip(),
-            username=self.var_user.get().strip(),
-            password=self.var_token.get(),
-            skip_tls_verify=not self.var_git_tls.get(),
+            repository=values["repository"],
+            reference=values["reference"],
+            compose_file=values["compose_file"],
+            username=values["username"],
+            password=values["password"],
+            skip_tls_verify=values["skip_tls_verify"],
         )
         client = self.client
         self.app.run_async(
@@ -568,12 +493,14 @@ class PortainerTab(ttk.Frame):
         if not result["ok"]:
             self.app.write_log("Nichts gelesen", lines, False)
             return
+        if self.dialog is None or not self.dialog.winfo_exists():
+            return  # the form was closed while the repository was being read
 
         found = result["result"]
         # what is already in the box wins: those values were typed on purpose
         try:
             taken = {entry["name"] for entry in
-                     pcore.parse_env(self.env_text.get("1.0", "end"))}
+                     pcore.parse_env(self.dialog.env_value())}
         except core.UsageError:
             taken = set()
         block = self._env_block(found, taken)
@@ -582,12 +509,7 @@ class PortainerTab(ttk.Frame):
                                   "wird", "level": "info"})
             self.app.write_log("Nichts zu ergänzen", lines, True)
             return
-        if self.env_text.get("1.0", "end").strip():
-            self.env_text.insert("end", "\n")
-        self.env_text.insert("end", block)
-        self.env_text.see("end")  # what was just added is what one wants to see
-        added = sum(1 for line in block.splitlines()
-                    if line and not line.startswith("#"))
+        added = self.dialog.add_env(block)
         lines.append({"text": f"+ {added} Zeilen ins Feld übernommen",
                       "level": "info"})
         self.app.write_log("Aus dem Repository", lines, True)
@@ -623,57 +545,70 @@ class PortainerTab(ttk.Frame):
                          for entry in missing)
         return "\n".join(parts) + "\n" if parts else ""
 
-    def _deploy(self):
+    def _deploy(self, values):
+        """Create the stack the dialog describes, on the chosen environment."""
         if self.app.busy:
             return
         if not self.connected:
             messagebox.showinfo(
                 ui.APP_TITLE,
                 "Bitte zuerst verbinden — ohne die Umgebung aus Portainer "
-                "weiß das Programm nicht, wohin der Stack soll.")
+                "weiß das Programm nicht, wohin der Stack soll.",
+                parent=self.dialog)
             return
-        name = self.var_name.get().strip()
+        name = values["name"]
+        parent = self.dialog
         if not name:
-            messagebox.showwarning(ui.APP_TITLE, "Bitte einen Namen vergeben.")
+            messagebox.showwarning(ui.APP_TITLE, "Bitte einen Namen vergeben.",
+                                   parent=parent)
             return
-        if not self.var_repo.get().strip():
+        if not values["repository"]:
             messagebox.showwarning(ui.APP_TITLE,
-                                   "Bitte die Adresse des Repositories eintragen.")
+                                   "Bitte die Adresse des Repositories eintragen.",
+                                   parent=parent)
             return
         if pcore.stack_name_taken(self.state, name):
             messagebox.showwarning(
                 ui.APP_TITLE,
-                f"Es gibt auf dieser Umgebung schon einen Stack namens "
-                f"'{name}'.\n\nZum Aktualisieren „Neu deployen“ in der Liste "
-                f"rechts benutzen.")
+                f"Es gibt auf {self.target_text()} schon einen Stack namens "
+                f"„{name}“.\n\nZum Aktualisieren „Neu deployen“ in der Liste "
+                f"benutzen.", parent=parent)
             return
         try:
-            variables = pcore.parse_env(self.env_text.get("1.0", "end"))
+            variables = pcore.parse_env(values["env_text"])
         except core.UsageError as exc:
-            messagebox.showwarning("Umgebungsvariablen", str(exc))
+            messagebox.showwarning("Umgebungsvariablen", str(exc), parent=parent)
             return
 
-        mode = {AUTO_OFF: "off", AUTO_INTERVAL: "interval",
-                AUTO_WEBHOOK: "webhook"}[self.var_auto.get()]
-        auto = pcore.auto_update_settings(mode, self.var_interval.get(),
-                                          self.var_force_pull.get())
+        auto = pcore.auto_update_settings(values["auto_mode"],
+                                          values["interval"],
+                                          values["force_pull"])
         opts = argparse.Namespace(
             endpoint_id=self.endpoint_id,
             name=name,
-            repository=self.var_repo.get().strip(),
-            reference=self.var_ref.get().strip(),
-            compose_file=self.var_compose.get().strip(),
+            repository=values["repository"],
+            reference=values["reference"],
+            compose_file=values["compose_file"],
             env_text=pcore.env_text(variables),
-            username=self.var_user.get().strip(),
-            password=self.var_token.get(),
+            username=values["username"],
+            password=values["password"],
             auto_update=auto,
-            skip_tls_verify=not self.var_git_tls.get(),
+            skip_tls_verify=values["skip_tls_verify"],
         )
+        self.link_after_deploy = values["link"]
         client = self.client
         self.app.run_async(
             lambda report: pcore.run_step(pcore.deploy, client, opts,
                                           log=ui.LiveLog(report)),
             self._deployed, activity=f"deploye {name} …")
+
+    def target_text(self):
+        """Where a deploy would land, in words -- Portainer and environment."""
+        where = (self.state or {}).get("endpoint", {}).get("name", "")
+        portainer = self.app.active.get("portainer", "")
+        if portainer and where:
+            return f"{portainer} · {where}"
+        return portainer or where or "diesem Portainer"
 
     def _deployed(self, result):
         self.app.set_busy(False)
@@ -694,13 +629,10 @@ class PortainerTab(ttk.Frame):
         name = result["result"]["name"]
         # Only after the containers are up does Docker know their ports, so
         # the offer to publish one has to wait for the next reading.
-        self.last_deploy = name if self.var_link.get() else None
-        self.var_name.set("")
-        self.var_repo.set("")
-        self.var_ref.set("")
-        self.var_user.set("")
-        self.var_token.set("")
-        self.env_text.delete("1.0", "end")
+        self.last_deploy = name if self.link_after_deploy else None
+        if self.dialog is not None and self.dialog.winfo_exists():
+            self.dialog.destroy()
+        self.dialog = None
         self.after(1200, self.reload)
 
     def _offer_link(self, stack_name):
@@ -765,13 +697,311 @@ class PortainerTab(ttk.Frame):
             messagebox.showinfo(
                 ui.APP_TITLE,
                 "Es ist nicht bekannt, unter welcher IP der Docker-Host zu "
-                "erreichen ist. Trage sie unter ⚙ im Abschnitt Portainer ein.")
+                "erreichen ist. Trage sie unter ⚙ beim Portainer ein.")
             return
         suggestion = port.get("service") or stack_name or ""
         dialog = LinkDialog(self.app, self.app.colors, suggestion, target, port)
         self.app.wait_window(dialog)
         if dialog.result:
             self.app.provision_host(dialog.result)
+
+
+class DeployDialog(tk.Toplevel):
+    """Everything a new stack needs, in two columns and with room to type.
+
+    The tab does the talking to Portainer; this window only collects what to
+    say. It stays open while the repository is read, so the variables it finds
+    land in the field the user is looking at.
+    """
+
+    def __init__(self, app, tab):
+        super().__init__(app)
+        self.app = app
+        self.tab = tab
+        colors = app.colors
+        self.title("Neuer Stack")
+        self.transient(app)
+        self.configure(bg=colors["bg"])
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.scroll = ui.ScrollFrame(self, colors)
+        self.scroll.grid(row=0, column=0, sticky="nsew")
+        self.scroll.body.columnconfigure(0, weight=1)
+
+        body = ttk.Frame(self.scroll.body, style="Card.TFrame", padding=22)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1, uniform="half")
+        body.columnconfigure(1, weight=1, uniform="half")
+
+        self.var_name = tk.StringVar()
+        self.var_repo = tk.StringVar()
+        self.var_ref = tk.StringVar()
+        self.var_compose = tk.StringVar(value=pcore.DEFAULT_COMPOSE_FILE)
+        self.var_user = tk.StringVar()
+        self.var_token = tk.StringVar()
+        self.var_auto = tk.StringVar(value=AUTO_OFF)
+        self.var_interval = tk.StringVar(value=pcore.DEFAULT_INTERVAL)
+        self.var_force_pull = tk.BooleanVar(value=True)
+        self.var_git_tls = tk.BooleanVar(value=True)
+        self.var_link = tk.BooleanVar(value=True)
+        self.var_portainer = tk.StringVar()
+        self.var_endpoint = tk.StringVar()
+
+        head = ttk.Frame(body, style="Card.TFrame")
+        head.grid(row=0, column=0, columnspan=2, sticky="ew")
+        head.columnconfigure(0, weight=1)
+        ttk.Label(head, text="Neuer Stack", style="H2.TLabel").grid(
+            row=0, column=0, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=700, justify="left",
+                  text="Holt eine docker-compose.yml aus einem GitHub- oder "
+                       "GitLab-Repository und lässt Portainer sie "
+                       "ausrollen.").grid(row=1, column=0, columnspan=2,
+                                          sticky="w", pady=(3, 14))
+        self._build_target(body)
+
+        left = ttk.Frame(body, style="Card.TFrame")
+        left.grid(row=3, column=0, sticky="nsew", padx=(0, 12))
+        left.columnconfigure(0, weight=1)
+        right = ttk.Frame(body, style="Card.TFrame")
+        right.grid(row=3, column=1, sticky="nsew", padx=(12, 0))
+        right.columnconfigure(0, weight=1)
+        self._build_left(left)
+        self._build_right(right)
+
+        self.footer = footer = ttk.Frame(self, style="Card.TFrame",
+                                         padding=(22, 12, 22, 16))
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        self.note = ttk.Label(footer, style="Hint.TLabel", text="")
+        self.note.grid(row=0, column=0, sticky="w")
+        ttk.Button(footer, text="Abbrechen", style="Ghost.TButton",
+                   command=self.destroy).grid(row=0, column=1, padx=(0, 8))
+        self.deploy_button = ttk.Button(footer, text="Stack deployen",
+                                        style="Accent.TButton",
+                                        command=self._go)
+        self.deploy_button.grid(row=0, column=2)
+
+        self.apply_theme(colors)
+        self.refresh_target()
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        ui._fit_dialog(self, app, self.scroll, self.footer, floor=820)
+
+    # -- the three blocks --------------------------------------------------
+
+    def _build_target(self, body):
+        """Where this stack is going: which Portainer, which environment.
+
+        Both are pickers rather than a sentence: with more than one Docker host
+        around, the last thing anybody wants is to find out afterwards that the
+        stack went to the other one.
+        """
+        card = tk.Frame(body, bg=self.app.colors["surface2"], padx=14, pady=10)
+        card.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        card.columnconfigure(3, weight=1)
+        ttk.Label(card, text="Deployen auf", style="FieldLabel.TLabel").grid(
+            row=0, column=0, sticky="w", padx=(0, 10))
+        self.portainer_box = ttk.Combobox(card, textvariable=self.var_portainer,
+                                          state="readonly", width=22,
+                                          style="Card.TCombobox")
+        self.portainer_box.grid(row=0, column=1, sticky="w", padx=(0, 8))
+        self.portainer_box.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: self.app.switch_portainer(self.var_portainer.get()))
+        self.endpoint_box = ttk.Combobox(card, textvariable=self.var_endpoint,
+                                         state="readonly", width=22,
+                                         style="Card.TCombobox")
+        self.endpoint_box.grid(row=0, column=2, sticky="w")
+        self.endpoint_box.bind("<<ComboboxSelected>>",
+                               lambda _e: self.tab.choose_endpoint(
+                                   self.var_endpoint.get()))
+
+    def _build_left(self, outer):
+        rows = itertools.count()
+        for label, var, hint in (
+                ("Name des Stacks", self.var_name,
+                 "Kleinbuchstaben, wie bei Portainer — z.B. nextcloud"),
+                ("Repository", self.var_repo,
+                 "https://github.com/… oder https://gitlab.com/…"),
+                ("Branch oder Tag", self.var_ref,
+                 "leer = der Standardbranch des Repositories"),
+                ("Datei im Repository", self.var_compose, "")):
+            ttk.Label(outer, text=label, style="FieldLabel.TLabel").grid(
+                row=next(rows), column=0, sticky="w", pady=(8, 3))
+            ttk.Entry(outer, textvariable=var, style="Card.TEntry").grid(
+                row=next(rows), column=0, sticky="ew")
+            if hint:
+                ttk.Label(outer, text=hint, style="Hint.TLabel").grid(
+                    row=next(rows), column=0, sticky="w", pady=(2, 0))
+
+        head = ttk.Frame(outer, style="Card.TFrame")
+        head.grid(row=next(rows), column=0, sticky="ew", pady=(14, 3))
+        head.columnconfigure(0, weight=1)
+        ttk.Label(head, text="Umgebungsvariablen",
+                  style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w")
+        self.env_button = ttk.Button(head, text="aus dem Repository",
+                                     style="Del.TButton",
+                                     command=self._read_repository)
+        self.env_button.grid(row=0, column=1, sticky="e")
+        ui.Tooltip(self.env_button,
+                   "Liest die Compose-Datei und eine .env daneben und trägt "
+                   "ein, was der Stack braucht — dann sind nur noch die Werte "
+                   "anzupassen")
+        self.env_text = tk.Text(outer, height=14, wrap="none", bd=0,
+                                highlightthickness=1, padx=8, pady=6,
+                                font=self.app.font_mono)
+        env_row = next(rows)
+        self.env_text.grid(row=env_row, column=0, sticky="nsew")
+        outer.rowconfigure(env_row, weight=1)  # the field that may grow
+        ttk.Label(outer, style="Hint.TLabel", wraplength=360, justify="left",
+                  text="Eine Zeile je Variable, KEY=wert — genau wie im "
+                       "Textfeld von Portainer.").grid(row=next(rows), column=0,
+                                                       sticky="w", pady=(2, 0))
+
+    def _build_right(self, outer):
+        rows = itertools.count()
+        ttk.Label(outer, text="Privates Repository", style="Group.TLabel").grid(
+            row=next(rows), column=0, sticky="w", pady=(8, 0))
+        ttk.Label(outer, style="Hint.TLabel", wraplength=360, justify="left",
+                  text="Nur ausfüllen, wenn das Repository nicht öffentlich "
+                       "ist. Die Angaben gehen an Portainer und werden hier "
+                       "nicht gespeichert.").grid(row=next(rows), column=0,
+                                                  sticky="w", pady=(3, 6))
+        for label, var, secret in (("Benutzer", self.var_user, False),
+                                   ("Passwort oder Token", self.var_token, True)):
+            ttk.Label(outer, text=label, style="FieldLabel.TLabel").grid(
+                row=next(rows), column=0, sticky="w", pady=(6, 3))
+            ttk.Entry(outer, textvariable=var, style="Card.TEntry",
+                      show="•" if secret else "").grid(row=next(rows), column=0,
+                                                       sticky="ew")
+        ttk.Checkbutton(outer, text="TLS-Zertifikat des Git-Servers prüfen",
+                        variable=self.var_git_tls,
+                        style="Card.TCheckbutton").grid(row=next(rows), column=0,
+                                                        sticky="w", pady=(8, 0))
+
+        ttk.Separator(outer, orient="horizontal").grid(
+            row=next(rows), column=0, sticky="ew", pady=16)
+
+        ttk.Label(outer, text="Automatisch aktualisieren",
+                  style="Group.TLabel").grid(row=next(rows), column=0, sticky="w")
+        ttk.Label(outer, style="Hint.TLabel", wraplength=360, justify="left",
+                  text="Portainer sieht selbst im Repository nach und rollt "
+                       "Änderungen aus.").grid(row=next(rows), column=0,
+                                               sticky="w", pady=(3, 6))
+        self.auto_box = ttk.Combobox(outer, textvariable=self.var_auto,
+                                     values=list(AUTO_MODES), state="readonly",
+                                     style="Card.TCombobox")
+        self.auto_box.grid(row=next(rows), column=0, sticky="ew")
+        self.auto_box.bind("<<ComboboxSelected>>", lambda _e: self._auto_changed())
+
+        self.auto_extra = ttk.Frame(outer, style="Card.TFrame")
+        self.auto_extra.grid(row=next(rows), column=0, sticky="ew")
+        self.auto_extra.columnconfigure(0, weight=1)
+        self.interval_label = ttk.Label(self.auto_extra, text="Abstand",
+                                        style="FieldLabel.TLabel")
+        self.interval_label.grid(row=0, column=0, sticky="w", pady=(8, 3))
+        self.interval_entry = ttk.Entry(self.auto_extra,
+                                        textvariable=self.var_interval,
+                                        style="Card.TEntry")
+        self.interval_entry.grid(row=1, column=0, sticky="ew")
+        self.interval_hint = ttk.Label(self.auto_extra, style="Hint.TLabel",
+                                       text="z.B. 5m, 30m oder 24h")
+        self.interval_hint.grid(row=2, column=0, sticky="w", pady=(2, 0))
+        ttk.Checkbutton(self.auto_extra,
+                        text="dabei die Images neu herunterladen",
+                        variable=self.var_force_pull,
+                        style="Card.TCheckbutton").grid(row=3, column=0,
+                                                        sticky="w", pady=(8, 0))
+        self._auto_changed()
+
+        ttk.Separator(outer, orient="horizontal").grid(
+            row=next(rows), column=0, sticky="ew", pady=16)
+
+        ttk.Checkbutton(outer, text="danach den Weg über HAProxy anbieten",
+                        variable=self.var_link,
+                        style="Card.TCheckbutton").grid(row=next(rows), column=0,
+                                                        sticky="w")
+        ttk.Label(outer, style="Hint.TLabel", wraplength=360, justify="left",
+                  text="Sobald der Stack läuft, wird für den ersten "
+                       "veröffentlichten Port ein HAProxy-Eintrag "
+                       "vorgeschlagen.").grid(row=next(rows), column=0,
+                                              sticky="w", pady=(2, 0))
+
+    def _auto_changed(self):
+        mode = self.var_auto.get()
+        if mode == AUTO_OFF:
+            self.auto_extra.grid_remove()
+            return
+        self.auto_extra.grid()
+        showing = mode == AUTO_INTERVAL
+        for widget in (self.interval_label, self.interval_entry,
+                       self.interval_hint):
+            widget.grid() if showing else widget.grid_remove()
+
+    # -- what the tab asks for ---------------------------------------------
+
+    def refresh_target(self):
+        """Say again where this would go -- after a switch, or a reload."""
+        names = self.tab.portainer_names()
+        self.portainer_box.configure(values=names,
+                                     state="readonly" if len(names) > 1
+                                     else "disabled")
+        self.var_portainer.set(self.app.active.get("portainer", ""))
+        endpoints = self.tab.endpoint_names()
+        self.endpoint_box.configure(values=endpoints,
+                                    state="readonly" if len(endpoints) > 1
+                                    else "disabled")
+        self.var_endpoint.set((self.tab.state or {}).get("endpoint", {}).get(
+            "name", ""))
+
+    def busy_buttons(self):
+        return self.deploy_button, self.env_button
+
+    def env_value(self):
+        return self.env_text.get("1.0", "end")
+
+    def add_env(self, block):
+        """Append what the repository had to say, and say how much that was."""
+        if self.env_text.get("1.0", "end").strip():
+            self.env_text.insert("end", "\n")
+        self.env_text.insert("end", block)
+        self.env_text.see("end")  # what was just added is what one wants to see
+        return sum(1 for line in block.splitlines()
+                   if line and not line.startswith("#"))
+
+    def apply_theme(self, colors):
+        self.configure(bg=colors["bg"])
+        self.scroll.apply_theme(colors)
+        self.env_text.configure(bg=colors["surface2"], fg=colors["text"],
+                                insertbackground=colors["text"],
+                                selectbackground=colors["accent_soft"],
+                                highlightbackground=colors["border"],
+                                highlightcolor=colors["accent"])
+
+    def values(self):
+        mode = {AUTO_OFF: "off", AUTO_INTERVAL: "interval",
+                AUTO_WEBHOOK: "webhook"}[self.var_auto.get()]
+        return {
+            "name": self.var_name.get().strip(),
+            "repository": self.var_repo.get().strip(),
+            "reference": self.var_ref.get().strip(),
+            "compose_file": self.var_compose.get().strip(),
+            "username": self.var_user.get().strip(),
+            "password": self.var_token.get(),
+            "skip_tls_verify": not self.var_git_tls.get(),
+            "env_text": self.env_value(),
+            "auto_mode": mode,
+            "interval": self.var_interval.get(),
+            "force_pull": self.var_force_pull.get(),
+            "link": self.var_link.get(),
+        }
+
+    def _read_repository(self):
+        self.tab._load_env(self.values())
+
+    def _go(self):
+        self.tab._deploy(self.values())
 
 
 class RedeployDialog(tk.Toplevel):

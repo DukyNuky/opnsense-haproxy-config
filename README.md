@@ -80,7 +80,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-1.4.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-1.4.1.zip)**
+**[opnsense-haproxy-2.0.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.0.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -159,11 +159,15 @@ kostet nichts, du hast dann nur zwei Schlüssel und kannst den alten löschen.
 
 ## Schritt 5: Verbindung eintragen
 
-Zurück im Programm-Fenster, das seit Schritt 3 wartet. Es füllt sich so:
+Zurück im Programm-Fenster, das seit Schritt 3 wartet. Es zeigt die
+**Einstellungen** mit drei Abschnitten untereinander — **OPNsense**, **AdGuard
+Home**, **Portainer**. Jeder führt seine eigene Liste, und jeder hat ein
+**＋ Hinzufügen**. Für den Anfang genügt die erste OPNsense: **＋ Hinzufügen**
+im obersten Abschnitt, dann füllt sich das Fenster so:
 
 | Feld | was hinein gehört |
 | --- | --- |
-| **Name der Verbindung** | Ein Name für dich, z.B. `Zuhause`. |
+| **Name** | Ein Name für dich, z.B. `Zuhause`. |
 | **Adresse** | Die Adresse deiner OPNsense-Oberfläche, z.B. `https://192.168.1.1` oder `https://opnsense.fritz.box`. |
 | **API-Key** | Die Zeile `key=…` aus `apikey.txt` — **ohne** das `key=` davor. |
 | **API-Secret** | Entsprechend die Zeile `secret=…`. |
@@ -173,15 +177,20 @@ Das Häkchen **TLS-Zertifikat der OPNsense prüfen** bleibt aus, solange deine
 OPNsense ein selbstsigniertes Zertifikat hat (der Normalfall im Heimnetz).
 Sonst schlägt die Verbindung mit einem Zertifikatsfehler fehl.
 
-Darunter kannst du **AdGuard Home** dazunehmen — Haken setzen, Adresse
-(`https://adguard.example.de`, oder mit Port: `http://192.168.1.2:3000`),
-Benutzer und Passwort. Dann legt das Programm zu jedem neuen Host gleich den
-DNS-Eintrag mit an. Ohne Haken bleibt DNS unangetastet; du kannst es jederzeit
-nachtragen.
+Ganz unten steht **Arbeitet zusammen mit** — die Vorauswahl, welches AdGuard
+und welcher Portainer zu dieser Firewall gehören. Beim ersten Mal ist dort
+nichts zu wählen; das kommt gleich.
 
-**Speichern & verbinden** — das Programm holt sich, was auf der OPNsense schon
-da ist. Oben rechts wechselt die Anzeige von „nicht verbunden" auf den Namen
-deiner Verbindung, und rechts füllt sich die Liste der bestehenden Hosts.
+**Speichern**, und wenn du magst gleich weiter im Abschnitt **AdGuard Home**
+mit **＋ Hinzufügen**: Name, Adresse (`https://adguard.example.de`, oder mit
+Port: `http://192.168.1.2:3000`), Benutzer und Passwort. Dann legt das Programm
+zu jedem neuen Host auf Wunsch den DNS-Eintrag mit an. Ohne AdGuard bleibt DNS
+unangetastet; nachtragen geht jederzeit.
+
+**Fertig** schließt die Einstellungen. Ein Druck auf **Verbinden** oben rechts
+holt, was auf der OPNsense schon da ist: die Anzeige wechselt von „nicht
+verbunden" auf den Namen deiner Firewall, und rechts füllt sich die Liste der
+bestehenden Hosts.
 
 Deine Eingaben landen in einer Datei in deinem Benutzerprofil
 (`~/.config/opnsense-haproxy/config.json`, unter Windows entsprechend), die nur
@@ -237,21 +246,24 @@ Die Kopfzeile und das Protokoll unten gehören beiden: der Umschalter für die
 Verbindung, die Statusanzeige und **Verbinden** meinen immer den Tab, der
 gerade vorne ist.
 
-**Oben rechts** liegen die Knöpfe: der Umschalter für die Verbindung, das
-Zahnrad ⚙ zum Bearbeiten, **Verbinden**, **⇩ Update**, **⤓ Installieren** und
-der Mond/Sonne-Knopf für hell oder dunkel. Was ein Knopf tut, verrät ein
+**Oben rechts** liegen die Knöpfe: der Umschalter für die OPNsense, das
+Zahnrad ⚙ für die Einstellungen, **Verbinden**, **⇩ Update**, **⤓ Installieren**
+und der Mond/Sonne-Knopf für hell oder dunkel. Was ein Knopf tut, verrät ein
 Hinweis, wenn die Maus einen Moment darauf liegt.
 
 **Von allein verbindet sich nichts.** Das Fenster geht auf und wartet; erst
 **Verbinden** holt die Daten von der OPNsense. Danach heißt derselbe Knopf
-**Neu laden**. Beim Wechsel der Verbindung und nach dem Speichern im
-Zahnrad-Dialog wird automatisch gelesen — das ist ja schon die Ansage, dass es
+**Neu laden**. Beim Wechsel der Firewall und nach dem Schließen der
+Einstellungen wird automatisch gelesen — das ist ja schon die Ansage, dass es
 losgehen soll.
 
-**Links** das Formular für den neuen Host, darunter **Erweiterte Optionen** für
-alles, was man selten braucht (Backend-Zertifikat prüfen, X-Forwarded-For,
-Health Monitor, Backend-Modus, Namens-Präfix, „nur speichern, nicht neu
-laden").
+**Links** das Formular für den neuen Host. Darin steht auch **DNS-Eintrag in**:
+Dort wählst du, welches AdGuard den Eintrag bekommt — oder *kein
+DNS-Eintrag*, dann bleibt DNS unangetastet. Die Wahl bleibt an der Firewall
+hängen, beim nächsten Start ist wieder dasselbe Paar da. Darunter **Erweiterte
+Optionen** für alles, was man selten braucht (Backend-Zertifikat prüfen,
+X-Forwarded-For, Health Monitor, Backend-Modus, Namens-Präfix, „nur speichern,
+nicht neu laden").
 
 **Rechts** die bestehenden Hosts, sortiert nach Public Service. Jede Zeile
 zeigt, was AdGuard zu diesem Namen weiß:
@@ -285,15 +297,17 @@ Oben sitzen zwei große Tabs. **HAProxy** ist alles, was oben beschrieben ist.
 **Portainer** ist die andere Hälfte: die Docker-Container, die hinter HAProxy
 stehen.
 
-Beide gehören zur selben Verbindung. Ein Standort hat eine OPNsense und einen
-Portainer, also steht beides im selben Profil — der Umschalter oben rechts
-schaltet beide zugleich um, und **Verbinden** gilt immer für den Tab, der
-gerade vorne ist.
+Ein Standort hat meist eine OPNsense und einen Portainer, also merkt sich jede
+Firewall, welcher Portainer zu ihr gehört: der Umschalter oben rechts bringt
+beide Hälften an denselben Ort. Zwingend ist die Zuordnung nicht — im Tab
+selbst steht ein eigener Umschalter, sobald mehr als ein Portainer eingerichtet
+ist. **Verbinden** gilt immer für den Tab, der gerade vorne ist.
 
 ### Einrichten
 
-Im Zahnrad ⚙ gibt es den Abschnitt **Portainer**:
+Im Zahnrad ⚙ im Abschnitt **Portainer** auf **＋ Hinzufügen**:
 
+* **Name** — wie du ihn nennen willst, z.B. `Docker Zuhause`.
 * **Adresse** deines Portainers, z.B. `https://portainer.example.de:9443`.
 * **Anmeldung** — entweder ein **Zugriffstoken** (in Portainer oben rechts auf
   den Benutzer, dann *My account → Access tokens*) oder **Benutzer und
@@ -304,9 +318,11 @@ Im Zahnrad ⚙ gibt es den Abschnitt **Portainer**:
   stimmt, solange Portainer auf demselben Host läuft wie die Container;
   ansonsten hier die richtige IP eintragen.
 
-Läuft Portainer über mehrere Umgebungen (*Environments*), erscheint rechts oben
-in der Liste ein Auswahlfeld. Welche du zuletzt benutzt hast, merkt sich das
-Programm.
+Damit der Tab weiß, welchen Portainer er zeigen soll, wählst du ihn bei der
+OPNsense unter **Arbeitet zusammen mit** — oder oben im Tab, wenn mehrere
+eingerichtet sind. Läuft Portainer über mehrere Umgebungen (*Environments*),
+steht daneben noch ein zweites Auswahlfeld. Welche du zuletzt benutzt hast,
+merkt sich das Programm.
 
 ### Was die Liste zeigt
 
@@ -328,6 +344,11 @@ Zahl, die du für HAProxy brauchst: die linke.
 | **nur lokal** | Der Port ist an `127.0.0.1` gebunden. Von einem anderen Rechner — also auch von HAProxy — ist er nicht erreichbar. |
 | **HAProxy ✓** | Es gibt schon eine Rule, deren Real Server auf genau diese IP und diesen Port zeigt. |
 | **→ HAProxy** | Noch keine. Der Knopf legt sie an. |
+
+Veröffentlicht ein Stack **mehr als fünf Ports**, zeigt die Karte die ersten
+vier und darunter **▾ n weitere Ports**. Ein Klick klappt sie auf, einer klappt
+sie wieder zu. Bei genau fünf bleibt alles stehen — eine einzelne Zeile zu
+verstecken hilft niemandem.
 
 Container, die ohne Stack gestartet wurden, stehen darunter als eigene Gruppe —
 sie belegen dieselben Ports auf demselben Host, und ein Port, der schon vergeben
@@ -366,7 +387,13 @@ dann wird die Compose-Datei benutzt, die Portainer für sie aufbewahrt.
 
 ### Einen neuen Stack anlegen
 
-Links das Formular:
+**＋ Neuer Stack** oben rechts öffnet ein eigenes Fenster — breit genug für
+Repository-Pfade und einen ordentlichen Block Umgebungsvariablen. Ganz oben
+steht **Deployen auf**: welcher Portainer und welche Umgebung. Beides lässt
+sich hier noch ändern, damit ein Stack nicht auf dem falschen Docker-Host
+landet.
+
+Darunter links die Angaben zum Repository, rechts das Seltenere:
 
 * **Name** — Kleinbuchstaben, wie bei Portainer. Er wird zum Compose-Projekt.
 * **Repository** — die HTTPS-Adresse bei GitHub oder GitLab. Für Portainer ist
@@ -430,15 +457,30 @@ Compose sie beim Deploy ohnehin selbst aus dem geklonten Verzeichnis. Was hier
 im Feld steht, setzt Portainer zusätzlich — praktisch zum Anpassen, aber nicht
 der einzige Weg, wie die Werte wirken.
 
-## Mehrere OPNsense
+## Mehrere Systeme
 
-Der Umschalter oben rechts ist auch bei einer einzigen Verbindung da, denn über
-ihn legst du weitere an (**＋ neue Verbindung …**) und bearbeitest oder löschst
-die aktuelle (**⚙ diese bearbeiten …**).
+Seit 2.0 führen **OPNsense, AdGuard und Portainer je eine eigene Liste**. Das
+Zahnrad ⚙ zeigt alle drei untereinander, mit **＋ Hinzufügen** und
+**Bearbeiten** je Eintrag. Der Umschalter oben rechts wechselt die OPNsense; die
+letzte Zeile in seiner Liste, **⚙ Einstellungen …**, führt in dieselbe
+Übersicht.
 
-Jede Verbindung hat ihre eigene Adresse, ihren eigenen Schlüssel, ihre eigene
-HAProxy-IP und — falls vorhanden — ihr eigenes AdGuard. Standort A mit DNS,
-Standort B ohne: kein Problem.
+Warum getrennt: ein AdGuard bedient oft mehrere Standorte, und ein Docker-Host
+gehört nicht zwingend zu genau einer Firewall. Vorher musste beides in jedem
+Profil noch einmal stehen — dieselben Zugangsdaten an zwei Stellen, die man
+beide pflegen musste.
+
+Jede OPNsense sagt unter **Arbeitet zusammen mit**, welches AdGuard und welchen
+Portainer sie gewöhnlich benutzt. Das ist die Vorauswahl, mehr nicht:
+
+* Beim Anlegen eines Hosts steht im Formular **DNS-Eintrag in** — dort geht
+  auch ein anderes AdGuard oder gar keins, für genau diesen Host.
+* Im Fenster **＋ Neuer Stack** steht ganz oben **Deployen auf** — dort wählst
+  du Portainer und Umgebung.
+
+Was du dort wählst, merkt sich das Programm bei der Firewall: beim nächsten
+Start ist wieder das Paar da, das zuletzt zusammen benutzt wurde. Standort A
+mit DNS, Standort B ohne, beide am selben AdGuard: alles möglich.
 
 ## Updates
 
@@ -663,44 +705,59 @@ verweist auf `git pull` — sonst wären eigene Änderungen weg.
 ## Konfigurationsdatei
 
 `~/.config/opnsense-haproxy/config.json` (Modus 600), siehe
-[config.example.json](config.example.json). Sie hält eine Liste von
-Verbindungen:
+[config.example.json](config.example.json). Seit 2.0 stehen die drei Sorten
+Systeme in drei Listen nebeneinander, und eine OPNsense nennt die beiden
+anderen beim Namen:
 
 ```json
 {
-  "active": "Zuhause",
-  "profiles": [
+  "active": { "opnsense": "Zuhause", "adguard": "Zuhause",
+              "portainer": "Docker Zuhause" },
+  "opnsense": [
     { "name": "Zuhause", "url": "…", "key": "…", "secret": "…",
-      "haproxy_ip": "192.168.1.1",
-      "verify_ssl": false,
-      "adguard": { "url": "https://adguard.example.de",
-                   "username": "admin", "password": "…",
-                   "target": "", "verify_ssl": false },
-      "portainer": { "url": "https://portainer.example.de:9443",
-                     "api_key": "ptr_…",
-                     "host_ip": "192.168.1.20", "verify_ssl": false } },
-    { "name": "Zweitstandort", "url": "…", "key": "…", "secret": "…" }
+      "haproxy_ip": "192.168.1.1", "verify_ssl": false,
+      "adguard": "Zuhause", "portainer": "Docker Zuhause" },
+    { "name": "Zweitstandort", "url": "…", "key": "…", "secret": "…",
+      "adguard": "Zuhause" }
+  ],
+  "adguard": [
+    { "name": "Zuhause", "url": "https://adguard.example.de",
+      "username": "admin", "password": "…", "target": "", "verify_ssl": false }
+  ],
+  "portainer": [
+    { "name": "Docker Zuhause", "url": "https://portainer.example.de:9443",
+      "api_key": "ptr_…", "host_ip": "192.168.1.20", "verify_ssl": false }
   ]
 }
 ```
 
-`haproxy_ip` ist das Ziel aller DNS-Einträge; ein `target` im
-`adguard`-Abschnitt sticht es für diese Verbindung aus, `--dns-target` für einen
-einzelnen Aufruf. Bei der AdGuard-`url` genügt die Adresse der Oberfläche — die
-kopierte Browser-Zeile (`https://adguard.example.de/#dns_rewrites`) geht
-genauso, der API-Pfad wird selbst angehängt. Fehlt das Schema, wird `https://`
-angenommen.
+Das `adguard` und das `portainer` einer OPNsense sind **Namen**, keine
+Abschnitte: dasselbe AdGuard darf bei beliebig vielen Firewalls stehen, ohne
+zweimal in der Datei zu stehen. Wer nichts nennt, arbeitet ohne — und was
+tatsächlich benutzt wird, entscheidest du beim Anlegen ohnehin neu.
 
-Im `portainer`-Abschnitt gilt entweder `api_key` **oder** `username` und
-`password` — beim Speichern über das Zahnrad wird der jeweils andere Weg
-geleert, damit später nicht ein vergessener Rest entscheidet, womit angemeldet
-wird. `host_ip` ist die Adresse, an die HAProxy Anfragen an Container schickt;
-ohne Angabe wird der Rechner aus der `url` genommen. Zugangsdaten für private
-Git-Repositories stehen hier bewusst **nicht** — die werden beim Deploy
-abgefragt und gehen direkt an Portainer.
+`haproxy_ip` ist das Ziel aller DNS-Einträge; ein `target` beim AdGuard sticht
+es aus, `--dns-target` für einen einzelnen Aufruf. Bei der AdGuard-`url` genügt
+die Adresse der Oberfläche — die kopierte Browser-Zeile
+(`https://adguard.example.de/#dns_rewrites`) geht genauso, der API-Pfad wird
+selbst angehängt. Fehlt das Schema, wird `https://` angenommen.
 
-Eine ältere Datei mit nur einer Verbindung ganz oben funktioniert unverändert
-weiter — sie erscheint als Verbindung „Standard".
+Beim Portainer gilt entweder `api_key` **oder** `username` und `password` —
+beim Speichern wird der jeweils andere Weg geleert, damit später nicht ein
+vergessener Rest entscheidet, womit angemeldet wird. `host_ip` ist die Adresse,
+an die HAProxy Anfragen an Container schickt; ohne Angabe wird der Rechner aus
+der `url` genommen. Zugangsdaten für private Git-Repositories stehen hier
+bewusst **nicht** — die werden beim Deploy abgefragt und gehen direkt an
+Portainer.
+
+**Ältere Dateien werden beim Lesen umgesetzt**, von Hand ist nichts zu tun. Aus
+jedem Profil wird eine OPNsense, aus seinem AdGuard- und Portainer-Abschnitt je
+ein eigener Eintrag, benannt nach dem Profil. Zwei Profile, die auf dasselbe
+AdGuard zeigten, teilen sich hinterher einen Eintrag — es war immer eine
+Maschine. Geschrieben wird die neue Form erst, wenn du das nächste Mal etwas in
+den Einstellungen speicherst; bis dahin bleibt die Datei, wie sie ist. Auch
+eine Datei mit nur einer Verbindung ganz oben funktioniert weiter — sie
+erscheint als OPNsense „Standard".
 
 ## Basis-Domains
 

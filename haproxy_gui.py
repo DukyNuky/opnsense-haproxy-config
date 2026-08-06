@@ -35,8 +35,8 @@ import opnsense_haproxy as core
 APP_TITLE = "HAProxy · OPNsense"
 AUTHOR_URL = "https://github.com/DukyNuky/opnsense-haproxy-config"
 NO_BASE = "— keine —"
-NEW_PROFILE = "＋ neue Verbindung …"
-EDIT_PROFILE = "⚙ diese bearbeiten …"
+NO_DNS = "— kein DNS-Eintrag —"
+EDIT_PROFILE = "⚙ Einstellungen …"
 TOKEN_LOGIN = "Zugriffstoken"
 USER_LOGIN = "Benutzer und Passwort"
 
@@ -322,219 +322,115 @@ class MissingTab(ttk.Frame):
 # --------------------------------------------------------------------------
 
 
-class ProfileDialog(tk.Toplevel):
-    """Edits one OPNsense connection, with its optional AdGuard underneath."""
+SYSTEM_TITLES = {"opnsense": "OPNsense", "adguard": "AdGuard Home",
+                 "portainer": "Portainer"}
+SYSTEM_ONE = {"opnsense": "OPNsense", "adguard": "AdGuard",
+              "portainer": "Portainer"}
+SYSTEM_HINTS = {
+    "opnsense": "Die Firewall mit HAProxy darauf. Hier entstehen Real Server, "
+                "Backend, Condition und Rule.",
+    "adguard": "Der DNS-Server, der die Namen auf HAProxy zeigen lässt. "
+               "Mehrere OPNsense dürfen sich einen teilen.",
+    "portainer": "Der Docker-Host, dessen Stacks und Ports im zweiten Tab "
+                 "stehen.",
+}
+# What each editor asks for, in the order it asks. Everything else about a
+# system -- the frontend it last used, the defaults of its form -- is kept
+# untouched next to these, so editing an address never loses it.
+SYSTEM_FIELDS = {
+    "opnsense": (("Name", "name", False, "z.B. Zuhause oder Büro"),
+                 ("Adresse", "url", False, "https://opnsense.example.de"),
+                 ("API-Key", "key", False, ""),
+                 ("API-Secret", "secret", True, ""),
+                 ("IP von HAProxy", "haproxy_ip", False,
+                  "Darauf zeigen die DNS-Einträge, z.B. 192.168.1.1")),
+    "adguard": (("Name", "name", False, "z.B. Zuhause"),
+                ("Adresse", "url", False, "https://adguard.example.de"),
+                ("Benutzer", "username", False, ""),
+                ("Passwort", "password", True, ""),
+                ("Ziel der Umschreibung", "target", False,
+                 "leer = die HAProxy-IP der OPNsense")),
+    "portainer": (("Name", "name", False, "z.B. Docker Zuhause"),
+                  ("Adresse", "url", False,
+                   "https://portainer.example.de:9443")),
+}
+VERIFY_LABEL = {"opnsense": "TLS-Zertifikat der OPNsense prüfen",
+                "adguard": "TLS-Zertifikat von AdGuard prüfen",
+                "portainer": "TLS-Zertifikat von Portainer prüfen"}
+NO_LINK = "— keiner —"
 
-    def __init__(self, parent, colors, profile, config_path, taken_names=(),
-                 can_delete=False):
+
+class SystemDialog(tk.Toplevel):
+    """Edits exactly one system: a firewall, an AdGuard or a Portainer.
+
+    One kind at a time, so the form stays short enough to read in one go. The
+    three used to sit in a single dialog underneath each other, which is what
+    made the old settings hard to take in.
+    """
+
+    def __init__(self, parent, colors, kind, entry, taken_names=(),
+                 systems=None, can_delete=False):
         super().__init__(parent)
-        self.title("Verbindung bearbeiten")
-        self.delete_requested = False
+        self.kind = kind
         self.colors = colors
-        self.config_path = config_path or core.DEFAULT_CONFIG
+        self.systems = systems or {}
         self.result = None
-        self.original_name = profile.get("name", "")
+        self.delete_requested = False
+        self.original_name = entry.get("name", "")
         self.taken_names = {n for n in taken_names if n != self.original_name}
-        # keep settings this dialog does not show, e.g. frontend and defaults
-        self.extra = {k: v for k, v in profile.items()
-                      if k not in ("name", "url", "key", "secret", "verify_ssl",
-                                   "haproxy_ip", "adguard", "portainer")}
+        shown = {name for _l, name, _s, _h in SYSTEM_FIELDS[kind]}
+        shown.update(("verify_ssl", "api_key", "username", "password",
+                      "host_ip", "adguard", "portainer"))
+        self.extra = {k: v for k, v in entry.items() if k not in shown}
+        self.title(f"{SYSTEM_TITLES[kind]} bearbeiten" if self.original_name
+                   else f"{SYSTEM_TITLES[kind]} hinzufügen")
         self.transient(parent)
         self.configure(bg=colors["bg"])
 
-        # The form is taller than some screens, so it scrolls; the buttons sit
-        # outside the scroller and stay reachable.
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
         self.scroll = ScrollFrame(self, colors)
         self.scroll.grid(row=0, column=0, sticky="nsew")
         self.scroll.body.columnconfigure(0, weight=1)
-        scroll = self.scroll
 
-        body = ttk.Frame(scroll.body, style="Card.TFrame", padding=20)
+        body = ttk.Frame(self.scroll.body, style="Card.TFrame", padding=22)
         body.grid(row=0, column=0, sticky="nsew")
         body.columnconfigure(0, weight=1)
         rows = itertools.count()
 
-        self.vars = {
-            "name": tk.StringVar(value=profile.get("name", "")),
-            "url": tk.StringVar(value=profile.get("url", "https://opnsense.local")),
-            "key": tk.StringVar(value=profile.get("key", "")),
-            "secret": tk.StringVar(value=profile.get("secret", "")),
-            "haproxy_ip": tk.StringVar(value=profile.get("haproxy_ip", "")),
-        }
-        self.verify = tk.BooleanVar(value=profile.get("verify_ssl", False))
+        ttk.Label(body, text=SYSTEM_TITLES[kind], style="H2.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Label(body, text=SYSTEM_HINTS[kind], style="Hint.TLabel",
+                  wraplength=420, justify="left").grid(row=next(rows), column=0,
+                                                       sticky="w", pady=(3, 12))
 
-        ttk.Label(body, text="OPNsense", style="H2.TLabel").grid(
-            row=next(rows), column=0, sticky="w", pady=(0, 8))
-        for label, name, secret, hint in (
-                ("Name der Verbindung", "name", False, "z.B. Zuhause oder Büro"),
-                ("Adresse", "url", False, ""),
-                ("API-Key", "key", False, ""),
-                ("API-Secret", "secret", True, ""),
-                ("IP von HAProxy", "haproxy_ip", False,
-                 "Darauf zeigen die DNS-Einträge, z.B. 192.168.1.1")):
+        self.vars = {}
+        for label, name, secret, hint in SYSTEM_FIELDS[kind]:
+            self.vars[name] = tk.StringVar(value=str(entry.get(name, "")))
             ttk.Label(body, text=label, style="FieldLabel.TLabel").grid(
                 row=next(rows), column=0, sticky="w", pady=(8, 3))
-            ttk.Entry(body, textvariable=self.vars[name], width=40,
+            ttk.Entry(body, textvariable=self.vars[name], width=46,
                       style="Card.TEntry", show="•" if secret else "").grid(
                 row=next(rows), column=0, sticky="ew")
             if hint:
                 ttk.Label(body, text=hint, style="Hint.TLabel").grid(
                     row=next(rows), column=0, sticky="w", pady=(2, 0))
 
-        ttk.Checkbutton(body, text="TLS-Zertifikat der OPNsense prüfen",
-                        variable=self.verify, style="Card.TCheckbutton").grid(
-            row=next(rows), column=0, sticky="w", pady=(10, 0))
+        if kind == "portainer":
+            self._build_portainer(body, rows, entry)
+        if kind == "opnsense":
+            self._build_links(body, rows, entry)
 
-        ttk.Separator(body, orient="horizontal").grid(
-            row=next(rows), column=0, sticky="ew", pady=12)
-
-        adg = profile.get("adguard") or {}
-        self.adg_vars = {
-            "url": tk.StringVar(value=adg.get("url", "")),
-            "username": tk.StringVar(value=adg.get("username", "")),
-            "password": tk.StringVar(value=adg.get("password", "")),
-            "target": tk.StringVar(value=adg.get("target", "")),
-        }
-        self.adg_verify = tk.BooleanVar(value=adg.get("verify_ssl", False))
-        self.use_adguard = tk.BooleanVar(value=bool(adg.get("url")))
-
-        ttk.Label(body, text="AdGuard Home", style="H2.TLabel").grid(
-            row=next(rows), column=0, sticky="w")
-        ttk.Checkbutton(body, text="Für diese Verbindung DNS-Einträge anlegen",
-                        variable=self.use_adguard, style="Card.TCheckbutton",
-                        command=self._toggle_adguard).grid(
-            row=next(rows), column=0, sticky="w", pady=(6, 0))
-        ttk.Label(body, style="Hint.TLabel", wraplength=330, justify="left",
-                  text="Ohne Haken bleibt DNS unangetastet.").grid(
-            row=next(rows), column=0, sticky="w", pady=(2, 6))
-
-        self.adg_box = ttk.Frame(body, style="Card.TFrame")
-        self.adg_box.grid(row=next(rows), column=0, sticky="ew")
-        self.adg_box.columnconfigure(0, weight=1)
-        adg_rows = itertools.count()
-        for label, name, secret, hint in (
-                ("Adresse", "url", False, "z.B. https://adguard.example.de"),
-                ("Benutzer", "username", False, ""),
-                ("Passwort", "password", True, ""),
-                ("Ziel der Umschreibung", "target", False,
-                 "leer = die IP von HAProxy von oben")):
-            ttk.Label(self.adg_box, text=label, style="FieldLabel.TLabel").grid(
-                row=next(adg_rows), column=0, sticky="w", pady=(6, 3))
-            ttk.Entry(self.adg_box, textvariable=self.adg_vars[name], width=40,
-                      style="Card.TEntry", show="•" if secret else "").grid(
-                row=next(adg_rows), column=0, sticky="ew")
-            if hint:
-                ttk.Label(self.adg_box, text=hint, style="Hint.TLabel").grid(
-                    row=next(adg_rows), column=0, sticky="w", pady=(2, 0))
-        ttk.Checkbutton(self.adg_box, text="TLS-Zertifikat von AdGuard prüfen",
-                        variable=self.adg_verify,
-                        style="Card.TCheckbutton").grid(
-            row=next(adg_rows), column=0, sticky="w", pady=(8, 0))
-        self._toggle_adguard()
-
-        ttk.Separator(body, orient="horizontal").grid(
-            row=next(rows), column=0, sticky="ew", pady=12)
-
-        portainer = profile.get("portainer") or {}
-        self.pt_vars = {
-            "url": tk.StringVar(value=portainer.get("url", "")),
-            "api_key": tk.StringVar(value=portainer.get("api_key", "")),
-            "username": tk.StringVar(value=portainer.get("username", "")),
-            "password": tk.StringVar(value=portainer.get("password", "")),
-            "host_ip": tk.StringVar(value=portainer.get("host_ip", "")),
-        }
-        self.pt_verify = tk.BooleanVar(value=portainer.get("verify_ssl", False))
-        self.use_portainer = tk.BooleanVar(value=bool(portainer.get("url")))
-        self.pt_method = tk.StringVar(
-            value=USER_LOGIN if portainer.get("username") else TOKEN_LOGIN)
-
-        ttk.Label(body, text="Portainer", style="H2.TLabel").grid(
-            row=next(rows), column=0, sticky="w")
-        ttk.Checkbutton(body, text="Für diese Verbindung Stacks verwalten",
-                        variable=self.use_portainer, style="Card.TCheckbutton",
-                        command=self._toggle_portainer).grid(
-            row=next(rows), column=0, sticky="w", pady=(6, 0))
-        ttk.Label(body, style="Hint.TLabel", wraplength=330, justify="left",
-                  text="Ohne Haken bleibt der zweite Tab leer.").grid(
-            row=next(rows), column=0, sticky="w", pady=(2, 6))
-
-        self.pt_box = ttk.Frame(body, style="Card.TFrame")
-        self.pt_box.grid(row=next(rows), column=0, sticky="ew")
-        self.pt_box.columnconfigure(0, weight=1)
-        pt_rows = itertools.count()
-        ttk.Label(self.pt_box, text="Adresse", style="FieldLabel.TLabel").grid(
-            row=next(pt_rows), column=0, sticky="w", pady=(6, 3))
-        ttk.Entry(self.pt_box, textvariable=self.pt_vars["url"], width=40,
-                  style="Card.TEntry").grid(row=next(pt_rows), column=0,
-                                            sticky="ew")
-        ttk.Label(self.pt_box, text="z.B. https://portainer.example.de",
-                  style="Hint.TLabel").grid(row=next(pt_rows), column=0,
-                                            sticky="w", pady=(2, 0))
-
-        ttk.Label(self.pt_box, text="Anmeldung",
-                  style="FieldLabel.TLabel").grid(row=next(pt_rows), column=0,
-                                                  sticky="w", pady=(8, 3))
-        ttk.Combobox(self.pt_box, textvariable=self.pt_method, state="readonly",
-                     values=[TOKEN_LOGIN, USER_LOGIN],
-                     style="Card.TCombobox").grid(
-            row=next(pt_rows), column=0, sticky="ew")
-
-        self.pt_token_box = ttk.Frame(self.pt_box, style="Card.TFrame")
-        self.pt_token_box.grid(row=next(pt_rows), column=0, sticky="ew")
-        self.pt_token_box.columnconfigure(0, weight=1)
-        ttk.Label(self.pt_token_box, text="Zugriffstoken",
-                  style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w",
-                                                  pady=(8, 3))
-        ttk.Entry(self.pt_token_box, textvariable=self.pt_vars["api_key"],
-                  width=40, style="Card.TEntry", show="•").grid(row=1, column=0,
-                                                                sticky="ew")
-        ttk.Label(self.pt_token_box, style="Hint.TLabel", wraplength=330,
-                  justify="left",
-                  text="In Portainer oben rechts auf den Benutzer, dann "
-                       "My account → Access tokens.").grid(row=2, column=0,
-                                                           sticky="w",
-                                                           pady=(2, 0))
-
-        self.pt_user_box = ttk.Frame(self.pt_box, style="Card.TFrame")
-        self.pt_user_box.grid(row=next(pt_rows), column=0, sticky="ew")
-        self.pt_user_box.columnconfigure(0, weight=1)
-        user_rows = itertools.count()
-        for label, name, secret in (("Benutzer", "username", False),
-                                    ("Passwort", "password", True)):
-            ttk.Label(self.pt_user_box, text=label,
-                      style="FieldLabel.TLabel").grid(row=next(user_rows),
-                                                      column=0, sticky="w",
-                                                      pady=(8, 3))
-            ttk.Entry(self.pt_user_box, textvariable=self.pt_vars[name], width=40,
-                      style="Card.TEntry", show="•" if secret else "").grid(
-                row=next(user_rows), column=0, sticky="ew")
-
-        ttk.Label(self.pt_box, text="IP des Docker-Hosts",
-                  style="FieldLabel.TLabel").grid(row=next(pt_rows), column=0,
-                                                  sticky="w", pady=(8, 3))
-        ttk.Entry(self.pt_box, textvariable=self.pt_vars["host_ip"], width=40,
-                  style="Card.TEntry").grid(row=next(pt_rows), column=0,
-                                            sticky="ew")
-        ttk.Label(self.pt_box, style="Hint.TLabel", wraplength=330,
-                  justify="left",
-                  text="Dorthin schickt HAProxy die Anfragen für Container. "
-                       "Leer = der Rechner aus der Adresse oben.").grid(
-            row=next(pt_rows), column=0, sticky="w", pady=(2, 0))
-        ttk.Checkbutton(self.pt_box, text="TLS-Zertifikat von Portainer prüfen",
-                        variable=self.pt_verify,
-                        style="Card.TCheckbutton").grid(row=next(pt_rows),
-                                                        column=0, sticky="w",
-                                                        pady=(8, 0))
-        self.pt_method.trace_add("write", lambda *_a: self._toggle_portainer())
-        self._toggle_portainer()
-
-        ttk.Label(body, style="Hint.TLabel", wraplength=330, justify="left",
-                  text="Schlüssel: System → Zugriff → Benutzer, dann rechts in "
-                       "der Zeile des Benutzers das Briefmarken-Symbol. "
-                       f"Gespeichert in {self.config_path}").grid(
-            row=next(rows), column=0, sticky="w", pady=(12, 0))
+        self.verify = tk.BooleanVar(value=bool(entry.get("verify_ssl", False)))
+        ttk.Checkbutton(body, text=VERIFY_LABEL[kind], variable=self.verify,
+                        style="Card.TCheckbutton").grid(row=next(rows), column=0,
+                                                        sticky="w", pady=(14, 0))
+        if kind == "opnsense":
+            ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                      text="Den Schlüssel gibt es in OPNsense unter System → "
+                           "Zugriff → Benutzer, rechts in der Zeile des "
+                           "Benutzers das Briefmarken-Symbol.").grid(
+                row=next(rows), column=0, sticky="w", pady=(12, 0))
 
         self.footer = footer = ttk.Frame(self, style="Card.TFrame",
                                          padding=(20, 12, 20, 16))
@@ -547,131 +443,303 @@ class ProfileDialog(tk.Toplevel):
         buttons.grid(row=0, column=1, sticky="e")
         ttk.Button(buttons, text="Abbrechen", style="Ghost.TButton",
                    command=self.destroy).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(buttons, text="Speichern & verbinden", style="Accent.TButton",
+        ttk.Button(buttons, text="Speichern", style="Accent.TButton",
                    command=self._save).grid(row=0, column=1)
 
         self.bind("<Return>", lambda _e: self._save())
         self.bind("<Escape>", lambda _e: self.destroy())
         self.update_idletasks()
-        self._fit(parent)
+        _fit_dialog(self, parent, self.scroll, self.footer, floor=460)
         self.grab_set()
 
-    def _fit(self, parent):
-        """Never grow past the screen -- the scroller takes care of the rest.
+    def _build_portainer(self, body, rows, entry):
+        """Token or user and password -- only one of the two is ever kept."""
+        self.pt_method = tk.StringVar(
+            value=USER_LOGIN if entry.get("username") else TOKEN_LOGIN)
+        for name in ("api_key", "username", "password", "host_ip"):
+            self.vars[name] = tk.StringVar(value=str(entry.get(name, "")))
 
-        The size has to come from the scrolled content: a canvas reports its
-        own default size, not what is inside it.
-        """
-        content = self.scroll.body.winfo_reqheight()
-        width = max(self.scroll.body.winfo_reqwidth() + 18, 380)
-        tallest = int(self.winfo_screenheight() * 0.85)
-        height = min(content + self.footer.winfo_reqheight() + 4, tallest)
-        self.geometry(f"{width}x{height}")
-        self.minsize(width, min(420, height))
-        self.resizable(False, True)
-        self.update_idletasks()
-        self._centre(parent)
+        ttk.Label(body, text="Anmeldung", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w", pady=(12, 3))
+        ttk.Combobox(body, textvariable=self.pt_method, state="readonly",
+                     values=[TOKEN_LOGIN, USER_LOGIN],
+                     style="Card.TCombobox").grid(row=next(rows), column=0,
+                                                  sticky="ew")
 
-    def _delete(self):
-        if messagebox.askyesno(
-                APP_TITLE,
-                f"Verbindung '{self.original_name}' entfernen?\n\n"
-                "Es wird nur dieser Eintrag gelöscht, an OPNsense ändert sich "
-                "nichts.", icon="warning", parent=self):
-            self.delete_requested = True
-            self.destroy()
+        self.pt_token_box = ttk.Frame(body, style="Card.TFrame")
+        self.pt_token_box.grid(row=next(rows), column=0, sticky="ew")
+        self.pt_token_box.columnconfigure(0, weight=1)
+        ttk.Label(self.pt_token_box, text="Zugriffstoken",
+                  style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w",
+                                                  pady=(8, 3))
+        ttk.Entry(self.pt_token_box, textvariable=self.vars["api_key"],
+                  style="Card.TEntry", show="•").grid(row=1, column=0,
+                                                      sticky="ew")
+        ttk.Label(self.pt_token_box, style="Hint.TLabel", wraplength=420,
+                  justify="left",
+                  text="In Portainer oben rechts auf den Benutzer, dann "
+                       "My account → Access tokens.").grid(row=2, column=0,
+                                                           sticky="w",
+                                                           pady=(2, 0))
 
-    def _toggle_adguard(self):
-        if self.use_adguard.get():
-            self.adg_box.grid()
-        else:
-            self.adg_box.grid_remove()
+        self.pt_user_box = ttk.Frame(body, style="Card.TFrame")
+        self.pt_user_box.grid(row=next(rows), column=0, sticky="ew")
+        self.pt_user_box.columnconfigure(0, weight=1)
+        user_rows = itertools.count()
+        for label, name, secret in (("Benutzer", "username", False),
+                                    ("Passwort", "password", True)):
+            ttk.Label(self.pt_user_box, text=label,
+                      style="FieldLabel.TLabel").grid(row=next(user_rows),
+                                                      column=0, sticky="w",
+                                                      pady=(8, 3))
+            ttk.Entry(self.pt_user_box, textvariable=self.vars[name],
+                      style="Card.TEntry",
+                      show="•" if secret else "").grid(row=next(user_rows),
+                                                       column=0, sticky="ew")
 
-    def _toggle_portainer(self):
-        if not self.use_portainer.get():
-            self.pt_box.grid_remove()
-            return
-        self.pt_box.grid()
+        ttk.Label(body, text="IP des Docker-Hosts",
+                  style="FieldLabel.TLabel").grid(row=next(rows), column=0,
+                                                  sticky="w", pady=(12, 3))
+        ttk.Entry(body, textvariable=self.vars["host_ip"],
+                  style="Card.TEntry").grid(row=next(rows), column=0,
+                                            sticky="ew")
+        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                  text="Dorthin schickt HAProxy die Anfragen für Container. "
+                       "Leer = der Rechner aus der Adresse oben.").grid(
+            row=next(rows), column=0, sticky="w", pady=(2, 0))
+        self.pt_method.trace_add("write", lambda *_a: self._toggle_login())
+        self._toggle_login()
+
+    def _toggle_login(self):
         token = self.pt_method.get() == TOKEN_LOGIN
         self.pt_token_box.grid() if token else self.pt_token_box.grid_remove()
         self.pt_user_box.grid_remove() if token else self.pt_user_box.grid()
 
-    def _centre(self, parent):
-        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
-        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 3
-        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    def _build_links(self, body, rows, entry):
+        """Which AdGuard and which Portainer this firewall works with.
+
+        Only the starting point: both can be swapped for another one right
+        before something is created, in the form and in the deploy dialog.
+        """
+        ttk.Separator(body, orient="horizontal").grid(row=next(rows), column=0,
+                                                      sticky="ew", pady=16)
+        ttk.Label(body, text="Arbeitet zusammen mit", style="Group.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                  text="Die Vorauswahl für diese OPNsense. Beim Anlegen und "
+                       "beim Deployen lässt sie sich jedes Mal ändern.").grid(
+            row=next(rows), column=0, sticky="w", pady=(3, 8))
+        self.links = {}
+        for kind, label in (("adguard", "DNS über"),
+                            ("portainer", "Docker über")):
+            names = [e.get("name", "") for e in self.systems.get(kind, [])]
+            current = entry.get(kind, "")
+            self.links[kind] = tk.StringVar(
+                value=current if current in names else NO_LINK)
+            ttk.Label(body, text=label, style="FieldLabel.TLabel").grid(
+                row=next(rows), column=0, sticky="w", pady=(8, 3))
+            box = ttk.Combobox(body, textvariable=self.links[kind],
+                               state="readonly", values=[NO_LINK] + names,
+                               style="Card.TCombobox")
+            box.grid(row=next(rows), column=0, sticky="ew")
+            if not names:
+                box.configure(state="disabled")
+                ttk.Label(body, style="Hint.TLabel",
+                          text=f"Noch kein {SYSTEM_ONE[kind]} eingerichtet.").grid(
+                    row=next(rows), column=0, sticky="w", pady=(2, 0))
+
+    def _delete(self):
+        if messagebox.askyesno(
+                APP_TITLE,
+                f"„{self.original_name}“ aus den Einstellungen entfernen?\n\n"
+                f"Es wird nur dieser Eintrag gelöscht, am {SYSTEM_ONE[self.kind]} "
+                "selbst ändert sich nichts.", icon="warning", parent=self):
+            self.delete_requested = True
+            self.destroy()
 
     def _save(self):
         values = {name: var.get().strip() for name, var in self.vars.items()}
-        missing = [label for label, name in
-                   (("Name", "name"), ("Adresse", "url"), ("API-Key", "key"),
-                    ("API-Secret", "secret")) if not values[name]]
+        required = [("Name", "name"), ("Adresse", "url")]
+        if self.kind == "opnsense":
+            required += [("API-Key", "key"), ("API-Secret", "secret")]
+        missing = [label for label, name in required if not values.get(name)]
         if missing:
             messagebox.showwarning("Unvollständig",
                                    "Bitte ausfüllen: " + ", ".join(missing),
                                    parent=self)
             return
         if values["name"] in self.taken_names:
-            messagebox.showwarning("Name schon vergeben",
-                                   f"Es gibt bereits eine Verbindung namens "
-                                   f"'{values['name']}'.", parent=self)
+            messagebox.showwarning(
+                "Name schon vergeben",
+                f"Es gibt bereits einen Eintrag namens „{values['name']}“.",
+                parent=self)
             return
-        config = {**values, "verify_ssl": self.verify.get()}
-        if not config["haproxy_ip"]:
-            config.pop("haproxy_ip")
-        if self.use_adguard.get():
-            adguard = {name: var.get().strip()
-                       for name, var in self.adg_vars.items()}
-            if not adguard["url"]:
-                messagebox.showwarning(
-                    "AdGuard unvollständig",
-                    "Ohne Adresse geht es nicht — oder den Haken entfernen.",
-                    parent=self)
-                return
-            if not adguard["target"] and not values["haproxy_ip"]:
-                messagebox.showwarning(
-                    "Kein Ziel für die DNS-Einträge",
-                    "Bitte oben die IP von HAProxy eintragen — oder hier ein "
-                    "eigenes Ziel für die Umschreibung.", parent=self)
-                return
-            if adguard["target"] == values["haproxy_ip"]:
-                # nothing of its own to say: let it follow the IP above, so
-                # changing that later moves the DNS entries along
-                adguard["target"] = ""
-            config["adguard"] = {**adguard, "verify_ssl": self.adg_verify.get()}
-        if self.use_portainer.get():
-            portainer = {name: var.get().strip()
-                         for name, var in self.pt_vars.items()}
-            if not portainer["url"]:
-                messagebox.showwarning(
-                    "Portainer unvollständig",
-                    "Ohne Adresse geht es nicht — oder den Haken entfernen.",
-                    parent=self)
-                return
+        if self.kind == "portainer":
             # only one way in is kept, so a leftover from the other one cannot
             # decide the login later
             if self.pt_method.get() == TOKEN_LOGIN:
-                portainer["username"] = portainer["password"] = ""
-                if not portainer["api_key"]:
+                values["username"] = values["password"] = ""
+                if not values["api_key"]:
                     messagebox.showwarning(
-                        "Portainer unvollständig",
-                        "Bitte das Zugriffstoken eintragen — oder unten auf "
-                        "Benutzer und Passwort umstellen.", parent=self)
+                        "Unvollständig",
+                        "Bitte das Zugriffstoken eintragen — oder auf Benutzer "
+                        "und Passwort umstellen.", parent=self)
                     return
             else:
-                portainer["api_key"] = ""
-                if not (portainer["username"] and portainer["password"]):
+                values["api_key"] = ""
+                if not (values["username"] and values["password"]):
                     messagebox.showwarning(
-                        "Portainer unvollständig",
-                        "Bitte Benutzer und Passwort eintragen — oder oben auf "
+                        "Unvollständig",
+                        "Bitte Benutzer und Passwort eintragen — oder auf "
                         "Zugriffstoken umstellen.", parent=self)
                     return
-            config["portainer"] = {**portainer,
-                                   "verify_ssl": self.pt_verify.get()}
-        config.update({k: v for k, v in self.extra.items() if k not in config})
-        # the caller owns the file; it knows about the other profiles
-        self.result = config
+        entry = {k: v for k, v in values.items() if k in core.SYSTEM_KEYS[self.kind]}
+        entry["verify_ssl"] = self.verify.get()
+        if self.kind == "opnsense":
+            for kind, var in self.links.items():
+                chosen = var.get()
+                if chosen and chosen != NO_LINK:
+                    entry[kind] = chosen
+            if not entry.get("haproxy_ip"):
+                entry.pop("haproxy_ip", None)
+        entry.update({k: v for k, v in self.extra.items() if k not in entry})
+        self.result = entry
         self.destroy()
+
+
+class SettingsDialog(tk.Toplevel):
+    """Everything that is configured, in three lists under each other.
+
+    Each change is written to the file straight away: with three lists and a
+    dialog per entry, a single Save button at the end would have to remember
+    far too much on the way there.
+    """
+
+    def __init__(self, parent, app):
+        super().__init__(parent)
+        self.app = app
+        self.colors = app.colors
+        self.title("Einstellungen")
+        self.transient(parent)
+        self.configure(bg=self.colors["bg"])
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.scroll = ScrollFrame(self, self.colors)
+        self.scroll.grid(row=0, column=0, sticky="nsew")
+        self.scroll.body.columnconfigure(0, weight=1)
+
+        self.footer = footer = ttk.Frame(self, style="Card.TFrame",
+                                         padding=(20, 12, 20, 16))
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        ttk.Label(footer, style="Hint.TLabel", wraplength=520, justify="left",
+                  text=f"Gespeichert in {app.config_path}").grid(row=0, column=0,
+                                                                 sticky="w")
+        ttk.Button(footer, text="Fertig", style="Accent.TButton",
+                   command=self.destroy).grid(row=0, column=1, sticky="e")
+
+        self._render()
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        _fit_dialog(self, parent, self.scroll, self.footer, floor=560)
+        self.grab_set()
+
+    def _render(self):
+        self.scroll.clear()
+        body = self.scroll.body
+        body.columnconfigure(0, weight=1)
+        rows = itertools.count()
+        for kind in core.SYSTEM_KINDS:
+            self._section(body, kind).grid(row=next(rows), column=0, sticky="ew",
+                                           padx=18, pady=(18, 0))
+        ttk.Frame(body, style="TFrame", height=18).grid(row=next(rows), column=0)
+
+    def _section(self, parent, kind):
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 16))
+        card.columnconfigure(0, weight=1)
+        rows = itertools.count()
+
+        head = ttk.Frame(card, style="Card.TFrame")
+        head.grid(row=next(rows), column=0, sticky="ew")
+        head.columnconfigure(0, weight=1)
+        ttk.Label(head, text=SYSTEM_TITLES[kind], style="H2.TLabel").grid(
+            row=0, column=0, sticky="w")
+        ttk.Button(head, text="+ Hinzufügen", style="Del.TButton",
+                   command=lambda k=kind: self._edit(k, {})).grid(row=0, column=1,
+                                                                  sticky="e")
+        ttk.Label(card, text=SYSTEM_HINTS[kind], style="Hint.TLabel",
+                  wraplength=520, justify="left").grid(row=next(rows), column=0,
+                                                       sticky="w", pady=(3, 10))
+
+        entries = self.app.systems.get(kind, [])
+        if not entries:
+            ttk.Label(card, style="RowHint.TLabel",
+                      text=f"Noch kein {SYSTEM_ONE[kind]} eingerichtet.").grid(
+                row=next(rows), column=0, sticky="w")
+            return card
+        for entry in entries:
+            self._row(card, kind, entry).grid(row=next(rows), column=0,
+                                              sticky="ew", pady=(0, 6))
+        return card
+
+    def _row(self, parent, kind, entry):
+        row = tk.Frame(parent, bg=self.colors["surface2"], padx=12, pady=9)
+        row.columnconfigure(0, weight=1)
+        name = entry.get("name", "?")
+        ttk.Label(row, text=name, style="Host.TLabel").grid(row=0, column=0,
+                                                            sticky="w")
+        if name == self.app.active.get(kind):
+            ttk.Label(row, text="aktiv", style="BadgeOk.TLabel").grid(
+                row=0, column=1, padx=(8, 0))
+        ttk.Label(row, text=entry.get("url", ""), style="Target.TLabel").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        if kind == "opnsense":
+            linked = "  ·  ".join(
+                f"{label}: {entry.get(other) or '—'}"
+                for other, label in (("adguard", "DNS"), ("portainer", "Docker")))
+            ttk.Label(row, text=linked, style="RowHint.TLabel").grid(
+                row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        ttk.Button(row, text="Bearbeiten", style="Del.TButton",
+                   command=lambda: self._edit(kind, entry)).grid(row=0, column=2,
+                                                                 rowspan=3,
+                                                                 padx=(10, 0))
+        return row
+
+    def _edit(self, kind, entry):
+        dialog = SystemDialog(self, self.colors, kind, entry,
+                              taken_names=[e.get("name") for e
+                                           in self.app.systems.get(kind, [])],
+                              systems=self.app.systems,
+                              can_delete=bool(entry))
+        self.wait_window(dialog)
+        if dialog.delete_requested:
+            self.app.forget_system(kind, entry.get("name", ""))
+            self._render()
+            return
+        if dialog.result is None:
+            return
+        self.app.remember_system(kind, entry.get("name", ""), dialog.result)
+        self._render()
+
+
+def _fit_dialog(window, parent, scroll, footer, floor=460):
+    """Size a scrolled dialog to its content, but never past the screen.
+
+    The size has to come from the scrolled content: a canvas reports its own
+    default size, not what is inside it.
+    """
+    content = scroll.body.winfo_reqheight()
+    width = max(scroll.body.winfo_reqwidth() + 18, floor)
+    tallest = int(window.winfo_screenheight() * 0.85)
+    height = min(content + footer.winfo_reqheight() + 4, tallest)
+    window.geometry(f"{width}x{height}")
+    window.minsize(width, min(420, height))
+    window.resizable(False, True)
+    window.update_idletasks()
+    x = parent.winfo_rootx() + (parent.winfo_width() - window.winfo_width()) // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - window.winfo_height()) // 3
+    window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
 
 # --------------------------------------------------------------------------
@@ -1005,7 +1073,10 @@ class App(tk.Tk):
         self.config_path = args.config
         self.settings = {}
         self.api = None
-        self.profiles = []
+        # the three lists from the file, and which of each is selected right
+        # now; self.profile is the OPNsense in use with its two filled in
+        self.systems = {kind: [] for kind in core.SYSTEM_KINDS}
+        self.active = {kind: "" for kind in core.SYSTEM_KINDS}
         self.profile = {}
         self.adguard = None
         self.adguard_target = ""
@@ -1410,7 +1481,7 @@ class App(tk.Tk):
                                        width=3, command=self._toggle_theme)
         self.theme_button.grid(row=0, column=5, padx=(0, 6))
         settings_button = ttk.Button(actions, text="⚙", style="Tool.TButton",
-                                     width=3, command=self._open_settings)
+                                     width=3, command=self.open_settings)
         settings_button.grid(row=0, column=6)
 
         for button, explanation in (
@@ -1421,7 +1492,8 @@ class App(tk.Tk):
                 (install_button, "Programm an einen festen Platz legen und "
                                  "Starter anlegen"),
                 (self.theme_button, "Hell / Dunkel"),
-                (settings_button, "Verbindung bearbeiten")):
+                (settings_button, "Einstellungen: OPNsense, AdGuard und "
+                                  "Portainer")):
             Tooltip(button, explanation)
 
         # a slim progress strip so long API calls never look like a freeze
@@ -1462,7 +1534,7 @@ class App(tk.Tk):
         self.var_ip = tk.StringVar()
         self.var_port = tk.StringVar()
         self.var_base = tk.StringVar(value=NO_BASE)
-        self.var_dns = tk.BooleanVar(value=True)
+        self.var_dns_target = tk.StringVar(value=NO_DNS)
         self.var_frontend = tk.StringVar()
         self.var_healthcheck = tk.StringVar(value="— keiner —")
         self.var_backend_mode = tk.StringVar(value="automatisch")
@@ -1525,10 +1597,17 @@ class App(tk.Tk):
                                   text="HAProxy spricht HTTP mit dem Server")
         self.ssl_note.grid(row=1, column=1, sticky="w", pady=(0, 10))
 
-        self.dns_check = ttk.Checkbutton(
-            outer, text="DNS-Eintrag in AdGuard anlegen", variable=self.var_dns,
-            style="Card.TCheckbutton", command=self._refresh_fqdn)
-        self.dns_check.grid(row=next(rows), column=0, sticky="w", pady=(0, 4))
+        # Which AdGuard gets the entry is asked here rather than in the
+        # settings: it is a decision about the host being created, and with
+        # several of them configured it changes from one host to the next.
+        ttk.Label(outer, text="DNS-Eintrag in", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        self.dns_box = ttk.Combobox(outer, textvariable=self.var_dns_target,
+                                    state="readonly", style="Card.TCombobox",
+                                    values=[NO_DNS])
+        self.dns_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
+        self.dns_box.bind("<<ComboboxSelected>>",
+                          lambda _e: self._dns_target_changed())
         self.dns_hint = ttk.Label(outer, style="Hint.TLabel", text="")
         self.dns_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
 
@@ -1955,9 +2034,6 @@ class App(tk.Tk):
     def write_log(self, title, lines, ok=None):
         self._write_log(title, lines, ok)
 
-    def open_settings(self):
-        self._open_settings()
-
     def remember_endpoint(self, endpoint_id):
         """Keep the chosen Docker environment with the preferences.
 
@@ -2083,7 +2159,7 @@ class App(tk.Tk):
 
     def _connect(self):
         # A missing config file is the normal first start here, not an error --
-        # the connection dialog is what fills it in.
+        # the settings are what fill it in.
         config = {}
         path = self.config_path or core.DEFAULT_CONFIG
         if os.path.exists(path):
@@ -2092,30 +2168,88 @@ class App(tk.Tk):
             except core.UsageError as exc:
                 messagebox.showerror(APP_TITLE, str(exc))
         self.settings = config
-        self.profiles = core.profiles_of(config)
+        self.systems = core.systems_of(config)
+        self.active = {kind: core.active_name(config, kind, self.systems)
+                       for kind in core.SYSTEM_KINDS}
+        if self.args.profile:
+            named = core.find_system(self.systems, "opnsense", self.args.profile)
+            if not named:
+                known = ", ".join(e.get("name", "?")
+                                  for e in self.systems["opnsense"])
+                messagebox.showerror(
+                    APP_TITLE, f"Keine OPNsense namens „{self.args.profile}“ "
+                               f"(vorhanden: {known or 'keine'}).")
+            else:
+                self.active["opnsense"] = self.args.profile
+        self._follow_links()
         self._fill_profiles()
-        self._use_profile(core.pick_profile(config, self.args.profile),
-                          first_run=True, connect=False)
+        self._use_active(first_run=True, connect=False)
+
+    def _follow_links(self):
+        """Let the chosen OPNsense decide which AdGuard and Portainer to use.
+
+        Only where it names one: a firewall without a link keeps whatever is
+        selected, so switching back and forth does not silently drop DNS.
+        """
+        entry = core.find_system(self.systems, "opnsense", self.active["opnsense"])
+        for kind in ("adguard", "portainer"):
+            named = entry.get(kind, "")
+            if named and core.find_system(self.systems, kind, named):
+                self.active[kind] = named
 
     def _fill_profiles(self):
-        """Always show the switcher -- it is the only way to add a connection."""
-        names = [p.get("name", "?") for p in self.profiles]
-        self.profile_box.configure(values=names + [NEW_PROFILE, EDIT_PROFILE],
+        """Always show the switcher -- it is the way to the settings as well."""
+        names = [e.get("name", "?") for e in self.systems.get("opnsense", [])]
+        self.profile_box.configure(values=names + [EDIT_PROFILE],
                                    state="readonly")
         self.profile_box.grid()
+        self._fill_dns_choices()
 
-    def _use_profile(self, profile, first_run=False, connect=True):
-        """Take up the given profile, or ask for one when it is unusable.
+    def _fill_dns_choices(self):
+        """The AdGuard picker in the form: every one configured, or none."""
+        names = [e.get("name", "?") for e in self.systems.get("adguard", [])]
+        self.dns_box.configure(values=[NO_DNS] + names,
+                               state="readonly" if names else "disabled")
+        chosen = self.active.get("adguard", "")
+        self.var_dns_target.set(chosen if chosen in names else NO_DNS)
+
+    def _dns_target_changed(self):
+        """A different AdGuard for what is about to be created.
+
+        The choice is remembered on the OPNsense entry, so the next start comes
+        up with the pair that was last used together.
+        """
+        chosen = self.var_dns_target.get()
+        self.active["adguard"] = "" if chosen == NO_DNS else chosen
+        entry = core.find_system(self.systems, "opnsense", self.active["opnsense"])
+        if entry:
+            if self.active["adguard"]:
+                entry["adguard"] = self.active["adguard"]
+            else:
+                entry.pop("adguard", None)
+            self._write_settings()
+        self.profile = core.merged_profile(self.systems, entry,
+                                           adguard=self.active["adguard"],
+                                           portainer=self.active["portainer"])
+        self._build_adguard()
+        self._render_inventory()
+
+    def _use_active(self, first_run=False, connect=True):
+        """Take up whatever is selected right now, or ask when nothing works.
 
         ``connect`` is false on start-up: opening the window should not reach
         out to anything by itself. The connect button does that.
         """
-        self.profile = profile or {}
+        entry = core.find_system(self.systems, "opnsense", self.active["opnsense"])
+        self.profile = core.merged_profile(self.systems, entry,
+                                           adguard=self.active.get("adguard"),
+                                           portainer=self.active.get("portainer"))
         self.connected = False
         self.services, self.domains = [], []
         self.var_profile.set(self.profile.get("name", ""))
-        # both halves belong to the same place, so the Portainer tab follows
-        # the connection that was just chosen -- without reaching out yet
+        self._fill_dns_choices()
+        # both halves belong to the same window, so the Portainer tab follows
+        # what was just chosen -- without reaching out yet
         self.portainer.use_profile(self.profile)
         try:
             self.api = core.build_client(self.args, self.profile)
@@ -2126,7 +2260,7 @@ class App(tk.Tk):
             self.paint_connection()
             self._render_inventory()
             if first_run:
-                self._edit_profile(self.profile, is_new=not self.profiles)
+                self.open_settings()
             return
         self._build_adguard()
         if not connect:
@@ -2142,7 +2276,7 @@ class App(tk.Tk):
             self.portainer.reload()
             return
         if not self.api:
-            self._edit_profile(self.profile, is_new=not self.profiles)
+            self.open_settings()
             return
         self.reload()
 
@@ -2164,17 +2298,39 @@ class App(tk.Tk):
 
     def _switch_profile(self):
         choice = self.var_profile.get()
-        if choice == NEW_PROFILE:
-            self._edit_profile({}, is_new=True)
-            return
         if choice == EDIT_PROFILE:
-            self._edit_profile(self.profile)
+            self.var_profile.set(self.profile.get("name", ""))
+            self.open_settings()
             return
         if choice == self.profile.get("name"):
             return
-        match = next((p for p in self.profiles if p.get("name") == choice), None)
-        if match:
-            self._use_profile(match)
+        if core.find_system(self.systems, "opnsense", choice):
+            self.active["opnsense"] = choice
+            self._follow_links()
+            self._write_settings()
+            self._use_active()
+
+    def switch_portainer(self, name):
+        """Point the second tab at another Portainer and remember the pairing.
+
+        Like the AdGuard picker in the form, the choice sticks to the OPNsense
+        that is in use: a place has one firewall and one Docker host, and the
+        next start should come up with the pair that was last used together.
+        """
+        if not name or name == self.active.get("portainer"):
+            return
+        if not core.find_system(self.systems, "portainer", name):
+            return
+        self.active["portainer"] = name
+        entry = core.find_system(self.systems, "opnsense", self.active["opnsense"])
+        if entry:
+            entry["portainer"] = name
+        self._write_settings()
+        self.profile = core.merged_profile(
+            self.systems, entry, adguard=self.active.get("adguard"),
+            portainer=name)
+        self.portainer.use_profile(self.profile)
+        self.portainer.reload()
 
     def _build_adguard(self):
         self.adguard, settings = core.adguard_from_config(self.profile)
@@ -2186,55 +2342,60 @@ class App(tk.Tk):
             self.adguard_problem = "AdGuard: keine HAProxy-IP eingetragen (⚙)"
         self._refresh_fqdn()
 
-    def _open_settings(self):
-        self._edit_profile(self.profile, is_new=not self.profile)
+    def open_settings(self):
+        """The one place where systems are added, changed and removed."""
+        dialog = SettingsDialog(self, self)
+        self.wait_window(dialog)
+        self._fill_profiles()
+        self.args.insecure = False
+        self._use_active()
 
     def _open_install(self):
         InstallDialog(self, self.colors)
 
-    def _edit_profile(self, profile, is_new=False):
-        dialog = ProfileDialog(self, self.colors, profile, self.config_path,
-                               taken_names=[p.get("name") for p in self.profiles],
-                               can_delete=not is_new and len(self.profiles) > 1)
-        self.wait_window(dialog)
+    def remember_system(self, kind, previous, entry):
+        """Add or replace one system, and keep the links pointing at it.
 
-        if dialog.delete_requested:
-            gone = profile.get("name")
-            self.profiles = [p for p in self.profiles if p.get("name") != gone]
-            remaining = self.profiles[0] if self.profiles else {}
-            if self._write_profiles(remaining.get("name", "")):
-                self._fill_profiles()
-                self._use_profile(remaining)
-            return
+        Renaming is the reason the old name is passed in: every OPNsense that
+        named the old one has to follow, or the rename would quietly unlink
+        DNS or Docker.
+        """
+        entries = self.systems.setdefault(kind, [])
+        for index, known in enumerate(entries):
+            if known.get("name") == previous:
+                entries[index] = entry
+                break
+        else:
+            entries.append(entry)
+        if previous and previous != entry["name"] and kind != "opnsense":
+            for firewall in self.systems.get("opnsense", []):
+                if firewall.get(kind) == previous:
+                    firewall[kind] = entry["name"]
+        if self.active.get(kind) in ("", previous) or len(entries) == 1:
+            self.active[kind] = entry["name"]
+        self._write_settings()
 
-        if dialog.result is None:
-            self.var_profile.set(self.profile.get("name", ""))
-            if is_new and not self.api:
-                self._write_log("Nicht verbunden",
-                                [{"text": "Ohne Zugangsdaten kann nichts "
-                                          "geladen werden.", "level": "error"}],
-                                False)
-            return
+    def forget_system(self, kind, name):
+        """Remove one system and cut every link that pointed at it."""
+        self.systems[kind] = [e for e in self.systems.get(kind, [])
+                              if e.get("name") != name]
+        if kind != "opnsense":
+            for firewall in self.systems.get("opnsense", []):
+                if firewall.get(kind) == name:
+                    firewall.pop(kind, None)
+        if self.active.get(kind) == name:
+            remaining = self.systems[kind]
+            self.active[kind] = remaining[0].get("name", "") if remaining else ""
+        self._write_settings()
 
-        saved = dialog.result
-        previous = "" if is_new else profile.get("name", "")
-        keep = [p for p in self.profiles
-                if p.get("name") not in (previous, saved["name"])]
-        self.profiles = keep + [saved]
-        self.config_path = dialog.config_path
-        if not self._write_profiles(saved["name"]):
-            return
-        self._fill_profiles()
-        self.args.insecure = False
-        self._use_profile(saved)
-
-    def _write_profiles(self, active):
+    def _write_settings(self):
+        """Put the three lists back on disk, mode 600 -- they hold keys."""
         try:
             os.makedirs(os.path.dirname(os.path.abspath(self.config_path)),
                         exist_ok=True)
             with open(self.config_path, "w") as handle:
-                json.dump(core.as_profile_file(self.profiles, active), handle,
-                          indent=2)
+                json.dump(core.as_settings_file(self.systems, self.active),
+                          handle, indent=2, ensure_ascii=False)
                 handle.write("\n")
             os.chmod(self.config_path, 0o600)
         except OSError as exc:
@@ -2378,8 +2539,8 @@ class App(tk.Tk):
             activity="prüfe Vorhandenes …")
 
     def _active_adguard(self):
-        """The AdGuard client, unless the checkbox says to leave DNS alone."""
-        return self.adguard if self.var_dns.get() else None
+        """The chosen AdGuard, unless the picker says to leave DNS alone."""
+        return self.adguard if self.var_dns_target.get() != NO_DNS else None
 
     def _remove(self, rule):
         if self.busy or not self.api:
@@ -2450,16 +2611,16 @@ class App(tk.Tk):
                 note = "  ·  kein Zertifikat dafür"
             self.fqdn_hint.configure(text=f"→ {full}{note}")
 
-        if not self.adguard:
-            self.dns_check.configure(state="disabled")
+        if self.var_dns_target.get() == NO_DNS:
+            self.dns_hint.configure(text="DNS bleibt unangetastet"
+                                    if self.systems.get("adguard")
+                                    else "Noch kein AdGuard eingerichtet (⚙)")
+        elif not self.adguard:
             self.dns_hint.configure(
-                text=self.adguard_problem or "AdGuard ist nicht eingerichtet (⚙)")
+                text=self.adguard_problem or "AdGuard antwortet hier nicht (⚙)")
         else:
-            self.dns_check.configure(state="normal")
-            target = self.adguard_target or "?"
             self.dns_hint.configure(
-                text=f"{full or 'name'} → {target}" if self.var_dns.get()
-                else "AdGuard bleibt unverändert")
+                text=f"{full or 'name'} → {self.adguard_target or '?'}")
 
     def _ssl_changed(self):
         on = self.ssl_switch.get()

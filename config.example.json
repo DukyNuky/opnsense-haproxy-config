@@ -1,7 +1,11 @@
 {
-  "active": "Zuhause",
+  "active": {
+    "opnsense": "Zuhause",
+    "adguard": "Zuhause",
+    "portainer": "Docker Zuhause"
+  },
 
-  "profiles": [
+  "opnsense": [
     {
       "name": "Zuhause",
       "url": "https://opnsense.example.com",
@@ -12,22 +16,8 @@
       "frontend": "https_frontend",
       "haproxy_ip": "192.168.1.1",
 
-      "adguard": {
-        "url": "https://adguard.example.com",
-        "username": "admin",
-        "password": "PASTE_ADGUARD_PASSWORD_HERE",
-        "target": "",
-        "verify_ssl": false
-      },
-
-      "portainer": {
-        "url": "https://portainer.example.com:9443",
-        "api_key": "PASTE_PORTAINER_ACCESS_TOKEN_HERE",
-        "username": "",
-        "password": "",
-        "host_ip": "192.168.1.20",
-        "verify_ssl": false
-      },
+      "adguard": "Zuhause",
+      "portainer": "Docker Zuhause",
 
       "defaults": {
         "ssl": false,
@@ -42,7 +32,32 @@
       "url": "https://opnsense.example.net",
       "key": "PASTE_API_KEY_HERE",
       "secret": "PASTE_API_SECRET_HERE",
-      "verify_ssl": true
+      "verify_ssl": true,
+      "haproxy_ip": "10.0.0.1",
+      "adguard": "Zuhause"
+    }
+  ],
+
+  "adguard": [
+    {
+      "name": "Zuhause",
+      "url": "https://adguard.example.com",
+      "username": "admin",
+      "password": "PASTE_ADGUARD_PASSWORD_HERE",
+      "target": "",
+      "verify_ssl": false
+    }
+  ],
+
+  "portainer": [
+    {
+      "name": "Docker Zuhause",
+      "url": "https://portainer.example.com:9443",
+      "api_key": "PASTE_PORTAINER_ACCESS_TOKEN_HERE",
+      "username": "",
+      "password": "",
+      "host_ip": "192.168.1.20",
+      "verify_ssl": false
     }
   ]
 }
