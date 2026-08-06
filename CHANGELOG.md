@@ -1,5 +1,48 @@
 # Änderungen
 
+## 1.4.0 — 6. August 2026
+
+**Zwei Tabs: HAProxy wie bisher, und daneben Portainer.**
+
+- **Oben große Tabs.** Der erste ist das Programm, wie es war — Formular
+  links, bestehende Hosts rechts, Protokoll unten. Der zweite ist neu.
+- **Portainer-Tab.** Er liest Stacks und Container aus deinem Portainer und
+  zeigt zu jedem Stack, **welche Ports er auf dem Host veröffentlicht** — also
+  die Ports, die HAProxy ansprechen kann. Ports, die nur an `127.0.0.1`
+  hängen, sind als **nur lokal** gekennzeichnet, denn von der Firewall aus
+  sind sie nicht erreichbar. Container ohne Stack stehen als eigene Gruppe
+  darunter, weil sie dieselben Ports belegen.
+- **Vom Port direkt zum Namen.** Steht schon eine HAProxy-Rule auf diesem Port,
+  zeigt die Zeile **HAProxy ✓**. Sonst steht dort **→ HAProxy**: ein Klick,
+  ein Fenster mit Dienstname, Docker-Host-IP und Port bereits ausgefüllt,
+  Basis-Domain und Public Service dazu — angelegt wird dann genau wie im ersten
+  Tab, inklusive DNS-Eintrag in AdGuard.
+- **Stacks neu deployen**, auf Wunsch mit frisch heruntergeladenen Images
+  (das ist das Update) und mit Aufräumen verwaister Container. Stacks aus einem
+  Repository und Stacks aus Portainers Editor gehen beide.
+- **Neue Stacks aus GitHub oder GitLab.** Name, Branch, Pfad zur Compose-Datei,
+  Umgebungsvariablen als Freitext wie bei Portainer, Zugangsdaten für private
+  Repositories und automatische Updates — entweder in einem Abstand wie `5m`
+  oder über einen Webhook, dessen URL danach im Protokoll steht.
+- **Die Variablen aus dem Repository holen.** Der Knopf neben dem ENV-Feld
+  liest die Compose-Datei, sammelt jedes `${VAR}` samt Vorgabewert und sucht
+  daneben eine `.env` oder `.env.example` — auch die, auf die die Compose-Datei
+  mit `env_file:` selbst zeigt. Beides landet vorbereitet im Feld, du passt nur
+  noch die Werte an. Getipptes wird dabei nicht überschrieben. Nebenbei ist das
+  eine Probe vor dem Deploy: kommt die Compose-Datei zurück, stimmen Adresse,
+  Branch, Pfad und Zugangsdaten.
+- **Zugangsdaten für private Repositories werden nicht gespeichert.** Sie gehen
+  beim Deploy an Portainer, das sie beim Stack hinterlegt; in der
+  Konfigurationsdatei dieses Programms stehen sie nicht.
+- **Anmeldung wahlweise** über ein Zugriffstoken oder über Benutzer und
+  Passwort. Beim Passwort wird das Token bei Bedarf selbst geholt und
+  erneuert, wenn es abläuft.
+- Beide Hälften gehören zur selben Verbindung: ein Standort hat eine OPNsense
+  und einen Portainer, der Umschalter oben schaltet beides um.
+
+Nur Compose-Stacks auf einem einzelnen Docker-Host. Swarm und Kubernetes
+werden in der Liste als solche benannt, aber nicht ausgerollt.
+
 ## 1.3.0 — 4. August 2026
 
 **Nichts passiert mehr von allein, und man sieht wieder, worauf man drückt.**

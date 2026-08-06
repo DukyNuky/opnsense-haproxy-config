@@ -27,6 +27,14 @@ bereits Angelegte wieder entfernt — es bleibt nichts Halbfertiges zurück.
 Auf Wunsch trägt es zusätzlich den passenden DNS-Eintrag in **AdGuard Home**
 ein, damit der neue Name im Heimnetz auch gefunden wird.
 
+Und weil die Dienste, die hinter HAProxy stehen, meist Docker-Container sind,
+gibt es oben einen zweiten Tab: **Portainer**. Er zeigt, welche Stacks laufen
+und welche Ports sie auf dem Host veröffentlicht haben — also genau die Ports,
+die HAProxy ansprechen kann. Von dort aus lassen sich Stacks aus GitHub oder
+GitLab ausrollen, mit einem Klick neu deployen (auf Wunsch mit frischen
+Images), und ein veröffentlichter Port wandert mit **→ HAProxy** direkt in den
+ersten Tab.
+
 **Du brauchst dafür kein Terminal.** Die ganze Anleitung unten funktioniert mit
 der Maus. (Wer lieber tippt, findet die Kommandozeile ganz unten.)
 
@@ -223,6 +231,12 @@ Den ursprünglich entpackten Ordner kannst du danach löschen.
 
 ## Das Fenster im Überblick
 
+**Oben links** die beiden großen Tabs, **HAProxy** und **Portainer**. Dieser
+Abschnitt beschreibt den ersten; der zweite hat weiter unten seinen eigenen.
+Die Kopfzeile und das Protokoll unten gehören beiden: der Umschalter für die
+Verbindung, die Statusanzeige und **Verbinden** meinen immer den Tab, der
+gerade vorne ist.
+
 **Oben rechts** liegen die Knöpfe: der Umschalter für die Verbindung, das
 Zahnrad ⚙ zum Bearbeiten, **Verbinden**, **⇩ Update**, **⤓ Installieren** und
 der Mond/Sonne-Knopf für hell oder dunkel. Was ein Knopf tut, verrät ein
@@ -264,6 +278,157 @@ dort — nicht in einem Popup, das man wegklickt und dann nicht mehr findet.
 
 Alle Abfragen laufen im Hintergrund, das Fenster friert also nicht ein, während
 die OPNsense antwortet. Theme und Fenstergröße merkt es sich.
+
+## Der zweite Tab: Portainer
+
+Oben sitzen zwei große Tabs. **HAProxy** ist alles, was oben beschrieben ist.
+**Portainer** ist die andere Hälfte: die Docker-Container, die hinter HAProxy
+stehen.
+
+Beide gehören zur selben Verbindung. Ein Standort hat eine OPNsense und einen
+Portainer, also steht beides im selben Profil — der Umschalter oben rechts
+schaltet beide zugleich um, und **Verbinden** gilt immer für den Tab, der
+gerade vorne ist.
+
+### Einrichten
+
+Im Zahnrad ⚙ gibt es den Abschnitt **Portainer**:
+
+* **Adresse** deines Portainers, z.B. `https://portainer.example.de:9443`.
+* **Anmeldung** — entweder ein **Zugriffstoken** (in Portainer oben rechts auf
+  den Benutzer, dann *My account → Access tokens*) oder **Benutzer und
+  Passwort** wie in der Weboberfläche. Beim Token wird nichts weiter gebraucht;
+  beim Passwort holt sich das Programm bei jedem Start selbst ein Token.
+* **IP des Docker-Hosts** — die Adresse, an die HAProxy die Anfragen schickt.
+  Bleibt sie leer, wird der Rechner aus der Portainer-Adresse genommen. Das
+  stimmt, solange Portainer auf demselben Host läuft wie die Container;
+  ansonsten hier die richtige IP eintragen.
+
+Läuft Portainer über mehrere Umgebungen (*Environments*), erscheint rechts oben
+in der Liste ein Auswahlfeld. Welche du zuletzt benutzt hast, merkt sich das
+Programm.
+
+### Was die Liste zeigt
+
+Jeder Stack als Karte: Name, Art (**Compose**), ob er sich selbst aktualisiert
+(**⟳ auto**), wie viele seiner Container laufen (**2/2**), und darunter das
+Repository, aus dem er kommt. Danach folgt Zeile für Zeile jeder Port, den er
+**auf dem Host veröffentlicht** hat:
+
+```
+8080  →  80/tcp     app                        HAProxy ✓
+9000  →  9000/tcp   app          nur lokal     → HAProxy
+```
+
+Links der Port auf dem Host, rechts daneben der Port im Container. Das ist die
+Zahl, die du für HAProxy brauchst: die linke.
+
+| | |
+| --- | --- |
+| **nur lokal** | Der Port ist an `127.0.0.1` gebunden. Von einem anderen Rechner — also auch von HAProxy — ist er nicht erreichbar. |
+| **HAProxy ✓** | Es gibt schon eine Rule, deren Real Server auf genau diese IP und diesen Port zeigt. |
+| **→ HAProxy** | Noch keine. Der Knopf legt sie an. |
+
+Container, die ohne Stack gestartet wurden, stehen darunter als eigene Gruppe —
+sie belegen dieselben Ports auf demselben Host, und ein Port, der schon vergeben
+ist, ist beim Planen genauso wichtig.
+
+Ob ein Port **wirklich aus dem Internet** erreichbar ist, kann Docker nicht
+sagen; das entscheidet die Firewall davor. Die Liste sagt daher, was sie weiß:
+woran der Port gebunden ist.
+
+### Vom Port zum Namen
+
+**→ HAProxy** öffnet ein kleines Fenster mit allem schon ausgefüllt: der
+Dienstname als Vorschlag, die IP des Docker-Hosts, der veröffentlichte Port.
+Du wählst noch die Basis-Domain und den Public Service, drückst **Anlegen** —
+und der Rest läuft wie im ersten Tab, samt DNS-Eintrag in AdGuard und
+Protokoll unten.
+
+Dafür muss der HAProxy-Tab verbunden sein; ohne die Public Services von der
+OPNsense weiß das Programm nicht, wo die Rule hin soll.
+
+### Einen Stack neu deployen
+
+**Neu deployen** auf der Karte fragt zwei Dinge:
+
+* **Images neu herunterladen (Update)** — an: Portainer holt die Images
+  frisch, der Stack läuft danach auf dem neuesten Stand. Aus: dieselben Images
+  werden noch einmal gestartet.
+* **Container entfernen, die nicht mehr in der Compose-Datei stehen** (prune).
+
+Kommt der Stack aus einem privaten Repository, kannst du Benutzer und Token
+angeben. Lässt du die Felder leer, benutzt Portainer die Zugangsdaten, die es
+für diesen Stack schon gespeichert hat — das ist der Normalfall.
+
+Stacks ohne Repository (in Portainer aus dem Editor angelegt) gehen genauso:
+dann wird die Compose-Datei benutzt, die Portainer für sie aufbewahrt.
+
+### Einen neuen Stack anlegen
+
+Links das Formular:
+
+* **Name** — Kleinbuchstaben, wie bei Portainer. Er wird zum Compose-Projekt.
+* **Repository** — die HTTPS-Adresse bei GitHub oder GitLab. Für Portainer ist
+  beides nur eine Git-URL, einen Unterschied gibt es nicht.
+* **Branch oder Tag** — leer heißt Standardbranch.
+* **Datei im Repository** — der Pfad zur Compose-Datei, voreingestellt
+  `docker-compose.yml`.
+* **Umgebungsvariablen** — eine Zeile je Variable, `KEY=wert`, genau wie im
+  Textfeld von Portainer. Leere Zeilen und `#`-Kommentare werden übergangen,
+  Anführungszeichen um den Wert fallen weg. Den Anfang macht der Knopf
+  **aus dem Repository** daneben, siehe unten.
+* **Privates Repository** — Benutzer und Token. Sie gehen an Portainer, das sie
+  beim Stack hinterlegt; **in der Konfigurationsdatei dieses Programms landen
+  sie nicht**.
+* **Automatisch aktualisieren** — *regelmäßig nachsehen* (Abstand als `5m`,
+  `30m`, `24h`) oder *auf Webhook warten*. Beim Webhook steht die fertige
+  URL nach dem Deploy im Protokoll; wer sie in GitHub oder GitLab als Webhook
+  einträgt, bekommt den Stack bei jedem Push neu ausgerollt.
+* **danach den Weg über HAProxy anbieten** — sobald die Container laufen, wird
+  für den ersten veröffentlichten Port gleich das Fenster von oben geöffnet.
+
+### Die Variablen aus dem Repository holen
+
+Neben *Umgebungsvariablen* sitzt der Knopf **aus dem Repository**. Er füllt das
+Feld schon einmal vor, damit du nur noch die Werte anpasst.
+
+Was dabei passiert:
+
+1. Die **Compose-Datei** wird gelesen — an dem Pfad, dem Branch und mit den
+   Zugangsdaten, die im Formular stehen. Daraus jedes `${VAR}`, samt Vorgabe
+   bei `${VAR:-wert}`. Das ist die verbindliche Liste dessen, was der Stack
+   braucht.
+2. Zeigt sie mit `env_file:` auf eine Datei, wird dort nachgesehen. Sonst
+   werden daneben und im Wurzelverzeichnis die üblichen Namen probiert:
+   `.env.example`, `.env`, `example.env`, `.env.sample`, `.env.template`,
+   `stack.env`. Beim ersten Treffer ist Schluss.
+3. Beides wird zusammengeführt und ins Feld geschrieben — mit einer
+   Kommentarzeile, woher welcher Teil kommt.
+
+```
+# aus docker/example.env
+UPLOAD_LOCATION=./library
+DB_PASSWORD=postgres
+
+# in docker/docker-compose.yml verwendet, bitte ausfüllen
+IMMICH_SERVER_URL=
+```
+
+**Was du schon eingetippt hast, bleibt.** Ergänzt wird nur, was noch fehlt —
+ein zweiter Druck fügt also nichts doppelt ein. Die Kommentarzeilen dürfen
+stehen bleiben, sie werden beim Deploy überlesen.
+
+Gelesen wird über Portainer, nicht von hier aus: GitHub und GitLab sind für
+Portainer dieselbe Git-URL, und ein privates Repository geht mit denselben
+Zugangsdaten, die auch der Deploy benutzt. Nebenbei ist das eine **Probe vor
+dem Deploy** — kommt die Compose-Datei zurück, stimmen Adresse, Branch, Pfad
+und Zugangsdaten. Sonst steht der Grund im Protokoll.
+
+Liegt im Repository eine echte `.env` (nicht `.env.example`), liest Docker
+Compose sie beim Deploy ohnehin selbst aus dem geklonten Verzeichnis. Was hier
+im Feld steht, setzt Portainer zusätzlich — praktisch zum Anpassen, aber nicht
+der einzige Weg, wie die Werte wirken.
 
 ## Mehrere OPNsense
 
@@ -392,6 +557,14 @@ beide werden mit **AND** verknüpft.
 * Zertifikate für den Public Service (Let's Encrypt o.ä.) verwaltet das
   Programm nicht — das bleibt Sache des ACME-Clients.
 * Den Public Service selbst legt es nicht an.
+* Bei Portainer geht es um **Compose-Stacks auf einem einzelnen Docker-Host**.
+  Swarm- und Kubernetes-Stacks werden in der Liste als solche gekennzeichnet,
+  aber nicht deployt — dort kommen die Ports aus den Services und nicht aus den
+  Containern, das wäre eine eigene Baustelle.
+* Ein Stack wird angelegt und neu deployt, aber nicht gelöscht und nicht
+  bearbeitet. Dafür ist Portainer selbst da.
+* Ob ein Port von außerhalb des Heimnetzes erreichbar ist, weiß Docker nicht;
+  die Liste sagt nur, an welche Adresse er auf dem Host gebunden ist.
 
 ---
 
@@ -406,6 +579,8 @@ normalen Gebrauch ist nichts davon nötig.
 | --- | --- |
 | `opnsense_haproxy.py` | Logik und CLI |
 | `haproxy_gui.py` | Fenster (tkinter) |
+| `portainer.py` | Portainer-API: Stacks, Container, Ports, Deploys |
+| `portainer_gui.py` | der zweite Tab |
 | `HAProxy-Starter.bat` | Doppelklick-Start für Windows |
 | `icon.png` / `icon.ico` | Symbol für Fenster und Starter |
 
@@ -500,7 +675,10 @@ Verbindungen:
       "verify_ssl": false,
       "adguard": { "url": "https://adguard.example.de",
                    "username": "admin", "password": "…",
-                   "target": "", "verify_ssl": false } },
+                   "target": "", "verify_ssl": false },
+      "portainer": { "url": "https://portainer.example.de:9443",
+                     "api_key": "ptr_…",
+                     "host_ip": "192.168.1.20", "verify_ssl": false } },
     { "name": "Zweitstandort", "url": "…", "key": "…", "secret": "…" }
   ]
 }
@@ -512,6 +690,14 @@ einzelnen Aufruf. Bei der AdGuard-`url` genügt die Adresse der Oberfläche — 
 kopierte Browser-Zeile (`https://adguard.example.de/#dns_rewrites`) geht
 genauso, der API-Pfad wird selbst angehängt. Fehlt das Schema, wird `https://`
 angenommen.
+
+Im `portainer`-Abschnitt gilt entweder `api_key` **oder** `username` und
+`password` — beim Speichern über das Zahnrad wird der jeweils andere Weg
+geleert, damit später nicht ein vergessener Rest entscheidet, womit angemeldet
+wird. `host_ip` ist die Adresse, an die HAProxy Anfragen an Container schickt;
+ohne Angabe wird der Rechner aus der `url` genommen. Zugangsdaten für private
+Git-Repositories stehen hier bewusst **nicht** — die werden beim Deploy
+abgefragt und gehen direkt an Portainer.
 
 Eine ältere Datei mit nur einer Verbindung ganz oben funktioniert unverändert
 weiter — sie erscheint als Verbindung „Standard".
