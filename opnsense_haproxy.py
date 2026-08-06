@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -1193,9 +1193,10 @@ def install_update(release, folder=None, report=None, timeout=60):
 # Everything an installation consists of. The icons are in here because the
 # desktop starter points at icon.png -- an installation without them would show
 # a blank tile in the task bar.
-INSTALL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "icon.png",
-                 "icon.ico", "HAProxy-Starter.bat", "README.md",
-                 "CHANGELOG.md", "config.example.json")
+INSTALL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
+                 "portainer_gui.py", "icon.png", "icon.ico",
+                 "HAProxy-Starter.bat", "README.md", "CHANGELOG.md",
+                 "config.example.json")
 RUNNABLE = ("opnsense_haproxy.py", "haproxy_gui.py")
 
 # The names the commands get in the bin folder. Underscores and a .py suffix

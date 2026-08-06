@@ -280,17 +280,21 @@ class MissingTab(ttk.Frame):
         ttk.Label(card, style="Hint.TLabel", anchor="center", justify="center",
                   wraplength=460,
                   text="Beim Aktualisieren sind portainer.py und "
-                       "portainer_gui.py nicht mitgekommen. Lade das Paket "
-                       "einmal von Hand herunter und entpacke es über den "
-                       "Programmordner — danach ist der Tab da.").grid(
+                       "portainer_gui.py nicht mitgekommen. Ein Update von "
+                       "hier aus holt sie nach — danach das Programm einmal "
+                       "neu starten, und der Tab ist da.").grid(
             row=1, column=0, sticky="ew", pady=(6, 12))
         # a button of its own, so _set_busy has the same handle it has on the
         # real tab
-        self.deploy_button = ttk.Button(card, text="Download öffnen",
+        self.deploy_button = ttk.Button(card, text="Update holen",
                                         style="Accent.TButton",
-                                        command=lambda: webbrowser.open(
-                                            AUTHOR_URL + "/releases/latest"))
+                                        command=self.app._check_update)
         self.deploy_button.grid(row=2, column=0)
+        # der Weg von Hand bleibt daneben stehen: in einer Arbeitskopie oder in
+        # einem schreibgeschützten Ordner lehnt das Update ab
+        self.app._link(card, "oder das Paket von Hand herunterladen",
+                       AUTHOR_URL + "/releases/latest").grid(
+            row=3, column=0, pady=(12, 0))
 
     def busy_buttons(self):
         return (self.deploy_button,)

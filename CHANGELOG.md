@@ -1,5 +1,19 @@
 # Änderungen
 
+## 1.4.1 — 6. August 2026
+
+**Nachreichen, was beim Sprung auf 1.4.0 liegengeblieben ist.**
+
+- **Der fehlende Portainer-Tab holt sich seine Dateien selbst.** Wer von 1.3.0
+  aus aktualisiert hat, bekam `portainer.py` und `portainer_gui.py` nicht mit —
+  die alte Fassung kannte diese Namen noch nicht und kopierte nur, was auf
+  ihrer Liste stand. Der Tab sagte daraufhin, man solle das Paket von Hand
+  holen. Das ist nicht mehr nötig: ein Update von 1.4.0 aus bringt beide
+  Dateien mit, und der Knopf im leeren Tab startet es. Nach einem Neustart des
+  Programms ist der Tab da.
+- **Installieren nimmt die Portainer-Dateien mit.** Beim Kopieren in einen
+  festen Ordner blieben sie bisher zurück, mit demselben leeren Tab als Folge.
+
 ## 1.4.0 — 6. August 2026
 
 **Zwei Tabs: HAProxy wie bisher, und daneben Portainer.**
