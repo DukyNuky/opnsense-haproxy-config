@@ -15,9 +15,9 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONTENTS = ("opnsense_haproxy.py", "haproxy_gui.py", "HAProxy-Starter.bat",
-            "icon.png", "icon.ico", "README.md", "CHANGELOG.md",
-            "config.example.json")
+CONTENTS = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
+            "portainer_gui.py", "HAProxy-Starter.bat", "icon.png", "icon.ico",
+            "README.md", "CHANGELOG.md", "config.example.json")
 
 
 def version():

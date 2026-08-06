@@ -20,6 +20,15 @@
         "verify_ssl": false
       },
 
+      "portainer": {
+        "url": "https://portainer.example.com:9443",
+        "api_key": "PASTE_PORTAINER_ACCESS_TOKEN_HERE",
+        "username": "",
+        "password": "",
+        "host_ip": "192.168.1.20",
+        "verify_ssl": false
+      },
+
       "defaults": {
         "ssl": false,
         "base_domain": "",

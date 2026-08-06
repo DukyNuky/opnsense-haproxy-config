@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -975,10 +975,12 @@ GITHUB_API = "https://api.github.com"
 # is ignored, so neither a stray file in the repository nor a manipulated
 # archive can drop something new into the user's folder -- and config.json /
 # gui.json are never in the list, so personal settings survive every update.
-UPDATE_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "HAProxy-Starter.bat",
+UPDATE_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
+                "portainer_gui.py", "HAProxy-Starter.bat",
                 "README.md", "CHANGELOG.md", "config.example.json",
                 "icon.png", "icon.ico")
-ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py")
+ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
+                   "portainer_gui.py")
 
 # The whole project is well under a megabyte; anything beyond this is either a
 # mistake or something we should not be unpacking.
@@ -1475,7 +1477,7 @@ def load_config(path):
 
 
 PROFILE_KEYS = ("name", "url", "key", "secret", "verify_ssl", "frontend",
-                "haproxy_ip", "adguard", "defaults")
+                "haproxy_ip", "adguard", "portainer", "defaults")
 
 
 def profiles_of(config):

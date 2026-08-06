@@ -37,6 +37,8 @@ AUTHOR_URL = "https://github.com/DukyNuky/opnsense-haproxy-config"
 NO_BASE = "— keine —"
 NEW_PROFILE = "＋ neue Verbindung …"
 EDIT_PROFILE = "⚙ diese bearbeiten …"
+TOKEN_LOGIN = "Zugriffstoken"
+USER_LOGIN = "Benutzer und Passwort"
 
 THEMES = {
     "light": {
@@ -254,6 +256,63 @@ class ScrollFrame(ttk.Frame):
         self.canvas.configure(bg=colors["surface"])
 
 
+class MissingTab(ttk.Frame):
+    """Stands in for the Portainer tab when its files did not come along.
+
+    An update run by a version that predates the Portainer half copies only
+    the files it knows, which leaves this program without them. Rather than
+    refusing to start, the second tab says so and points at the download.
+    """
+
+    connected = False
+    configured = False
+
+    def __init__(self, parent, app):
+        super().__init__(parent, style="TFrame")
+        self.app = app
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        card = ttk.Frame(self, style="Card.TFrame", padding=30)
+        card.grid(row=0, column=0, sticky="nsew")
+        card.columnconfigure(0, weight=1)
+        ttk.Label(card, text="Der Portainer-Teil fehlt", style="H2.TLabel",
+                  anchor="center").grid(row=0, column=0, sticky="ew")
+        ttk.Label(card, style="Hint.TLabel", anchor="center", justify="center",
+                  wraplength=460,
+                  text="Beim Aktualisieren sind portainer.py und "
+                       "portainer_gui.py nicht mitgekommen. Lade das Paket "
+                       "einmal von Hand herunter und entpacke es über den "
+                       "Programmordner — danach ist der Tab da.").grid(
+            row=1, column=0, sticky="ew", pady=(6, 12))
+        # a button of its own, so _set_busy has the same handle it has on the
+        # real tab
+        self.deploy_button = ttk.Button(card, text="Download öffnen",
+                                        style="Accent.TButton",
+                                        command=lambda: webbrowser.open(
+                                            AUTHOR_URL + "/releases/latest"))
+        self.deploy_button.grid(row=2, column=0)
+
+    def busy_buttons(self):
+        return (self.deploy_button,)
+
+    def status_text(self):
+        return "Portainer-Teil fehlt", False
+
+    def use_profile(self, _profile):
+        pass
+
+    def render(self):
+        pass
+
+    def apply_theme(self):
+        pass
+
+    def reload(self):
+        self.app.write_log(
+            "Portainer", [{"text": "portainer.py und portainer_gui.py fehlen in "
+                                   "diesem Ordner.", "level": "error"}], False)
+
+
 # --------------------------------------------------------------------------
 # connection dialog
 # --------------------------------------------------------------------------
@@ -275,7 +334,7 @@ class ProfileDialog(tk.Toplevel):
         # keep settings this dialog does not show, e.g. frontend and defaults
         self.extra = {k: v for k, v in profile.items()
                       if k not in ("name", "url", "key", "secret", "verify_ssl",
-                                   "haproxy_ip", "adguard")}
+                                   "haproxy_ip", "adguard", "portainer")}
         self.transient(parent)
         self.configure(bg=colors["bg"])
 
@@ -371,6 +430,102 @@ class ProfileDialog(tk.Toplevel):
             row=next(adg_rows), column=0, sticky="w", pady=(8, 0))
         self._toggle_adguard()
 
+        ttk.Separator(body, orient="horizontal").grid(
+            row=next(rows), column=0, sticky="ew", pady=12)
+
+        portainer = profile.get("portainer") or {}
+        self.pt_vars = {
+            "url": tk.StringVar(value=portainer.get("url", "")),
+            "api_key": tk.StringVar(value=portainer.get("api_key", "")),
+            "username": tk.StringVar(value=portainer.get("username", "")),
+            "password": tk.StringVar(value=portainer.get("password", "")),
+            "host_ip": tk.StringVar(value=portainer.get("host_ip", "")),
+        }
+        self.pt_verify = tk.BooleanVar(value=portainer.get("verify_ssl", False))
+        self.use_portainer = tk.BooleanVar(value=bool(portainer.get("url")))
+        self.pt_method = tk.StringVar(
+            value=USER_LOGIN if portainer.get("username") else TOKEN_LOGIN)
+
+        ttk.Label(body, text="Portainer", style="H2.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Checkbutton(body, text="Für diese Verbindung Stacks verwalten",
+                        variable=self.use_portainer, style="Card.TCheckbutton",
+                        command=self._toggle_portainer).grid(
+            row=next(rows), column=0, sticky="w", pady=(6, 0))
+        ttk.Label(body, style="Hint.TLabel", wraplength=330, justify="left",
+                  text="Ohne Haken bleibt der zweite Tab leer.").grid(
+            row=next(rows), column=0, sticky="w", pady=(2, 6))
+
+        self.pt_box = ttk.Frame(body, style="Card.TFrame")
+        self.pt_box.grid(row=next(rows), column=0, sticky="ew")
+        self.pt_box.columnconfigure(0, weight=1)
+        pt_rows = itertools.count()
+        ttk.Label(self.pt_box, text="Adresse", style="FieldLabel.TLabel").grid(
+            row=next(pt_rows), column=0, sticky="w", pady=(6, 3))
+        ttk.Entry(self.pt_box, textvariable=self.pt_vars["url"], width=40,
+                  style="Card.TEntry").grid(row=next(pt_rows), column=0,
+                                            sticky="ew")
+        ttk.Label(self.pt_box, text="z.B. https://portainer.example.de",
+                  style="Hint.TLabel").grid(row=next(pt_rows), column=0,
+                                            sticky="w", pady=(2, 0))
+
+        ttk.Label(self.pt_box, text="Anmeldung",
+                  style="FieldLabel.TLabel").grid(row=next(pt_rows), column=0,
+                                                  sticky="w", pady=(8, 3))
+        ttk.Combobox(self.pt_box, textvariable=self.pt_method, state="readonly",
+                     values=[TOKEN_LOGIN, USER_LOGIN],
+                     style="Card.TCombobox").grid(
+            row=next(pt_rows), column=0, sticky="ew")
+
+        self.pt_token_box = ttk.Frame(self.pt_box, style="Card.TFrame")
+        self.pt_token_box.grid(row=next(pt_rows), column=0, sticky="ew")
+        self.pt_token_box.columnconfigure(0, weight=1)
+        ttk.Label(self.pt_token_box, text="Zugriffstoken",
+                  style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w",
+                                                  pady=(8, 3))
+        ttk.Entry(self.pt_token_box, textvariable=self.pt_vars["api_key"],
+                  width=40, style="Card.TEntry", show="•").grid(row=1, column=0,
+                                                                sticky="ew")
+        ttk.Label(self.pt_token_box, style="Hint.TLabel", wraplength=330,
+                  justify="left",
+                  text="In Portainer oben rechts auf den Benutzer, dann "
+                       "My account → Access tokens.").grid(row=2, column=0,
+                                                           sticky="w",
+                                                           pady=(2, 0))
+
+        self.pt_user_box = ttk.Frame(self.pt_box, style="Card.TFrame")
+        self.pt_user_box.grid(row=next(pt_rows), column=0, sticky="ew")
+        self.pt_user_box.columnconfigure(0, weight=1)
+        user_rows = itertools.count()
+        for label, name, secret in (("Benutzer", "username", False),
+                                    ("Passwort", "password", True)):
+            ttk.Label(self.pt_user_box, text=label,
+                      style="FieldLabel.TLabel").grid(row=next(user_rows),
+                                                      column=0, sticky="w",
+                                                      pady=(8, 3))
+            ttk.Entry(self.pt_user_box, textvariable=self.pt_vars[name], width=40,
+                      style="Card.TEntry", show="•" if secret else "").grid(
+                row=next(user_rows), column=0, sticky="ew")
+
+        ttk.Label(self.pt_box, text="IP des Docker-Hosts",
+                  style="FieldLabel.TLabel").grid(row=next(pt_rows), column=0,
+                                                  sticky="w", pady=(8, 3))
+        ttk.Entry(self.pt_box, textvariable=self.pt_vars["host_ip"], width=40,
+                  style="Card.TEntry").grid(row=next(pt_rows), column=0,
+                                            sticky="ew")
+        ttk.Label(self.pt_box, style="Hint.TLabel", wraplength=330,
+                  justify="left",
+                  text="Dorthin schickt HAProxy die Anfragen für Container. "
+                       "Leer = der Rechner aus der Adresse oben.").grid(
+            row=next(pt_rows), column=0, sticky="w", pady=(2, 0))
+        ttk.Checkbutton(self.pt_box, text="TLS-Zertifikat von Portainer prüfen",
+                        variable=self.pt_verify,
+                        style="Card.TCheckbutton").grid(row=next(pt_rows),
+                                                        column=0, sticky="w",
+                                                        pady=(8, 0))
+        self.pt_method.trace_add("write", lambda *_a: self._toggle_portainer())
+        self._toggle_portainer()
+
         ttk.Label(body, style="Hint.TLabel", wraplength=330, justify="left",
                   text="Schlüssel: System → Zugriff → Benutzer, dann rechts in "
                        "der Zeile des Benutzers das Briefmarken-Symbol. "
@@ -428,6 +583,15 @@ class ProfileDialog(tk.Toplevel):
         else:
             self.adg_box.grid_remove()
 
+    def _toggle_portainer(self):
+        if not self.use_portainer.get():
+            self.pt_box.grid_remove()
+            return
+        self.pt_box.grid()
+        token = self.pt_method.get() == TOKEN_LOGIN
+        self.pt_token_box.grid() if token else self.pt_token_box.grid_remove()
+        self.pt_user_box.grid_remove() if token else self.pt_user_box.grid()
+
     def _centre(self, parent):
         x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 3
@@ -471,6 +635,35 @@ class ProfileDialog(tk.Toplevel):
                 # changing that later moves the DNS entries along
                 adguard["target"] = ""
             config["adguard"] = {**adguard, "verify_ssl": self.adg_verify.get()}
+        if self.use_portainer.get():
+            portainer = {name: var.get().strip()
+                         for name, var in self.pt_vars.items()}
+            if not portainer["url"]:
+                messagebox.showwarning(
+                    "Portainer unvollständig",
+                    "Ohne Adresse geht es nicht — oder den Haken entfernen.",
+                    parent=self)
+                return
+            # only one way in is kept, so a leftover from the other one cannot
+            # decide the login later
+            if self.pt_method.get() == TOKEN_LOGIN:
+                portainer["username"] = portainer["password"] = ""
+                if not portainer["api_key"]:
+                    messagebox.showwarning(
+                        "Portainer unvollständig",
+                        "Bitte das Zugriffstoken eintragen — oder unten auf "
+                        "Benutzer und Passwort umstellen.", parent=self)
+                    return
+            else:
+                portainer["api_key"] = ""
+                if not (portainer["username"] and portainer["password"]):
+                    messagebox.showwarning(
+                        "Portainer unvollständig",
+                        "Bitte Benutzer und Passwort eintragen — oder oben auf "
+                        "Zugriffstoken umstellen.", parent=self)
+                    return
+            config["portainer"] = {**portainer,
+                                   "verify_ssl": self.pt_verify.get()}
         config.update({k: v for k, v in self.extra.items() if k not in config})
         # the caller owns the file; it knows about the other profiles
         self.result = config
@@ -822,6 +1015,9 @@ class App(tk.Tk):
         self.busy = False
         self.results = queue.Queue()
         self.port_touched = False
+        # what the pill would say about the OPNsense side; the Portainer tab
+        # has an answer of its own and the header shows one of the two
+        self.haproxy_pill = ("nicht verbunden", "IdlePill.TLabel")
 
         self.update_release = None
         self.update_checking = False
@@ -1029,6 +1225,19 @@ class App(tk.Tk):
                         lightcolor=c["accent"], darkcolor=c["accent"],
                         borderwidth=0, thickness=4)
 
+        # Big tabs: the two halves of the program are a place to be, not a
+        # setting, so they get the size and the weight of a heading.
+        for name, fg, bg, border in (("Tab", c["muted"], c["surface"], c["border"]),
+                                     ("TabOn", c["accent"], c["accent_soft"],
+                                      c["accent"])):
+            style.configure(f"{name}.TButton", background=bg, foreground=fg,
+                            font=self.font_h2, padding=(30, 13), borderwidth=1,
+                            bordercolor=border, lightcolor=bg, darkcolor=bg,
+                            focuscolor=bg)
+            style.map(f"{name}.TButton", background=[("active", bg)],
+                      foreground=[("active", fg)],
+                      bordercolor=[("active", c["accent"])])
+
         style.configure("TSeparator", background=c["border"])
         style.configure("Vertical.TScrollbar", background=c["surface2"],
                         troughcolor=c["surface"], bordercolor=c["surface"],
@@ -1052,9 +1261,11 @@ class App(tk.Tk):
         self.inventory.apply_theme(c)
         self.form_scroll.apply_theme(c)
         self.theme_button.configure(text="☀" if self.theme_name == "dark" else "🌙")
-        self._paint_connect_button()
         self._paint_update_button()
         self._render_inventory()
+        self.portainer.apply_theme()
+        self._paint_tabs()
+        self.paint_connection()
 
     def _toggle_theme(self):
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
@@ -1064,18 +1275,88 @@ class App(tk.Tk):
     # -- layout ------------------------------------------------------------
 
     def _build(self):
-        self.columnconfigure(0, weight=0, minsize=380)
-        self.columnconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
         self._build_header()
-        self._build_form()
-        self._build_inventory()
+        self._build_tabs()
         self._build_log()
+
+    def _build_tabs(self):
+        """The two halves of the program, one behind each tab.
+
+        The strip is built by hand rather than from a ttk.Notebook: clam draws
+        the tab that is not chosen taller than the one that is, which reads as
+        a mistake, and no amount of styling talks it out of that.
+
+        portainer_gui is imported here rather than at the top of the file: it
+        borrows the widgets defined above, and a window is only ever built
+        after this module has finished loading, so the two can point at each
+        other without an import running in circles.
+        """
+        try:
+            import portainer_gui
+        except ImportError:
+            # An update installed by an older version copies only the files
+            # that version knew about, so this half can be missing on a fresh
+            # 1.4.0. The window still opens; the tab says what to do about it.
+            portainer_gui = None
+
+        strip = ttk.Frame(self, style="Head.TFrame")
+        strip.grid(row=1, column=0, sticky="nsew", padx=18)
+        strip.columnconfigure(0, weight=1)
+        strip.rowconfigure(1, weight=1)
+
+        bar = ttk.Frame(strip, style="Head.TFrame")
+        bar.grid(row=0, column=0, sticky="w")
+        pages = ttk.Frame(strip, style="TFrame", padding=(0, 12, 0, 0))
+        pages.grid(row=1, column=0, sticky="nsew")
+        pages.columnconfigure(0, weight=1)
+        pages.rowconfigure(0, weight=1)
+
+        proxy = ttk.Frame(pages, style="TFrame")
+        proxy.grid(row=0, column=0, sticky="nsew")
+        proxy.columnconfigure(0, weight=0, minsize=380)
+        proxy.columnconfigure(1, weight=1)
+        proxy.rowconfigure(0, weight=1)
+        self._build_form(proxy)
+        self._build_inventory(proxy)
+
+        self.portainer = (portainer_gui.PortainerTab(pages, self)
+                          if portainer_gui else MissingTab(pages, self))
+        self.portainer.grid(row=0, column=0, sticky="nsew")
+
+        self.pages = {"haproxy": proxy, "portainer": self.portainer}
+        self.tab_buttons = {}
+        for column, (name, label) in enumerate((("haproxy", "HAProxy"),
+                                                ("portainer", "Portainer"))):
+            button = ttk.Button(bar, text=label, style="Tab.TButton",
+                                command=lambda n=name: self.show_tab(n))
+            button.grid(row=0, column=column, padx=(0, 6))
+            self.tab_buttons[name] = button
+        self.current_tab = "haproxy"
+        self.show_tab("haproxy")
+
+    def show_tab(self, name):
+        """Bring one half to the front and let the header follow it."""
+        self.current_tab = name
+        for other, page in self.pages.items():
+            page.grid() if other == name else page.grid_remove()
+        self._paint_tabs()
+        self.paint_connection()
+
+    def _paint_tabs(self):
+        for name, button in self.tab_buttons.items():
+            button.configure(style="TabOn.TButton" if name == self.current_tab
+                             else "Tab.TButton")
+
+    def active_tab(self):
+        """Which half is in front -- the header speaks for that one."""
+        return getattr(self, "current_tab", "haproxy")
 
     def _build_header(self):
         head = ttk.Frame(self, style="Head.TFrame", padding=(18, 14, 18, 10))
-        head.grid(row=0, column=0, columnspan=2, sticky="ew")
+        head.grid(row=0, column=0, sticky="ew")
         head.columnconfigure(1, weight=1)
 
         titles = ttk.Frame(head, style="Head.TFrame")
@@ -1084,9 +1365,10 @@ class App(tk.Tk):
                                                                  sticky="w")
         ttk.Label(titles, text=f"v{core.VERSION}", style="Version.TLabel").grid(
             row=0, column=1, sticky="w", padx=(8, 0))
-        ttk.Label(titles, text="OPNsense Reverse Proxy",
-                  style="Muted.TLabel").grid(row=1, column=0, columnspan=2,
-                                             sticky="w")
+        # the line under the name says which half of the program is in front
+        self.subtitle = ttk.Label(titles, text="OPNsense Reverse Proxy",
+                                  style="Muted.TLabel")
+        self.subtitle.grid(row=1, column=0, columnspan=2, sticky="w")
 
         actions = ttk.Frame(head, style="Head.TFrame")
         actions.grid(row=0, column=2, sticky="e")
@@ -1149,11 +1431,11 @@ class App(tk.Tk):
                            pady=(4, 0))
         self.activity.grid_remove()
 
-    def _build_form(self):
+    def _build_form(self, parent):
         # The form is taller than a small window, so it lives in its own
         # scroller -- otherwise the buttons at the bottom become unreachable.
-        holder = ttk.Frame(self, style="Card.TFrame")
-        holder.grid(row=1, column=0, sticky="nsew", padx=(18, 9), pady=(0, 9))
+        holder = ttk.Frame(parent, style="Card.TFrame")
+        holder.grid(row=0, column=0, sticky="nsew", padx=(0, 9), pady=(0, 9))
         holder.rowconfigure(0, weight=1)
         holder.columnconfigure(0, weight=1)
         self.form_scroll = ScrollFrame(holder, self.colors)
@@ -1310,9 +1592,9 @@ class App(tk.Tk):
         ttk.Entry(parent, textvariable=self.var_prefix, style="Card.TEntry").grid(
             row=8, column=0, sticky="ew", pady=(4, 0))
 
-    def _build_inventory(self):
-        outer = ttk.Frame(self, style="Card.TFrame", padding=(16, 16, 8, 12))
-        outer.grid(row=1, column=1, sticky="nsew", padx=(9, 18), pady=(0, 9))
+    def _build_inventory(self, parent):
+        outer = ttk.Frame(parent, style="Card.TFrame", padding=(16, 16, 8, 12))
+        outer.grid(row=0, column=1, sticky="nsew", padx=(9, 0), pady=(0, 9))
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(2, weight=1)
 
@@ -1327,7 +1609,7 @@ class App(tk.Tk):
 
     def _build_log(self):
         self.log_frame = tk.Frame(self, bg=self.colors["surface"])
-        self.log_frame.grid(row=2, column=0, columnspan=2, sticky="nsew",
+        self.log_frame.grid(row=2, column=0, sticky="nsew",
                             padx=18, pady=(0, 18))
         self.log_frame.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=0, minsize=170)
@@ -1626,7 +1908,7 @@ class App(tk.Tk):
         self.busy = busy
         state = "disabled" if busy else "normal"
         for button in (self.submit_button, self.preview_button,
-                       self.connect_button):
+                       self.connect_button, *self.portainer.busy_buttons()):
             button.configure(state=state)
         self.configure(cursor="watch" if busy else "")
         if busy:
@@ -1654,6 +1936,63 @@ class App(tk.Tk):
             self.results.put(("done", callback, None, payload, None))
 
         threading.Thread(target=task, daemon=True).start()
+
+    # -- what the Portainer tab borrows ------------------------------------
+    #
+    # The window owns the thread, the progress strip and the log. The tab asks
+    # for them through these four rather than reaching into the underscores.
+
+    def run_async(self, work, callback, on_error=None, activity=""):
+        self._run_async(work, callback, on_error=on_error, activity=activity)
+
+    def set_busy(self, busy, activity=""):
+        self._set_busy(busy, activity)
+
+    def write_log(self, title, lines, ok=None):
+        self._write_log(title, lines, ok)
+
+    def open_settings(self):
+        self._open_settings()
+
+    def remember_endpoint(self, endpoint_id):
+        """Keep the chosen Docker environment with the preferences.
+
+        It belongs to the connection but not in the config file: it is a view,
+        not a credential, and writing the config would rewrite the profiles.
+        """
+        chosen = dict(self.prefs.get("portainer_endpoint") or {})
+        chosen[self.profile.get("name", "")] = endpoint_id
+        self.prefs["portainer_endpoint"] = chosen
+        save_prefs(self.prefs)
+
+    def provision_host(self, values):
+        """Create a HAProxy host for a container port from the Portainer tab."""
+        if self.busy or not self.api:
+            return
+        opts = argparse.Namespace(
+            base_domain=values["base_domain"],
+            dns_target=self.adguard_target,
+            target=values["target"],
+            ip=values["ip"],
+            port=values["port"],
+            ssl=values["ssl"],
+            ssl_verify=False,
+            frontend=values["frontend"],
+            backend_mode=None,
+            healthcheck=values["healthcheck"],
+            forward_for=True,
+            prefix="",
+            dry_run=False,
+            no_apply=self.var_no_apply.get(),
+            yes=True,
+        )
+        adguard = self.adguard if values.get("dns") else None
+        client = self.api
+        self._run_async(
+            lambda report: core.run_step(core.provision, client, opts, adguard,
+                                         log=LiveLog(report)),
+            lambda result: self._step_done(result, False, clear=False),
+            activity=f"lege {values['target']} an …")
 
     # -- updates -----------------------------------------------------------
 
@@ -1771,13 +2110,16 @@ class App(tk.Tk):
         self.connected = False
         self.services, self.domains = [], []
         self.var_profile.set(self.profile.get("name", ""))
+        # both halves belong to the same place, so the Portainer tab follows
+        # the connection that was just chosen -- without reaching out yet
+        self.portainer.use_profile(self.profile)
         try:
             self.api = core.build_client(self.args, self.profile)
         except core.UsageError:
             self.api = None
             self._set_status(None, "keine Zugangsdaten")
             self._refresh_fqdn()
-            self._paint_connect_button()
+            self.paint_connection()
             self._render_inventory()
             if first_run:
                 self._edit_profile(self.profile, is_new=not self.profiles)
@@ -1785,22 +2127,36 @@ class App(tk.Tk):
         self._build_adguard()
         if not connect:
             self._set_status(None, "nicht verbunden", idle=True)
-            self._paint_connect_button()
+            self.paint_connection()
             self._render_inventory()
             return
         self.reload()
 
     def _connect_now(self):
-        """The connect button: get credentials first if there are none yet."""
+        """The connect button: it works on whichever tab is in front."""
+        if self.active_tab() == "portainer":
+            self.portainer.reload()
+            return
         if not self.api:
             self._edit_profile(self.profile, is_new=not self.profiles)
             return
         self.reload()
 
-    def _paint_connect_button(self):
+    def paint_connection(self):
+        """Let the pill and the connect button speak for the tab in front."""
+        if self.active_tab() == "portainer":
+            text, ok = self.portainer.status_text()
+            style = "OkPill.TLabel" if ok else "IdlePill.TLabel"
+            connected = self.portainer.connected
+            self.subtitle.configure(text="Docker-Stacks über Portainer")
+        else:
+            text, style = self.haproxy_pill
+            connected = self.connected
+            self.subtitle.configure(text="OPNsense Reverse Proxy")
+        self.status_pill.configure(text=text, style=style)
         self.connect_button.configure(
-            text="Neu laden" if self.connected else "Verbinden",
-            style="Tool.TButton" if self.connected else "Accent.TButton")
+            text="Neu laden" if connected else "Verbinden",
+            style="Tool.TButton" if connected else "Accent.TButton")
 
     def _switch_profile(self):
         choice = self.var_profile.get()
@@ -1920,7 +2276,7 @@ class App(tk.Tk):
     def _connect_failed(self, _error):
         self.connected = False
         self._set_status(None)
-        self._paint_connect_button()
+        self.paint_connection()
         self._render_inventory()
 
     def _state_loaded(self, state):
@@ -1931,7 +2287,7 @@ class App(tk.Tk):
         self.rewrites = state["rewrites"]
         self.rewrites_error = state["rewrites_error"]
         self._set_status(state["status"])
-        self._paint_connect_button()
+        self.paint_connection()
 
         names = [service["name"] for service in self.services]
         self.frontend_box.configure(values=names,
@@ -1955,17 +2311,22 @@ class App(tk.Tk):
 
         self._refresh_fqdn()
         self._render_inventory()
+        # the ports over there are marked with what HAProxy already does with
+        # them, so a fresh reading of the rules changes that list too
+        self.portainer.render()
 
     def _set_status(self, status, error=None, idle=False):
+        # kept rather than shown right away: the pill belongs to whichever tab
+        # is in front, and this is only the HAProxy side's half of it
         if error or status is None:
-            self.status_pill.configure(
-                text=error or "nicht erreichbar",
-                style="IdlePill.TLabel" if idle else "BadPill.TLabel")
-            return
-        running = "running" in str(status).lower()
-        self.status_pill.configure(
-            text="HAProxy läuft" if running else f"HAProxy: {status}",
-            style="OkPill.TLabel" if running else "BadPill.TLabel")
+            self.haproxy_pill = (error or "nicht erreichbar",
+                                 "IdlePill.TLabel" if idle else "BadPill.TLabel")
+        else:
+            running = "running" in str(status).lower()
+            self.haproxy_pill = (
+                "HAProxy läuft" if running else f"HAProxy: {status}",
+                "OkPill.TLabel" if running else "BadPill.TLabel")
+        self.paint_connection()
 
     def _form_options(self, dry_run):
         healthcheck = self.var_healthcheck.get()
@@ -2047,7 +2408,7 @@ class App(tk.Tk):
         marker = rule["name"].find("rule_")
         return rule["name"][:marker] if marker > 0 else ""
 
-    def _step_done(self, result, dry_run):
+    def _step_done(self, result, dry_run, clear=True):
         self._set_busy(False)
         lines = list(result["log"])
         if result.get("error"):
@@ -2058,10 +2419,13 @@ class App(tk.Tk):
             else "Fehlgeschlagen"
         self._write_log(title, lines, result["ok"])
         if result["ok"] and not dry_run:
-            self.var_target.set("")
-            self.var_ip.set("")
-            self.var_port.set("")
-            self.port_touched = False
+            # a host created from the Portainer tab must not empty the form
+            # somebody may have been filling in over here
+            if clear:
+                self.var_target.set("")
+                self.var_ip.set("")
+                self.var_port.set("")
+                self.port_touched = False
             self.reload()
 
     # -- small interactions ------------------------------------------------
