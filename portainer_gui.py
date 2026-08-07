@@ -48,6 +48,8 @@ class PortainerTab(ttk.Frame):
         self.last_deploy = None
         self.link_after_deploy = True
         self.dialog = None
+        # what a deploy is waiting to do while the environment is being checked
+        self.pending = None
         # stacks whose port list is unfolded; the listing is rebuilt often, so
         # the answer cannot live on the widgets themselves
         self.unfolded = set()
@@ -596,11 +598,114 @@ class PortainerTab(ttk.Frame):
             skip_tls_verify=values["skip_tls_verify"],
         )
         self.link_after_deploy = values["link"]
+        # Names and ports are the host's to hand out, and Portainer only finds
+        # that out halfway through creating the stack. Asking first costs one
+        # read of the repository and can still be answered here.
+        self.pending = opts
+        client = self.client
+        state = self.state
+        self.app.run_async(
+            lambda report: pcore.run_step(pcore.check_deploy, client, opts,
+                                          state, log=ui.LiveLog(report)),
+            self._checked, activity=f"prüfe {name} …")
+
+    def _checked(self, result):
+        """What the environment already has, before anything is created."""
+        self.app.set_busy(False)
+        opts, self.pending = self.pending, None
+        if opts is None:
+            return
+        if not result["ok"]:
+            # the compose file could not be read -- whatever is wrong with the
+            # repository, Portainer says it better while deploying
+            self._start_deploy(opts)
+            return
+        clashes = result["result"]["clashes"]
+        if not clashes:
+            self._start_deploy(opts)
+            return
+        answer = self._ask_clashes(clashes, result["result"]["compose"])
+        if answer is None:
+            self.app.write_log(
+                "Deploy abgebrochen",
+                list(result["log"])
+                + [{"text": "= nichts angelegt", "level": "info"}], False)
+            return
+        if answer:
+            self._resolve(opts, clashes)
+        self._start_deploy(opts)
+
+    def _ask_clashes(self, clashes, compose):
+        """Ask what to do about it: change the values, deploy anyway, or stop.
+
+        Returns True for the way out that was offered, False for deploying as
+        it stands, None for going back to the form.
+        """
+        fixable = [clash for clash in clashes
+                   if clash["variable"] and clash["suggest"]]
+        text = self._clash_text(clashes, compose, fixable)
+        # the form may have been closed while the repository was being read
+        parent = self.dialog if (self.dialog is not None
+                                 and self.dialog.winfo_exists()) else self
+        if not fixable:
+            return False if messagebox.askyesno(
+                "Schon vergeben", text, default=messagebox.NO,
+                parent=parent) else None
+        answer = messagebox.askyesnocancel("Schon vergeben", text,
+                                           parent=parent)
+        return answer if answer is None else bool(answer)
+
+    def _clash_text(self, clashes, compose, fixable):
+        """The whole story in one box: what is taken, by whom, and what helps."""
+        kinds = {"name": "Container-Name", "port": "Host-Port"}
+        lines = [f"Auf {self.target_text()} ist schon vergeben:", ""]
+        for clash in clashes:
+            owner = clash["stack"] or clash["container"] or "einem Container"
+            lines.append(f"• {kinds[clash['kind']]} „{clash['value']}“ "
+                         f"— belegt von {owner}")
+        lines += ["",
+                  "Container-Namen und Host-Ports gelten für den ganzen "
+                  "Docker-Host, nicht für den einzelnen Stack. Docker würde "
+                  "den Deploy darum abweisen."]
+        if fixable:
+            lines += ["", "Diese Werte kommen aus Variablen und lassen sich "
+                          "hier ändern:"]
+            lines += [f"    {clash['variable']}={clash['suggest']}"
+                      for clash in fixable]
+        stuck = [clash for clash in clashes if not clash["variable"]]
+        if stuck:
+            lines += ["", f"Fest in {compose} eingetragen — das geht nur im "
+                          f"Repository selbst:"]
+            lines += [f"    {kinds[clash['kind']]} {clash['value']}"
+                      for clash in stuck]
+        if fixable:
+            lines += ["", "Ja: Variablen eintragen und deployen.",
+                      "Nein: unverändert deployen.",
+                      "Abbrechen: zurück zum Formular."]
+        else:
+            lines += ["", "Trotzdem deployen?"]
+        return "\n".join(lines)
+
+    def _resolve(self, opts, clashes):
+        """Put the free values into the environment, in the form and the deploy."""
+        values = {clash["variable"]: str(clash["suggest"]) for clash in clashes
+                  if clash["variable"] and clash["suggest"]}
+        if not values:
+            return
+        opts.env_text = pcore.put_env(
+            opts.env_text, values,
+            note="damit der Stack neben dem bestehenden laufen kann")
+        # the form keeps the same text: a second try after a failed deploy
+        # should start from what was actually sent
+        if self.dialog is not None and self.dialog.winfo_exists():
+            self.dialog.set_env(opts.env_text)
+
+    def _start_deploy(self, opts):
         client = self.client
         self.app.run_async(
             lambda report: pcore.run_step(pcore.deploy, client, opts,
                                           log=ui.LiveLog(report)),
-            self._deployed, activity=f"deploye {name} …")
+            self._deployed, activity=f"deploye {opts.name} …")
 
     def target_text(self):
         """Where a deploy would land, in words -- Portainer and environment."""
@@ -615,6 +720,9 @@ class PortainerTab(ttk.Frame):
         lines = list(result["log"])
         if result.get("error"):
             lines.append({"text": result["error"], "level": "error"})
+            hint = self._conflict_hint(result["error"])
+            if hint:
+                lines.append({"text": hint, "level": "info"})
         title = "Stack deployt" if result["ok"] else "Deploy fehlgeschlagen"
         if result["ok"]:
             # A webhook is only useful once its address is known, and Portainer
@@ -634,6 +742,31 @@ class PortainerTab(ttk.Frame):
             self.dialog.destroy()
         self.dialog = None
         self.after(1200, self.reload)
+
+    @staticmethod
+    def _conflict_hint(message):
+        """Docker's own words about a collision, said in the tab's language.
+
+        The check before the deploy catches most of these. What still gets
+        here came from a compose file that could not be read beforehand, or
+        from a container that appeared in the meantime.
+        """
+        clash = pcore.conflict_in(message)
+        if not clash:
+            return ""
+        if clash["kind"] == "name":
+            return (f"= Der Container-Name „{clash['value']}“ ist auf diesem "
+                    f"Docker-Host schon vergeben. Er gilt dort einmal, nicht "
+                    f"einmal pro Stack: damit zwei Stacks aus demselben "
+                    f"Repository laufen können, muss container_name im "
+                    f"Compose-File aus einer Variablen kommen "
+                    f"(container_name: ${{STACK_NAME:-{clash['value']}}}) oder "
+                    f"ganz entfallen — dann benennt Docker die Container nach "
+                    f"dem Stack.")
+        return (f"= Host-Port {clash['value']} ist auf diesem Docker-Host schon "
+                f"belegt. Kommt er im Compose-File aus einer Variablen, reicht "
+                f"hier ein anderer Wert; sonst muss er im Repository geändert "
+                f"werden.")
 
     def _offer_link(self, stack_name):
         """After a deploy: suggest the way in for the first published port."""
@@ -960,6 +1093,12 @@ class DeployDialog(tk.Toplevel):
 
     def env_value(self):
         return self.env_text.get("1.0", "end")
+
+    def set_env(self, text):
+        """Replace the block -- used when a value had to be changed in place."""
+        self.env_text.delete("1.0", "end")
+        self.env_text.insert("1.0", text)
+        self.env_text.see("end")
 
     def add_env(self, block):
         """Append what the repository had to say, and say how much that was."""

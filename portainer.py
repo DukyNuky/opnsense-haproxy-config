@@ -284,6 +284,47 @@ class Portainer:
                          method="PUT")
 
 
+# What the Docker daemon says when a name or a host port is already taken. Its
+# words arrive verbatim inside Portainer's 500, so they are matched rather than
+# guessed at.
+NAME_IN_USE = re.compile(
+    r'container name\s+"?/?(?P<name>[^"\s]+)"?\s+is already in use', re.I)
+PORT_TAKEN = re.compile(
+    r"(?P<before>.*?)(?:port is already allocated|address already in use)",
+    re.I | re.S)
+# The daemon has two ways of naming the port it could not have, and they are
+# not read the same: "Bind for 0.0.0.0:8088 failed" ends with the host port,
+# "bind host port for 0.0.0.0:8088:172.18.0.2:8080" carries the container side
+# behind it.
+BIND_FOR = re.compile(r"bind for\s+\S*?:(?P<port>\d+)", re.I)
+HOST_PORT_FOR = re.compile(r"host port for\s+\S*?:(?P<port>\d+):", re.I)
+
+
+def conflict_in(message):
+    """What a failed deploy collided with, read out of the error text.
+
+    Returns ``{"kind": "name"|"port", "value": ...}`` or None. Both kinds mean
+    the same thing: something in the compose file belongs to the whole Docker
+    host, not to one stack, and a second stack out of the same repository asked
+    for it again.
+    """
+    text = str(message or "")
+    found = NAME_IN_USE.search(text)
+    if found:
+        return {"kind": "name", "value": found.group("name").lstrip("/")}
+    taken = PORT_TAKEN.search(text)
+    if not taken:
+        return None
+    before = taken.group("before")
+    found = HOST_PORT_FOR.search(before) or BIND_FOR.search(before)
+    if found:
+        return {"kind": "port", "value": int(found.group("port"))}
+    # some other wording for the same thing: the last port named before the
+    # complaint is the best guess left
+    numbers = re.findall(r":(\d+)", before)
+    return {"kind": "port", "value": int(numbers[-1])} if numbers else None
+
+
 def _message_of(raw):
     """The readable part of an error body -- Portainer answers in JSON."""
     try:
@@ -509,6 +550,34 @@ def env_text(variables):
                      for entry in variables or [])
 
 
+def put_env(text, values, note=""):
+    """Write these variables into an environment block, keeping the rest of it.
+
+    A name already in there is changed where it stands: a second line for the
+    same name would leave the block saying two things, and only one of them
+    would reach Docker. What is not in there yet is appended under ``note``, so
+    the block still says where each part came from.
+    """
+    lines = str(text or "").splitlines()
+    left = dict(values or {})
+    for index, line in enumerate(lines):
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        if entry.lower().startswith("export "):
+            entry = entry[7:].lstrip()
+        name = entry.split("=", 1)[0].strip()
+        if name in left:
+            lines[index] = f"{name}={left.pop(name)}"
+    if left:
+        if any(line.strip() for line in lines):
+            lines.append("")
+        if note:
+            lines.append(f"# {note}")
+        lines.extend(f"{name}={value}" for name, value in left.items())
+    return "\n".join(lines).strip("\n") + "\n"
+
+
 def read_env_file(text):
     """Read a ``.env`` found in a repository, forgiving what it finds.
 
@@ -621,6 +690,108 @@ def compose_env_files(text):
     return list(dict.fromkeys(name for name in names if name))
 
 
+def expand(text, variables=None):
+    """Fill in ``${VAR}`` the way compose will, from what this deploy sets.
+
+    Only the two cases that have an answer here: a variable the deploy gives a
+    value, and one that carries its own fallback. Anything else is left as it
+    stands -- unknown reads better further up than wrongly resolved.
+    """
+    values = {entry.get("name"): entry.get("value", "")
+              for entry in (variables or []) if entry.get("name")}
+
+    def swap(match):
+        name = match.group("braced") or match.group("plain")
+        if values.get(name):
+            return values[name]
+        if match.group("braced") and match.group("how") in (":-", "-"):
+            return (match.group("default") or "").strip()
+        return match.group(0)
+
+    return VARIABLE.sub(swap, str(text or ""))
+
+
+def variable_in(text):
+    """The first ``${VAR}`` in a value, so a clash can name what to set."""
+    found = VARIABLE.search(str(text or ""))
+    return (found.group("braced") or found.group("plain")) if found else ""
+
+
+def compose_names(text):
+    """The container names a compose file pins with ``container_name:``.
+
+    Such a name is not the stack's to vary: Docker hands out container names
+    once per host, so two stacks from one repository ask for the same one and
+    the second is refused. Read by line, for the reason given at env_file.
+    """
+    names = []
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("container_name:"):
+            continue
+        value = _scalar(stripped[len("container_name:"):])
+        if value:
+            names.append(value)
+    return list(dict.fromkeys(names))
+
+
+def compose_port_entries(text):
+    """Every line under a ``ports:`` key, still as written.
+
+    Unresolved on purpose: which variable a port comes from is what makes the
+    difference between a clash somebody can answer in the form and one that
+    needs a change in the repository.
+    """
+    entries, lines, index = [], str(text or "").splitlines(), 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        stripped = line.strip()
+        if not stripped.startswith("ports:"):
+            continue
+        inline = stripped[len("ports:"):].strip()
+        if inline and not inline.startswith("#"):
+            entries.extend(_scalars(inline))
+            continue
+        indent = len(line) - len(line.lstrip())
+        while index < len(lines):
+            following = lines[index]
+            if not following.strip():
+                index += 1
+                continue
+            if len(following) - len(following.lstrip()) <= indent:
+                break
+            item = following.strip()
+            index += 1
+            if item.startswith("-"):
+                item = item[1:].strip()
+            if item and not item.startswith("#"):
+                entries.append(item)
+    return list(dict.fromkeys(entries))
+
+
+def host_port_of(entry):
+    """The host port one ``ports:`` entry publishes, or 0 when it has none.
+
+    ``8088:8080`` and ``127.0.0.1:8088:8080`` both name their host port second
+    from the end; the long form spells it out under ``published:``. A container
+    port on its own gets a free host port from Docker and can never collide, and
+    a range is left alone -- a wrong warning is worse here than none.
+    """
+    value = str(entry or "").strip()
+    if value.startswith("published:"):
+        value = _scalar(value[len("published:"):])
+        return int(value) if value.isdigit() else 0
+    value = _scalar(value)
+    if "/" in value:
+        value = value.rsplit("/", 1)[0]
+    parts = value.split(":")
+    if len(parts) < 2:
+        return 0
+    host = parts[-2].strip()
+    return int(host) if host.isdigit() else 0
+
+
 def env_paths(compose_file, named=()):
     """Where to look for an environment file, most likely first.
 
@@ -676,9 +847,108 @@ def port_owner(state, host_port):
     return None
 
 
+def containers_of(state):
+    """Every container the last reading found, in a stack or beside one."""
+    listed = [container for stack in state["stacks"]
+              for container in stack["containers"]]
+    listed.extend(state["loose"])
+    return listed
+
+
+def name_owner(state, name):
+    """Which container already answers to that name, if any."""
+    wanted = str(name or "").lstrip("/")
+    for container in containers_of(state):
+        if container["name"] == wanted:
+            return container
+    return None
+
+
+def free_name(state, wanted):
+    """``wanted`` if it is free, otherwise the same with a number behind it."""
+    base = str(wanted or "").strip("-") or "stack"
+    if not name_owner(state, base):
+        return base
+    for number in range(2, 100):
+        candidate = f"{base}-{number}"
+        if not name_owner(state, candidate):
+            return candidate
+    return base
+
+
+def free_port(state, wanted):
+    """The first free host port from ``wanted`` upwards."""
+    port = int(wanted or 0)
+    while port and port < 65536 and port_owner(state, port):
+        port += 1
+    return port
+
+
 # --------------------------------------------------------------------------
 # the steps a window runs
 # --------------------------------------------------------------------------
+
+
+def check_deploy(client, opts, state, out=print):
+    """Ask what this stack wants for itself and whether the host still has it.
+
+    Container names and published ports belong to the Docker host, not to the
+    stack that asks for them. Portainer notices that only while deploying, and
+    answers with the daemon's own words -- "the container name is already in
+    use" -- after the stack has been created and left half standing.
+
+    Reading the compose file first costs one clone and says the same thing
+    while it can still be answered. Every clash carries the variable its value
+    came from: one written into the compose file cannot be helped from here,
+    one out of a ``${VAR}`` is a line in the environment box.
+    """
+    compose_path = (getattr(opts, "compose_file", "") or "").strip() \
+        or DEFAULT_COMPOSE_FILE
+    compose = client.repo_file(
+        opts.repository, compose_path,
+        reference=getattr(opts, "reference", ""),
+        username=getattr(opts, "username", ""),
+        password=getattr(opts, "password", ""),
+        skip_tls_verify=bool(getattr(opts, "skip_tls_verify", False)))
+    variables = parse_env(getattr(opts, "env_text", ""))
+    # the stack's own name is the obvious way out of a name clash: it is unique
+    # on this Portainer already, and it says which of the two this container is
+    wanted = getattr(opts, "name", "")
+    wanted = core.slug(wanted, allow_dots=False).lower() if wanted else ""
+
+    clashes = []
+    for raw in compose_names(compose):
+        name = expand(raw, variables)
+        if VARIABLE.search(name):
+            continue  # a variable nobody filled in; Portainer will say so
+        holder = name_owner(state, name)
+        out(f"container name {name}"
+            + (f" -- taken by {holder['stack'] or 'a loose container'}"
+               if holder else " is free"))
+        if holder:
+            clashes.append({
+                "kind": "name", "value": name, "variable": variable_in(raw),
+                "suggest": free_name(state, wanted or name),
+                "container": holder["name"], "stack": holder["stack"]})
+
+    for raw in compose_port_entries(compose):
+        port = host_port_of(expand(raw, variables))
+        if not port:
+            continue
+        owner = port_owner(state, port)
+        out(f"host port {port}"
+            + (f" -- taken by {owner.get('container', '?')}"
+               if owner else " is free"))
+        if owner:
+            clashes.append({
+                "kind": "port", "value": port, "variable": variable_in(raw),
+                "suggest": free_port(state, port),
+                "container": owner.get("container", ""),
+                "stack": owner.get("stack", "")})
+
+    if clashes:
+        out(f"= {len(clashes)} of them already in use on this environment")
+    return {"compose": compose_path, "clashes": clashes}
 
 
 def deploy(client, opts, out=print):

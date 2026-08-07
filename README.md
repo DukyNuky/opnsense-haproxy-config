@@ -80,7 +80,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.0.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.0.0.zip)**
+**[opnsense-haproxy-2.1.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.1.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -456,6 +456,50 @@ Liegt im Repository eine echte `.env` (nicht `.env.example`), liest Docker
 Compose sie beim Deploy ohnehin selbst aus dem geklonten Verzeichnis. Was hier
 im Feld steht, setzt Portainer zusätzlich — praktisch zum Anpassen, aber nicht
 der einzige Weg, wie die Werte wirken.
+
+### Zweimal dasselbe Repository
+
+Ein zweiter Stack aus demselben Repository — die Vorschau neben dem laufenden
+Stand — scheitert leicht an etwas, das nicht dem Stack gehört, sondern dem
+ganzen Docker-Host: dem **Container-Namen** und dem **Host-Port**. Beide gibt es
+dort nur einmal. Docker lehnt den zweiten Stack dann mit
+`the container name "/dhom-time" is already in use` ab, und in Portainer bleibt
+ein halb angelegter Stack stehen.
+
+Darum sieht das Programm **vor** dem Deploy nach. Es liest die Compose-Datei
+(dieselbe Leseweise wie oben), rechnet die Variablen mit dem aus, was im Feld
+steht, und vergleicht das Ergebnis mit dem, was auf der Umgebung schon läuft.
+Findet es etwas, kommt der Deploy gar nicht erst los:
+
+```
+Auf Portainer · docker-01 ist schon vergeben:
+
+• Container-Name „dhom-time“ — belegt von dhom-time
+• Host-Port 8088 — belegt von dhom-time
+
+Container-Namen und Host-Ports gelten für den ganzen Docker-Host, nicht für
+den einzelnen Stack. Docker würde den Deploy darum abweisen.
+
+Diese Werte kommen aus Variablen und lassen sich hier ändern:
+    DHOM_TIME_NAME=dhom-time-vorschau
+    DHOM_TIME_PORT=8089
+```
+
+**Ja** trägt die freien Werte in die Umgebungsvariablen ein — an Ort und Stelle,
+falls die Variable schon im Feld steht — und deployt damit. Der Name kommt vom
+Stack selbst, der Port ist der nächste freie darüber. **Nein** deployt
+unverändert, **Abbrechen** führt zurück ins Formular.
+
+Steht der Wert fest in der Compose-Datei (`container_name: dhom-time` statt
+`container_name: ${DHOM_TIME_NAME:-dhom-time}`), kann das Programm nichts
+anbieten: dann hilft nur eine Änderung im Repository — die Zeile auf eine
+Variable umstellen oder ganz streichen, dann benennt Docker die Container nach
+dem Stack. Gesagt wird es trotzdem, mitsamt dem Namen dessen, der den Wert
+gerade hält.
+
+Kommt eine solche Absage doch von Portainer — weil die Compose-Datei vorher
+nicht zu lesen war oder in der Zwischenzeit ein Container dazukam —, steht
+unter der Fehlermeldung im Protokoll dieselbe Erklärung.
 
 ## Mehrere Systeme
 

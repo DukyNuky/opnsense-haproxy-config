@@ -1,5 +1,31 @@
 # Änderungen
 
+## 2.1.0 — 8. August 2026
+
+**Ein zweiter Stack aus demselben Repository scheitert nicht mehr erst beim
+Deployen an einem Namen, den es auf dem Host schon gibt.**
+
+- **Vor dem Deploy wird nachgesehen, was schon vergeben ist.** Das Programm
+  liest die Compose-Datei, rechnet die Variablen mit dem aus, was im Feld
+  steht, und vergleicht **Container-Namen** und **Host-Ports** mit dem, was auf
+  der Umgebung läuft. Beides gehört dem ganzen Docker-Host, nicht dem einzelnen
+  Stack — bisher fiel das erst auf, wenn Docker mitten im Anlegen mit
+  `the container name "/…" is already in use` abbrach und in Portainer ein halb
+  fertiger Stack stehen blieb.
+- **Und ein Weg heraus wird gleich angeboten.** Kommt der Wert aus einer
+  Variablen, schlägt das Fenster freie Werte vor — den Stacknamen für den
+  Container, den nächsten freien Port darüber — und trägt sie auf Wunsch in die
+  Umgebungsvariablen ein, an Ort und Stelle, wenn die Variable dort schon
+  steht. *Nein* deployt unverändert, *Abbrechen* führt zurück ins Formular.
+- **Steht der Wert fest in der Compose-Datei**, sagt das Fenster genau das,
+  samt dem Namen dessen, der ihn gerade hält: zu ändern ist er dann nur im
+  Repository, indem `container_name` auf eine Variable zeigt oder ganz
+  entfällt.
+- **Kommt die Absage doch von Portainer**, weil die Compose-Datei vorher nicht
+  zu lesen war oder in der Zwischenzeit ein Container dazukam, steht unter der
+  Meldung des Docker-Daemons jetzt dieselbe Erklärung in verständlichen Worten
+  statt nur seiner englischen Zeile.
+
 ## 2.0.0 — 6. August 2026
 
 **Die Einstellungen sind aufgeräumt: drei Listen statt einem langen Formular,
