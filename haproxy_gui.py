@@ -30,8 +30,48 @@ except ImportError:  # tkinter ships separately on most Linux distributions
         "  openSUSE      : sudo zypper install python3-tk"
     ) from None
 
-import catalog
 import opnsense_haproxy as core
+
+try:
+    import catalog
+except ImportError:
+    catalog = None  # see NoCatalog below -- the window still has to open
+
+class NoCatalog:
+    """Stands in for catalog.py when an old update did not bring it along.
+
+    An update run by a version that predates a file copies everything except
+    that file, and a program that imports it outright then does not start at
+    all -- which is the worst way to find out. So the import above is allowed
+    to fail and this takes over: the window opens, the Portainer tab says what
+    is missing, and one more update from in there fetches it.
+
+    ``favourites_of`` hands back what stands in the file untouched rather than
+    an empty list. They are only ever edited from the Portainer half, which is
+    not there either in this state -- but they are written back on every save,
+    and a saved empty list would quietly delete them.
+    """
+
+    @staticmethod
+    def favourites_of(config):
+        listed = config.get("favorites") if isinstance(config, dict) else None
+        return list(listed) if isinstance(listed, list) else []
+
+    @staticmethod
+    def put_favourite(favourites, _entry, _previous=""):
+        return list(favourites)
+
+    @staticmethod
+    def drop_favourite(favourites, _name):
+        return list(favourites)
+
+    @staticmethod
+    def token_page(_url):
+        return "", ""
+
+
+if catalog is None:
+    catalog = NoCatalog
 
 APP_TITLE = "HAProxy · OPNsense"
 AUTHOR_URL = "https://github.com/DukyNuky/opnsense-haproxy-config"
@@ -314,11 +354,11 @@ class MissingTab(ttk.Frame):
                   anchor="center").grid(row=0, column=0, sticky="ew")
         ttk.Label(card, style="Hint.TLabel", anchor="center", justify="center",
                   wraplength=460,
-                  text="Beim Aktualisieren sind portainer.py und "
-                       "portainer_gui.py nicht mitgekommen. Ein Update von "
-                       "hier aus holt sie nach — danach das Programm einmal "
-                       "neu starten, und der Tab ist da.").grid(
-            row=1, column=0, sticky="ew", pady=(6, 12))
+                  text=f"Beim Aktualisieren {self._missing()} nicht "
+                       "mitgekommen. Ein Update von hier aus holt das nach — "
+                       "danach das Programm einmal neu starten, und der Tab "
+                       "ist da.").grid(row=1, column=0, sticky="ew",
+                                       pady=(6, 12))
         # a button of its own, so _set_busy has the same handle it has on the
         # real tab
         self.deploy_button = ttk.Button(card, text="Update holen",
@@ -330,6 +370,23 @@ class MissingTab(ttk.Frame):
         self.app._link(card, "oder das Paket von Hand herunterladen",
                        AUTHOR_URL + "/releases/latest").grid(
             row=3, column=0, pady=(12, 0))
+
+    @staticmethod
+    def _missing():
+        """Which files are actually not there, in words, or a fallback.
+
+        Naming them is worth the look on disk: the answer is different for an
+        update that stopped before portainer.py than for one that stopped
+        before catalog.py, and only one of the two is worth searching for.
+        """
+        folder = core.install_dir()
+        gone = [name for name in core.ESSENTIAL_FILES
+                if not os.path.exists(os.path.join(folder, name))]
+        if not gone:
+            return "ist eine Datei dieses Programms"
+        if len(gone) == 1:
+            return f"ist {gone[0]}"
+        return "sind " + ", ".join(gone[:-1]) + f" und {gone[-1]}"
 
     def busy_buttons(self):
         return (self.deploy_button,)

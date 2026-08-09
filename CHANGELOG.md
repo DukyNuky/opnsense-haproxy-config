@@ -1,5 +1,35 @@
 # Änderungen
 
+## 2.3.1 — 9. August 2026
+
+**Wer 2.3.0 über das eingebaute Update geholt hat, konnte es nicht mehr
+starten. Das ist behoben — und die Ursache mit dazu.**
+
+- **`ModuleNotFoundError: No module named 'catalog'` beim Start.** Ein Update
+  wird von der Fassung ausgeführt, die gerade installiert ist, und 2.2.0 kannte
+  die Liste der zu kopierenden Dateien von 2.2.0 — `catalog.py` war darin
+  logischerweise nicht enthalten. Nach dem Update lag also 2.3.0 im Ordner,
+  ohne eine Datei, die es beim Start unbedingt braucht.
+- **Wer davon betroffen ist**, hat zwei Wege: das
+  [ZIP](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest)
+  herunterladen und über den Ordner entpacken — oder nur `catalog.py` und
+  `catalog.json` aus dem Release dorthin legen. Beides genügt, die
+  Konfiguration bleibt unberührt.
+- **Das Fenster geht jetzt auch ohne diese Datei auf.** Fehlt sie, arbeitet der
+  HAProxy-Tab wie immer, und der Portainer-Tab sagt, welche Datei fehlt — mit
+  dem Update-Knopf daneben, der sie nachholt. Bisher stand an dieser Stelle
+  fest „portainer.py und portainer_gui.py"; jetzt wird nachgesehen, was
+  tatsächlich fehlt, und genau das benannt.
+- **Und der Updater geht nicht mehr nach einer Liste von Namen.** Er nimmt aus
+  dem Archiv, was zum Programm gehört — `.py`, `.json`, `.md`, `.bat` und die
+  Symbole, ohne `config.json` und `gui.json`, die dir gehören. Eine feste Liste
+  wird von der alten Fassung gelesen und kann eine neue Datei gar nicht kennen;
+  eine Regel kann das. Dasselbe gilt jetzt fürs Installieren.
+
+Damit ist dieser Fehler auch für künftige Fassungen erledigt: er hatte 1.4.0
+schon einmal den Portainer-Tab gekostet, und die Lehre war damals nur, die
+Liste zu erweitern.
+
 ## 2.3.0 — 9. August 2026
 
 **Ein Katalog, aus dem heraus deployt wird — und ein Stack lässt sich endlich

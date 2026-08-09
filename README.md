@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.3.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.3.0.zip)**
+**[opnsense-haproxy-2.3.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.3.1.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -630,11 +630,25 @@ Der Knopf zeigt dann die Versionsnummer und, sofern hinterlegt, was sich
 geändert hat. Nach der Installation ist ein Neustart nötig, den der Dialog
 gleich anbietet.
 
-Ersetzt werden nur die Programmdateien selbst. **Zugangsdaten und
-Einstellungen bleiben unangetastet**, und die alten Dateien landen vorher in
-einem Ordner `backup-<version>/` daneben. Heruntergeladener Code wird vor dem
-Schreiben geprüft; ist das Archiv unvollständig oder beschädigt, wird nichts
-angefasst. Ist GitHub nicht erreichbar, bleibt das folgenlos.
+Ersetzt werden nur die Programmdateien selbst — alles, was aus dem Archiv wie
+eine davon aussieht (`.py`, `.json`, `.md`, `.bat`, die Symbole), außer
+`config.json` und `gui.json`. **Zugangsdaten und Einstellungen bleiben
+unangetastet**, und die alten Dateien landen vorher in einem Ordner
+`backup-<version>/` daneben. Heruntergeladener Code wird vor dem Schreiben
+geprüft; ist das Archiv unvollständig oder beschädigt, wird nichts angefasst.
+Ist GitHub nicht erreichbar, bleibt das folgenlos.
+
+Das ist bewusst eine Regel und keine Liste von Dateinamen: Ein Update wird von
+der Fassung ausgeführt, die gerade installiert ist, und eine Liste in ihr kann
+eine Datei, die es damals noch nicht gab, nicht kennen. Genau daran sind 1.4.0
+(`portainer.py`) und 2.3.0 (`catalog.py`) gescheitert — beide Male ließ das
+Update eine Datei zurück, die die neue Fassung braucht.
+
+Fehlt trotzdem einmal etwas, ist nichts verloren: der Portainer-Tab sagt dann,
+welche Datei es ist, und der Update-Knopf daneben holt sie nach. Startet das
+Programm gar nicht mehr, hilft das
+[ZIP](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest),
+über den Ordner entpackt.
 
 Wer die tägliche Nachfrage nicht möchte, setzt in
 `~/.config/opnsense-haproxy/gui.json` `"update_check": false`; der Knopf

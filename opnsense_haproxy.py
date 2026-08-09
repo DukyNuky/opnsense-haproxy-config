@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -975,13 +975,31 @@ GITHUB_API = "https://api.github.com"
 # is ignored, so neither a stray file in the repository nor a manipulated
 # archive can drop something new into the user's folder -- and config.json /
 # gui.json are never in the list, so personal settings survive every update.
-UPDATE_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
-                "portainer_gui.py", "catalog.py", "catalog.json",
-                "HAProxy-Starter.bat",
-                "README.md", "CHANGELOG.md", "config.example.json",
-                "icon.png", "icon.ico")
+# What an update or an installation may carry over, by kind rather than by
+# name. A list of names is written by the version that does the copying, so it
+# can only ever know the files that existed back then: that is how an update
+# run by 1.3 left portainer.py behind, and an update run by 2.2 left catalog.py
+# behind -- each time breaking the very version that was being installed. A
+# rule cannot forget a file that did not exist when it was written.
+UPDATE_SUFFIXES = (".py", ".json", ".md", ".bat", ".png", ".ico")
+# Never taken from anywhere: the first two belong to the user, the last two are
+# for building a release and have no business in an installation.
+UPDATE_NEVER = ("config.json", "gui.json", "make_release.py", "make_icon.py")
+# Without these there is no program, so an incomplete download is refused
+# before a single file is replaced.
 ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
                    "portainer_gui.py", "catalog.py")
+
+
+def updatable(name):
+    """Whether a file of this name belongs to the program itself.
+
+    Also the answer to the usual zip question: a name with a path in it, or a
+    hidden dotfile, is not one of ours and is never used to build a path.
+    """
+    return (bool(name) and name == os.path.basename(name)
+            and not name.startswith(".") and name not in UPDATE_NEVER
+            and name.endswith(UPDATE_SUFFIXES))
 
 # The whole project is well under a megabyte; anything beyond this is either a
 # mistake or something we should not be unpacking.
@@ -1075,9 +1093,9 @@ def update_blocked(folder=None):
         return "git"
     if not os.access(folder, os.W_OK):
         return "readonly"
-    for name in UPDATE_FILES:
+    for name in os.listdir(folder):
         path = os.path.join(folder, name)
-        if os.path.exists(path) and not os.access(path, os.W_OK):
+        if updatable(name) and os.path.isfile(path) and not os.access(path, os.W_OK):
             return "readonly"
     return ""
 
@@ -1114,9 +1132,9 @@ def unpack_release(blob):
     """The files we care about, taken out of a GitHub source archive.
 
     GitHub wraps the repository in one top level directory, so the first path
-    element is dropped. Entries are matched against UPDATE_FILES instead of
-    being trusted, which also settles the usual zip path traversal question:
-    no name from the archive is ever used to build a path.
+    element is dropped. What is left has to look like one of the program's own
+    files -- see ``updatable`` -- which also settles the usual zip path
+    traversal question: no name from the archive is ever used to build a path.
     """
     files = {}
     try:
@@ -1125,7 +1143,7 @@ def unpack_release(blob):
                 parts = entry.filename.split("/")
                 if entry.is_dir() or len(parts) != 2:
                     continue  # only the top level of the repository
-                if parts[1] in UPDATE_FILES:
+                if updatable(parts[1]):
                     files[parts[1]] = archive.read(entry)
     except (zipfile.BadZipFile, OSError) as exc:
         raise ApiError(f"the downloaded archive is unreadable: {exc}") from None
@@ -1191,13 +1209,6 @@ def install_update(release, folder=None, report=None, timeout=60):
 # Installing
 # --------------------------------------------------------------------------
 
-# Everything an installation consists of. The icons are in here because the
-# desktop starter points at icon.png -- an installation without them would show
-# a blank tile in the task bar.
-INSTALL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
-                 "portainer_gui.py", "icon.png", "icon.ico",
-                 "HAProxy-Starter.bat", "README.md", "CHANGELOG.md",
-                 "config.example.json")
 RUNNABLE = ("opnsense_haproxy.py", "haproxy_gui.py")
 
 # The names the commands get in the bin folder. Underscores and a .py suffix
@@ -1298,11 +1309,14 @@ def copy_program(source, target, report=None):
     """Put the program files into the target folder, keeping them runnable."""
     say = report or (lambda _text: None)
     os.makedirs(target, exist_ok=True)
+    # Everything the running program is made of, by the same rule an update
+    # goes by: the icons come along because the desktop starter points at
+    # icon.png, and a file added in some later version comes along by itself.
     copied = []
-    for name in INSTALL_FILES:
+    for name in sorted(os.listdir(source)):
         origin = os.path.join(source, name)
-        if not os.path.exists(origin):
-            continue  # icons and docs are welcome but not required
+        if not updatable(name) or not os.path.isfile(origin):
+            continue
         shutil.copy2(origin, os.path.join(target, name))
         copied.append(name)
     for name in RUNNABLE:
