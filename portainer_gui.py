@@ -475,6 +475,7 @@ class PortainerTab(ttk.Frame):
                                               entry.get("repository", ""))
         preset = dict(entry)
         preset["username"], preset["password"] = username, token
+        preset["read_env"] = True
         self.open_deploy(preset, parent=parent)
 
     def open_deploy(self, preset=None, parent=None):
@@ -497,24 +498,50 @@ class PortainerTab(ttk.Frame):
             self.dialog.lift()
             self.dialog.focus_set()
             return
-        if not self.client:
-            self.app.open_settings(asked)
-            return
         if not self.connected:
-            # Reachable straight from the catalog, which needs no connection to
-            # show a list -- so this is where somebody most likely notices they
-            # have not connected yet. Offering it here saves the detour.
-            if messagebox.askyesno(
-                    ui.APP_TITLE,
-                    "Dafür muss Portainer verbunden sein — sonst ist nicht "
-                    "bekannt, auf welche Umgebung der Stack soll.\n\n"
-                    "Jetzt verbinden?", parent=asked):
-                self.pending_deploy = preset or {}
-                self.reload()
+            # Reachable straight from the catalog, which needs no connection of
+            # its own to show a list -- so this is where somebody most likely
+            # finds out. Asking which pair to use answers the question and the
+            # follow-up question in one go, instead of sending them off to two
+            # other places and back.
+            self._ask_target(preset, asked)
             return
         self.dialog = DeployDialog(self.app, self)
         if preset:
             self.dialog.fill_in(preset)
+            self._read_preset_env(preset)
+
+    def _read_preset_env(self, preset):
+        """Fetch the variables of an entry that was just picked from a list.
+
+        Somebody deploying from the catalog has said what they want but knows
+        nothing about what it needs. The compose file says, and reading it is
+        the same call the button next to the field makes -- so it happens right
+        away instead of being a step to discover.
+        """
+        if not preset.get("read_env") or not preset.get("repository"):
+            return
+        if self.app.busy or self.dialog is None or not self.dialog.winfo_exists():
+            return
+        self._load_env(self.dialog.values())
+
+    def _ask_target(self, preset, parent):
+        """Which Portainer the stack goes to, and which OPNsense goes with it."""
+        if not self.app.systems.get("portainer"):
+            if messagebox.askyesno(
+                    ui.APP_TITLE,
+                    "Dafür fehlt ein Portainer — dorthin geht der Stack.\n\n"
+                    "Jetzt einen einrichten?", parent=parent):
+                self.app.open_settings(parent)
+            return
+        dialog = TargetDialog(parent, self.app)
+        self.app.wait_window(dialog)
+        if not dialog.result:
+            return
+        entry = dict(preset or {})
+        entry["read_env"] = True
+        self.app.connect_and_deploy(dialog.result["opnsense"],
+                                    dialog.result["portainer"], entry)
 
     def portainer_names(self):
         return [entry.get("name", "?")
@@ -1820,6 +1847,105 @@ class CatalogDialog(tk.Toplevel):
                 "unberührt.", icon="warning", parent=self):
             self.app.forget_favourite(entry["name"])
             self.render()
+
+
+class TargetDialog(tk.Toplevel):
+    """Which pair to work with, asked at the moment it is actually needed.
+
+    Deploying from the catalog is often the first thing somebody does, and
+    until then nothing had to be connected: the list comes from GitHub and the
+    own repositories from a token. Rather than sending them to the header for
+    one thing and to the settings for another, both are chosen here, and the
+    program takes it from there.
+    """
+
+    def __init__(self, parent, app):
+        super().__init__(parent)
+        self.app = app
+        self.colors = colors = app.colors
+        self.result = None
+        self.title("Wohin deployen?")
+        self.transient(parent)
+        self.configure(bg=colors["bg"])
+        self.columnconfigure(0, weight=1)
+
+        body = ttk.Frame(self, style="Card.TFrame", padding=20)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        rows = itertools.count()
+        ttk.Label(body, text="Wohin deployen?", style="H2.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                  text="Noch ist nichts verbunden. Der Stack geht auf den "
+                       "Portainer; die OPNsense wird für den Weg über HAProxy "
+                       "gebraucht, den das Programm nach dem Deploy "
+                       "anbietet.").grid(row=next(rows), column=0, sticky="w",
+                                         pady=(3, 12))
+
+        portainers = [entry.get("name", "?")
+                      for entry in app.systems.get("portainer", [])]
+        firewalls = [entry.get("name", "?")
+                     for entry in app.systems.get("opnsense", [])]
+        self.var_portainer = tk.StringVar(
+            value=app.active.get("portainer") or (portainers[0] if portainers
+                                                  else ""))
+        self.var_opnsense = tk.StringVar(
+            value=app.active.get("opnsense") or ui.NO_LINK)
+
+        ttk.Label(body, text="Portainer", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w", pady=(8, 3))
+        ttk.Combobox(body, textvariable=self.var_portainer, state="readonly",
+                     values=portainers, width=40,
+                     style="Card.TCombobox").grid(row=next(rows), column=0,
+                                                  sticky="ew")
+
+        ttk.Label(body, text="OPNsense", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w", pady=(12, 3))
+        box = ttk.Combobox(body, textvariable=self.var_opnsense,
+                           state="readonly", values=[ui.NO_LINK] + firewalls,
+                           width=40, style="Card.TCombobox")
+        box.grid(row=next(rows), column=0, sticky="ew")
+        if not firewalls:
+            box.configure(state="disabled")
+        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                  text="Ohne OPNsense wird trotzdem deployt — der Weg über "
+                       "HAProxy lässt sich danach jederzeit nachholen.").grid(
+            row=next(rows), column=0, sticky="w", pady=(2, 0))
+
+        footer = ttk.Frame(self, style="Card.TFrame", padding=(20, 12, 20, 16))
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        ttk.Button(footer, text="⚙ Einstellungen", style="Del.TButton",
+                   command=self._settings).grid(row=0, column=0, sticky="w")
+        buttons = ttk.Frame(footer, style="Card.TFrame")
+        buttons.grid(row=0, column=1, sticky="e")
+        ttk.Button(buttons, text="Abbrechen", style="Ghost.TButton",
+                   command=self.destroy).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="Verbinden", style="Accent.TButton",
+                   command=self._go).grid(row=0, column=1)
+
+        self.bind("<Return>", lambda _e: self._go())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        _centre(self, parent)
+        self.grab_set()
+
+    def _settings(self):
+        """The way out for what is not in the lists yet -- in front of this."""
+        self.app.open_settings(self)
+        self.destroy()
+
+    def _go(self):
+        portainer = self.var_portainer.get()
+        if not portainer:
+            messagebox.showwarning(ui.APP_TITLE,
+                                   "Bitte einen Portainer wählen — dorthin "
+                                   "geht der Stack.", parent=self)
+            return
+        firewall = self.var_opnsense.get()
+        self.result = {"portainer": portainer,
+                       "opnsense": "" if firewall == ui.NO_LINK else firewall}
+        self.destroy()
 
 
 class FavouriteDialog(tk.Toplevel):

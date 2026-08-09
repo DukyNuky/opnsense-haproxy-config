@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.3.2.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.3.2.zip)**
+**[opnsense-haproxy-2.4.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.4.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -444,11 +444,18 @@ wird heimlich mitgeschickt, und du kannst es vor dem Deployen noch ändern.
 
 Der Katalog lässt sich auch ohne Verbindung durchsehen — für *Meine Repos*
 genügt der Token, Portainer wird dafür nicht gebraucht. Erst zum **Deployen**
-muss verbunden sein; ist es das nicht, fragt das Fenster nach und macht danach
-von allein weiter.
+muss verbunden sein, und wenn es das nicht ist, fragt **Wohin deployen?** in
+einem Zug nach beidem: dem **Portainer**, auf den der Stack geht, und der
+**OPNsense** für den Weg über HAProxy danach. Die OPNsense darf dabei
+*— keiner —* bleiben; deployt wird trotzdem, der Weg über HAProxy lässt sich
+später nachholen. Danach verbindet das Programm beides der Reihe nach und macht
+von allein weiter, wo du geklickt hast.
 
 In allen drei Listen ist **Deployen** dasselbe: das Fenster *Neuer Stack* geht
-auf, vorausgefüllt. Name, Variablen und alles Übrige bleiben deine Sache — der
+auf, vorausgefüllt — und weil aus einer Liste heraus niemand wissen kann, was
+so ein Stack braucht, wird die **Compose-Datei gleich gelesen** und ihre
+Variablen stehen im Feld, bevor du danach suchen musst. Es ist derselbe
+Vorgang wie der Knopf *aus dem Repository*, nur ungefragt. Name, Variablen und alles Übrige bleiben deine Sache — der
 Katalog spart das Abtippen, nicht das Nachdenken.
 
 ### Ein Git-Konto einrichten

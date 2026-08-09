@@ -2580,6 +2580,40 @@ class App(tk.Tk):
         self._fill_switcher()
         self.portainer.reload()
 
+    def connect_and_deploy(self, opnsense, portainer, preset):
+        """Take up the chosen pair, then carry on to the deploy form.
+
+        Three things that cannot happen at once, so each one hands over to the
+        next: the firewall first -- taking one up rebuilds the profile and
+        resets the Portainer half, which would undo a connection made before
+        it. Then Portainer, which is what a deploy actually needs. The form and
+        the reading of the repository come last, from ``_loaded`` over there,
+        once there is an environment to send the stack to.
+        """
+        if portainer and core.find_system(self.systems, "portainer", portainer):
+            self.active["portainer"] = portainer
+        if opnsense and core.find_system(self.systems, "opnsense", opnsense):
+            self.active["opnsense"] = opnsense
+        entry = core.find_system(self.systems, "opnsense", self.active["opnsense"])
+        if entry and self.active.get("portainer"):
+            entry["portainer"] = self.active["portainer"]  # the pair, remembered
+        self._write_settings()
+
+        self.portainer.pending_deploy = preset
+        self._use_active(connect=bool(opnsense))
+        self._fill_switcher()
+        # Nothing was started when there is no firewall to reach, or none was
+        # chosen -- then the Portainer half goes now rather than waiting for a
+        # hand-over that will never come.
+        if not self.busy:
+            self.portainer.reload()
+
+    def _hand_over_to_portainer(self):
+        """After the firewall: connect Portainer, if a deploy is waiting."""
+        if self.portainer.pending_deploy is None or self.portainer.connected:
+            return
+        self.portainer.reload()
+
     def _build_adguard(self):
         self.adguard, settings = core.adguard_from_config(self.profile)
         self.adguard_target = settings.get("target", "")
@@ -2707,6 +2741,9 @@ class App(tk.Tk):
         self._set_status(None)
         self.paint_connection()
         self._render_inventory()
+        # a firewall that cannot be reached is no reason to drop a deploy: the
+        # stack goes to Portainer, the way over HAProxy can wait
+        self._hand_over_to_portainer()
 
     def _state_loaded(self, state):
         self._set_busy(False)
@@ -2743,6 +2780,7 @@ class App(tk.Tk):
         # the ports over there are marked with what HAProxy already does with
         # them, so a fresh reading of the rules changes that list too
         self.portainer.render()
+        self._hand_over_to_portainer()
 
     def _set_status(self, status, error=None, idle=False):
         # kept rather than shown right away: the pill belongs to whichever tab

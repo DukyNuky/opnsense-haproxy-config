@@ -1,5 +1,34 @@
 # Änderungen
 
+## 2.4.0 — 9. August 2026
+
+**Aus dem Katalog heraus deployen, ohne vorher irgendwo verbunden gewesen zu
+sein: ein Klick, eine Frage, und das Formular steht ausgefüllt da.**
+
+- **„Wohin deployen?“** fragt jetzt beides auf einmal — den **Portainer**, auf
+  den der Stack geht, und die **OPNsense** für den Weg über HAProxy danach.
+  Vorher stand da nur *Jetzt verbinden?*, was zwar die Verbindung herstellte,
+  aber eben die zuletzt benutzte: Wer zum ersten Mal etwas deployt oder mehrere
+  Standorte hat, musste vorher wissen, dass er oben rechts das Richtige
+  einstellen muss.
+- **Die OPNsense darf dabei offen bleiben** (*— keiner —*). Deployt wird
+  trotzdem; der Weg über HAProxy lässt sich danach jederzeit nachholen. Fehlt
+  ein Portainer ganz, führt die Frage direkt in die Einstellungen.
+- **Danach macht das Programm der Reihe nach weiter**: erst die Firewall, dann
+  Portainer, dann das Formular — in dieser Reihenfolge, weil das Aufnehmen
+  einer Firewall die Portainer-Seite neu aufsetzt und eine vorher gemachte
+  Verbindung wieder verwerfen würde. Ist die Firewall nicht erreichbar, geht es
+  trotzdem weiter: der Stack braucht sie nicht.
+- **Und die Umgebungsvariablen stehen schon im Feld.** Wer aus einer Liste
+  heraus deployt, hat gesagt, *was* er will, weiß aber nichts darüber, *was es
+  braucht*. Also wird die Compose-Datei gleich gelesen und ihre Variablen samt
+  Vorgaben eingetragen — derselbe Vorgang wie der Knopf *aus dem Repository*,
+  nur ungefragt. Das gilt für jeden Deploy aus dem Katalog, auch für einen aus
+  den Favoriten.
+- **Die gewählte Paarung wird gemerkt**, wie überall sonst auch: Die OPNsense
+  behält den Portainer, mit dem sie zusammenarbeitet, und beim nächsten Start
+  ist wieder dasselbe Paar da.
+
 ## 2.3.2 — 9. August 2026
 
 **Deployen aus dem Katalog ließ das Katalogfenster einfrieren. Es war nie
