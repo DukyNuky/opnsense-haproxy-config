@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -976,11 +976,12 @@ GITHUB_API = "https://api.github.com"
 # archive can drop something new into the user's folder -- and config.json /
 # gui.json are never in the list, so personal settings survive every update.
 UPDATE_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
-                "portainer_gui.py", "HAProxy-Starter.bat",
+                "portainer_gui.py", "catalog.py", "catalog.json",
+                "HAProxy-Starter.bat",
                 "README.md", "CHANGELOG.md", "config.example.json",
                 "icon.png", "icon.ico")
 ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
-                   "portainer_gui.py")
+                   "portainer_gui.py", "catalog.py")
 
 # The whole project is well under a megabyte; anything beyond this is either a
 # mistake or something we should not be unpacking.
@@ -1483,14 +1484,18 @@ PROFILE_KEYS = ("name", "url", "key", "secret", "verify_ssl", "frontend",
 # The three kinds of system the file knows, each in a list of its own. An
 # OPNsense entry names the AdGuard and the Portainer it works with by name, so
 # one AdGuard can serve several firewalls without being written down twice.
-SYSTEM_KINDS = ("opnsense", "adguard", "portainer")
+SYSTEM_KINDS = ("opnsense", "adguard", "portainer", "git")
 OPNSENSE_KEYS = ("name", "url", "key", "secret", "verify_ssl", "frontend",
                  "haproxy_ip", "defaults", "adguard", "portainer")
 ADGUARD_KEYS = ("name", "url", "username", "password", "target", "verify_ssl")
 PORTAINER_KEYS = ("name", "url", "api_key", "username", "password", "host_ip",
                   "verify_ssl")
+# A Git account is not a machine this program talks to -- Portainer does the
+# cloning. It is kept here all the same: it is one more set of credentials, it
+# belongs in the same file at the same mode, and it is edited the same way.
+GIT_KEYS = ("name", "url", "username", "token")
 SYSTEM_KEYS = {"opnsense": OPNSENSE_KEYS, "adguard": ADGUARD_KEYS,
-               "portainer": PORTAINER_KEYS}
+               "portainer": PORTAINER_KEYS, "git": GIT_KEYS}
 
 
 def old_profiles(config):
@@ -1665,8 +1670,13 @@ def pick_profile(config, name=None):
     return profiles[0]
 
 
-def as_settings_file(systems, active=None):
-    """The file layout of 2.0: three lists and what is active in each."""
+def as_settings_file(systems, active=None, favorites=None):
+    """The file layout: one list per kind of system, and what is active in each.
+
+    ``favorites`` are the stacks somebody wrote down to deploy again -- no
+    credentials, but they belong with the systems rather than with the window's
+    own preferences, because they describe the setup and not the view.
+    """
     chosen = dict(active or {})
     for kind in SYSTEM_KINDS:
         entries = systems.get(kind, [])
@@ -1674,6 +1684,8 @@ def as_settings_file(systems, active=None):
             chosen[kind] = entries[0].get("name", "") if entries else ""
     written = {kind: list(systems.get(kind, [])) for kind in SYSTEM_KINDS}
     written["active"] = chosen
+    if favorites:
+        written["favorites"] = list(favorites)
     return written
 
 

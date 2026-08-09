@@ -31,9 +31,11 @@ Und weil die Dienste, die hinter HAProxy stehen, meist Docker-Container sind,
 gibt es oben einen zweiten Tab: **Portainer**. Er zeigt, welche Stacks laufen
 und welche Ports sie auf dem Host veröffentlicht haben — also genau die Ports,
 die HAProxy ansprechen kann. Von dort aus lassen sich Stacks aus GitHub oder
-GitLab ausrollen, mit einem Klick neu deployen (auf Wunsch mit frischen
-Images), und ein veröffentlichter Port wandert mit **→ HAProxy** direkt in den
-ersten Tab.
+GitLab ausrollen — aus einem **Katalog** bekannter Stacks, aus eigenen
+Favoriten oder aus der Liste der eigenen Repositories —, mit einem Klick neu
+deployen (auf Wunsch mit frischen Images) und wieder löschen, samt der
+HAProxy-Einträge, die auf sie zeigten. Ein veröffentlichter Port wandert mit
+**→ HAProxy** direkt in den ersten Tab.
 
 **Du brauchst dafür kein Terminal.** Die ganze Anleitung unten funktioniert mit
 der Maus. (Wer lieber tippt, findet die Kommandozeile ganz unten.)
@@ -80,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.2.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.2.0.zip)**
+**[opnsense-haproxy-2.3.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.3.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -160,9 +162,9 @@ kostet nichts, du hast dann nur zwei Schlüssel und kannst den alten löschen.
 ## Schritt 5: Verbindung eintragen
 
 Zurück im Programm-Fenster, das seit Schritt 3 wartet. Es zeigt die
-**Einstellungen** mit drei Abschnitten untereinander — **OPNsense**, **AdGuard
-Home**, **Portainer**. Jeder führt seine eigene Liste, und jeder hat ein
-**＋ Hinzufügen**. Für den Anfang genügt die erste OPNsense: **＋ Hinzufügen**
+**Einstellungen** mit vier Abschnitten untereinander — **OPNsense**, **AdGuard
+Home**, **Portainer** und **Git-Konto**. Jeder führt seine eigene Liste, und
+jeder hat ein **＋ Hinzufügen**. Für den Anfang genügt die erste OPNsense: **＋ Hinzufügen**
 im obersten Abschnitt, dann füllt sich das Fenster so:
 
 | Feld | was hinein gehört |
@@ -395,6 +397,75 @@ für diesen Stack schon gespeichert hat — das ist der Normalfall.
 
 Stacks ohne Repository (in Portainer aus dem Editor angelegt) gehen genauso:
 dann wird die Compose-Datei benutzt, die Portainer für sie aufbewahrt.
+
+### Einen Stack löschen
+
+**Löschen** auf der Karte zeigt erst, was passieren würde: die Container beim
+Namen, und die Host-Ports, die wieder frei werden. Portainer stoppt die
+Container und entfernt den Stack samt seinen Netzwerken. **Benannte Volumes
+bleiben liegen** — die Daten sind also nicht weg, und wer sie auch loswerden
+will, räumt sie in Portainer unter *Volumes* ab.
+
+Interessanter ist die zweite Hälfte: **die HAProxy-Einträge dazu ebenfalls
+entfernen.** Zeigt eine Rule auf einen Port dieses Stacks, steht sie im Fenster
+namentlich, und der Haken nimmt sie mit — Real Server, Backend Pool, Condition
+und Rule, dazu der DNS-Eintrag, wenn im Formular ein AdGuard gewählt ist. Ohne
+den Haken bleibt sie stehen und zeigt auf einen Port, an dem nichts mehr
+antwortet.
+
+Damit das angeboten werden kann, muss der HAProxy-Tab verbunden sein und beim
+Portainer eine **IP des Docker-Hosts** stehen — sonst weiß das Programm nicht,
+welche Rules überhaupt hierher zeigen, und sagt das an der Stelle auch.
+
+### Der Katalog: Stacks, die schon jemand aufgeschrieben hat
+
+**★ Katalog** oben öffnet eine Sammlung, aus der heraus deployt wird. Oben
+rechts steht, aus welcher der drei Listen:
+
+**Bekannte Stacks** kommen aus der Datei [catalog.json](catalog.json) im
+Repository dieses Programms — Einträge mit Beschreibung, deren Compose-Datei an
+der angegebenen Stelle wirklich liegt. Die Liste wird höchstens einmal am Tag
+geholt und dazwischen aus dem Zwischenspeicher gezeigt; ↻ holt sie sofort neu.
+Ist GitHub nicht erreichbar, gilt die Fassung, die mit dem Programm gekommen
+ist. Fehlt dir etwas darin: ein Pull Request mit einem weiteren Eintrag ist
+willkommen, das Format steht in der Datei.
+
+**Meine Favoriten** sind dieselben Angaben, selbst hinterlegt — für das, was du
+öfter brauchst. **☆** an einem Eintrag der anderen Listen legt ihn dorthin,
+**＋ Eigener Favorit** legt einen von Grund auf an: Name, Beschreibung,
+Repository, Branch und Pfad zur Compose-Datei. Zugangsdaten stehen dort
+**nicht** — die kommen beim Deployen aus dem Git-Konto, dessen Adresse zum
+Repository passt. Favoriten stehen in derselben Datei wie die Systeme.
+
+**Meine Repos** listet auf, was der Token eines Git-Kontos sehen darf, private
+wie öffentliche. Deployst du eines davon, geht das Formular auf mit Repository,
+Pfad **und den Zugangsdaten dieses Kontos in den sichtbaren Feldern** — nichts
+wird heimlich mitgeschickt, und du kannst es vor dem Deployen noch ändern.
+
+In allen drei Listen ist **Deployen** dasselbe: das Fenster *Neuer Stack* geht
+auf, vorausgefüllt. Name, Variablen und alles Übrige bleiben deine Sache — der
+Katalog spart das Abtippen, nicht das Nachdenken.
+
+### Ein Git-Konto einrichten
+
+Nötig für *Meine Repos* und für private Repositories. Unter ⚙ im Abschnitt
+**Git-Konto** auf **＋ Hinzufügen**:
+
+* **Name** — wie du es nennen willst, z.B. `GitHub privat`.
+* **Adresse** — `https://github.com`, `https://gitlab.com` oder die deines
+  eigenen GitLab.
+* **Benutzer** — dein Anmeldename dort.
+* **Token** — lesen genügt. Bei einem GitHub *Fine-grained token*:
+  **Repository access → Only select repositories** und **Permissions →
+  Repository permissions → Contents: Read-only**. Bei GitLab die Scopes
+  `read_api` (für die Liste) und `read_repository` (fürs Klonen). Unter dem
+  Feld steht ein Link, der die Seite für neue Token auf genau diesem Host
+  öffnet.
+
+Der Token steht danach in der Konfigurationsdatei, die mit Rechten 600 im
+eigenen Benutzerordner liegt. Beim Deployen geht er an Portainer, das ihn beim
+Stack hinterlegt — das braucht Portainer, um bei einem automatischen Update
+noch einmal klonen zu können.
 
 ### Einen neuen Stack anlegen
 
@@ -669,8 +740,12 @@ beide werden mit **AND** verknüpft.
   Swarm- und Kubernetes-Stacks werden in der Liste als solche gekennzeichnet,
   aber nicht deployt — dort kommen die Ports aus den Services und nicht aus den
   Containern, das wäre eine eigene Baustelle.
-* Ein Stack wird angelegt und neu deployt, aber nicht gelöscht und nicht
-  bearbeitet. Dafür ist Portainer selbst da.
+* Ein Stack wird angelegt, neu deployt und gelöscht, aber nicht bearbeitet.
+  Wer die Compose-Datei oder die Variablen eines laufenden Stacks ändern will,
+  macht das in Portainer selbst.
+* Beim Löschen bleiben **benannte Volumes** liegen — Docker gibt sie mit dem
+  Stack nicht frei, und dieses Programm greift sie nicht an. Die Daten sind
+  also noch da, aufgeräumt wird in Portainer.
 * Ob ein Port von außerhalb des Heimnetzes erreichbar ist, weiß Docker nicht;
   die Liste sagt nur, an welche Adresse er auf dem Host gebunden ist.
 
@@ -689,6 +764,8 @@ normalen Gebrauch ist nichts davon nötig.
 | `haproxy_gui.py` | Fenster (tkinter) |
 | `portainer.py` | Portainer-API: Stacks, Container, Ports, Deploys |
 | `portainer_gui.py` | der zweite Tab |
+| `catalog.py` | Katalog, Favoriten, Git-Konten, eigene Repos |
+| `catalog.json` | die bekannten Stacks — im Programm über GitHub geholt |
 | `HAProxy-Starter.bat` | Doppelklick-Start für Windows |
 | `icon.png` / `icon.ico` | Symbol für Fenster und Starter |
 
@@ -793,6 +870,15 @@ anderen beim Namen:
   "portainer": [
     { "name": "Docker Zuhause", "url": "https://portainer.example.de:9443",
       "api_key": "ptr_…", "host_ip": "192.168.1.20", "verify_ssl": false }
+  ],
+  "git": [
+    { "name": "GitHub privat", "url": "https://github.com",
+      "username": "…", "token": "github_pat_…" }
+  ],
+  "favorites": [
+    { "name": "immich", "description": "Fotos selbst gehostet",
+      "repository": "https://github.com/immich-app/immich",
+      "reference": "", "compose_file": "docker/docker-compose.yml" }
   ]
 }
 ```
@@ -812,9 +898,17 @@ Beim Portainer gilt entweder `api_key` **oder** `username` und `password` —
 beim Speichern wird der jeweils andere Weg geleert, damit später nicht ein
 vergessener Rest entscheidet, womit angemeldet wird. `host_ip` ist die Adresse,
 an die HAProxy Anfragen an Container schickt; ohne Angabe wird der Rechner aus
-der `url` genommen. Zugangsdaten für private Git-Repositories stehen hier
-bewusst **nicht** — die werden beim Deploy abgefragt und gehen direkt an
-Portainer.
+der `url` genommen.
+
+Ein **`git`**-Eintrag ist kein System, mit dem dieses Programm dauernd redet:
+der Token listet die eigenen Repositories auf und wird beim Deployen ins
+Formular eingesetzt, geklont wird von Portainer. Welches Konto für ein
+Repository gilt, ergibt sich aus dem **Host** der Adresse — es wird nichts
+ausgewählt und nichts verknüpft. Wer keines anlegt, tippt Benutzer und Token
+beim Deploy von Hand ein wie bisher; in der Datei landen sie dann nicht.
+
+**`favorites`** sind Stacks, die du wieder deployen willst — dieselben Felder
+wie im Katalog, ohne Zugangsdaten.
 
 **Ältere Dateien werden beim Lesen umgesetzt**, von Hand ist nichts zu tun. Aus
 jedem Profil wird eine OPNsense, aus seinem AdGuard- und Portainer-Abschnitt je

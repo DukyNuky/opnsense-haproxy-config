@@ -283,6 +283,17 @@ class Portainer:
         return self.call(f"stacks/{stack_id}?endpointId={endpoint_id}", body,
                          method="PUT")
 
+    def delete_stack(self, stack_id, endpoint_id, external=False):
+        """Take the stack down and remove it: containers, networks, the lot.
+
+        Portainer wants the environment in the query string even though the
+        stack knows its own -- without it the call is refused as belonging to
+        no environment.
+        """
+        return self.call(f"stacks/{stack_id}?endpointId={endpoint_id}"
+                         f"&external={'true' if external else 'false'}",
+                         method="DELETE")
+
 
 # What the Docker daemon says when a name or a host port is already taken. Its
 # words arrive verbatim inside Portainer's 500, so they are matched rather than
@@ -1103,6 +1114,29 @@ def redeploy(client, stack, pull_image=True, prune=False, username="",
                     username=username, password=password)
     out(f"+ stack {name} redeployed")
     return {"name": name}
+
+
+def remove_stack(client, stack, out=print):
+    """Delete one stack, and say what goes with it before it is gone.
+
+    The containers are named in the log on purpose: a stack is deleted by its
+    name, but what actually stops are these, and afterwards there is nothing
+    left to look at and check against.
+    """
+    name = stack.get("name") or "?"
+    stack_id = stack.get("id")
+    endpoint_id = stack.get("endpoint_id")
+    if stack_id is None:
+        raise core.UsageError(f"{name} has no id -- reload and try again")
+    out(f"removing stack {name}")
+    for container in stack.get("containers") or []:
+        out(f"- container {container['name']} ({container['image']})")
+    for port in stack.get("ports") or []:
+        out(f"- host port {port['host_port']} is given back")
+    client.delete_stack(stack_id, endpoint_id)
+    out(f"+ stack {name} removed")
+    return {"name": name, "containers": len(stack.get("containers") or []),
+            "ports": [port["host_port"] for port in stack.get("ports") or []]}
 
 
 def run_step(operation, client, *args, log=None, **kwargs):

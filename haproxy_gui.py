@@ -30,6 +30,7 @@ except ImportError:  # tkinter ships separately on most Linux distributions
         "  openSUSE      : sudo zypper install python3-tk"
     ) from None
 
+import catalog
 import opnsense_haproxy as core
 
 APP_TITLE = "HAProxy · OPNsense"
@@ -357,9 +358,9 @@ class MissingTab(ttk.Frame):
 
 
 SYSTEM_TITLES = {"opnsense": "OPNsense", "adguard": "AdGuard Home",
-                 "portainer": "Portainer"}
+                 "portainer": "Portainer", "git": "Git-Konto"}
 SYSTEM_ONE = {"opnsense": "OPNsense", "adguard": "AdGuard",
-              "portainer": "Portainer"}
+              "portainer": "Portainer", "git": "Git-Konto"}
 SYSTEM_HINTS = {
     "opnsense": "Die Firewall mit HAProxy darauf. Hier entstehen Real Server, "
                 "Backend, Condition und Rule.",
@@ -367,6 +368,9 @@ SYSTEM_HINTS = {
                "Mehrere OPNsense dürfen sich einen teilen.",
     "portainer": "Der Docker-Host, dessen Stacks und Ports im zweiten Tab "
                  "stehen.",
+    "git": "GitHub oder GitLab. Mit dem Token listet das Programm die eigenen "
+           "Repositories auf, und ein privates Repository deployt damit, ohne "
+           "dass jedes Mal etwas eingetippt werden muss.",
 }
 # What each editor asks for, in the order it asks. Everything else about a
 # system -- the frontend it last used, the defaults of its form -- is kept
@@ -387,6 +391,11 @@ SYSTEM_FIELDS = {
     "portainer": (("Name", "name", False, "z.B. Docker Zuhause"),
                   ("Adresse", "url", False,
                    "https://portainer.example.de:9443")),
+    "git": (("Name", "name", False, "z.B. GitHub privat"),
+            ("Adresse", "url", False,
+             "https://github.com oder https://gitlab.com"),
+            ("Benutzer", "username", False, "dein Anmeldename dort"),
+            ("Token", "token", True, "")),
 }
 # Where the fields that ask for a key or a token are handed one out. The two
 # paths are appended to the address in the form above them, so the link leads
@@ -394,6 +403,9 @@ SYSTEM_FIELDS = {
 OPNSENSE_USERS_PATH = "/system_usermanager.php"
 OPNSENSE_API_DOCS = "https://docs.opnsense.org/development/how-tos/api.html"
 PORTAINER_TOKENS_PATH = "/#!/account/tokens"
+# A Git account has no such switch: this program never connects to it with a
+# certificate of its own to check -- Portainer does the cloning, and the repo
+# listing goes to the official API over ordinary TLS.
 VERIFY_LABEL = {"opnsense": "TLS-Zertifikat der OPNsense prüfen",
                 "adguard": "TLS-Zertifikat von AdGuard prüfen",
                 "portainer": "TLS-Zertifikat von Portainer prüfen"}
@@ -478,9 +490,10 @@ class SystemDialog(tk.Toplevel):
             self._build_links(body, rows, entry)
 
         self.verify = tk.BooleanVar(value=bool(entry.get("verify_ssl", False)))
-        ttk.Checkbutton(body, text=VERIFY_LABEL[kind], variable=self.verify,
-                        style="Card.TCheckbutton").grid(row=next(rows), column=0,
-                                                        sticky="w", pady=(14, 0))
+        if kind in VERIFY_LABEL:
+            ttk.Checkbutton(body, text=VERIFY_LABEL[kind], variable=self.verify,
+                            style="Card.TCheckbutton").grid(
+                row=next(rows), column=0, sticky="w", pady=(14, 0))
         self.footer = footer = ttk.Frame(self, style="Card.TFrame",
                                          padding=(20, 12, 20, 16))
         footer.grid(row=1, column=0, sticky="ew")
@@ -508,6 +521,9 @@ class SystemDialog(tk.Toplevel):
         API key yet needs the way there at the moment they run out of things to
         type, not three fields further down.
         """
+        if self.kind == "git" and field == "token":
+            self._git_help(body, rows)
+            return
         if self.kind != "opnsense" or field != "secret":
             return
         ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
@@ -527,6 +543,34 @@ class SystemDialog(tk.Toplevel):
                        f"{OPNSENSE_USERS_PATH}").grid(row=0, column=0)
         link_label(links, self.colors, "Anleitung", OPNSENSE_API_DOCS,
                    style="CardLink.TLabel").grid(row=0, column=1, padx=(14, 0))
+
+    def _git_help(self, body, rows):
+        """Which rights the token needs, and the page that hands one out.
+
+        The page follows the address in the form: gitlab.com and a GitLab of
+        one's own keep it at the same path, so the link lands on the right
+        machine without anybody having to say which kind it is.
+        """
+        self.git_hint = ttk.Label(body, style="Hint.TLabel", wraplength=420,
+                                  justify="left", text="")
+        self.git_hint.grid(row=next(rows), column=0, sticky="w", pady=(6, 0))
+        link_label(body, self.colors, "Token anlegen",
+                   lambda: catalog.token_page(self.vars["url"].get())[0],
+                   style="CardLink.TLabel",
+                   tip="Öffnet die Seite für neue Token auf dem Host von "
+                       "oben").grid(row=next(rows), column=0, sticky="w",
+                                    pady=(4, 0))
+        self.vars["url"].trace_add("write", lambda *_a: self._git_rights())
+        self._git_rights()
+
+    def _git_rights(self):
+        rights = catalog.token_page(self.vars["url"].get())[1]
+        self.git_hint.configure(
+            text=(f"Lesen genügt. {rights}." if rights else
+                  "Lesen genügt — der Token wird nur zum Auflisten der "
+                  "Repositories und zum Klonen durch Portainer benutzt.")
+            + " Der Token steht in der Konfigurationsdatei dieses Programms, "
+              "sie liegt mit Rechten 600 im eigenen Benutzerordner.")
 
     def _build_portainer(self, body, rows, entry):
         """Token or user and password -- only one of the two is ever kept."""
@@ -648,6 +692,8 @@ class SystemDialog(tk.Toplevel):
         required = [("Name", "name"), ("Adresse", "url")]
         if self.kind == "opnsense":
             required += [("API-Key", "key"), ("API-Secret", "secret")]
+        if self.kind == "git":
+            required += [("Benutzer", "username"), ("Token", "token")]
         missing = [label for label, name in required if not values.get(name)]
         if missing:
             messagebox.showwarning("Unvollständig",
@@ -775,7 +821,9 @@ class SettingsDialog(tk.Toplevel):
         name = entry.get("name", "?")
         ttk.Label(row, text=name, style="Host.TLabel").grid(row=0, column=0,
                                                             sticky="w")
-        if name == self.app.active.get(kind):
+        # A Git account is not switched between: which one is used follows from
+        # the address of the repository, so "active" would mean nothing here.
+        if kind != "git" and name == self.app.active.get(kind):
             ttk.Label(row, text="aktiv", style="BadgeOk.TLabel").grid(
                 row=0, column=1, padx=(8, 0))
         ttk.Label(row, text=entry.get("url", ""), style="Target.TLabel").grid(
@@ -786,6 +834,10 @@ class SettingsDialog(tk.Toplevel):
                 for other, label in (("adguard", "DNS"), ("portainer", "Docker")))
             ttk.Label(row, text=linked, style="RowHint.TLabel").grid(
                 row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        if kind == "git":
+            ttk.Label(row, text=f"als {entry.get('username') or '—'}",
+                      style="RowHint.TLabel").grid(row=2, column=0, columnspan=2,
+                                                   sticky="w", pady=(2, 0))
         ttk.Button(row, text="Bearbeiten", style="Del.TButton",
                    command=lambda: self._edit(kind, entry)).grid(row=0, column=2,
                                                                  rowspan=3,
@@ -1165,6 +1217,9 @@ class App(tk.Tk):
         # now; self.profile is the OPNsense in use with its two filled in
         self.systems = {kind: [] for kind in core.SYSTEM_KINDS}
         self.active = {kind: "" for kind in core.SYSTEM_KINDS}
+        # stacks written down to deploy again -- they live in the same file as
+        # the systems, because they describe the setup and not the view
+        self.favorites = []
         self.profile = {}
         self.adguard = None
         self.adguard_target = ""
@@ -2120,6 +2175,24 @@ class App(tk.Tk):
     def write_log(self, title, lines, ok=None):
         self._write_log(title, lines, ok)
 
+    def removal_plan(self, rules):
+        """What it takes to remove these hosts from the firewall again.
+
+        The Portainer tab deletes a stack and the way in to it in one go, in
+        one background job with one log. What that job needs from this half --
+        the client, the AdGuard in use and the options per host -- is put
+        together here, where those things live.
+        """
+        return {
+            "client": self.api,
+            "adguard": self._active_adguard(),
+            "steps": [argparse.Namespace(
+                target=rule["target"], base_domain="",
+                prefix=self._prefix_of(rule), dry_run=False,
+                no_apply=self.var_no_apply.get(), yes=True)
+                for rule in (rules if self.api else [])],
+        }
+
     def remember_endpoint(self, endpoint_id):
         """Keep the chosen Docker environment with the preferences.
 
@@ -2255,6 +2328,7 @@ class App(tk.Tk):
                 messagebox.showerror(APP_TITLE, str(exc))
         self.settings = config
         self.systems = core.systems_of(config)
+        self.favorites = catalog.favourites_of(config)
         self.active = {kind: core.active_name(config, kind, self.systems)
                        for kind in core.SYSTEM_KINDS}
         if self.args.profile:
@@ -2491,13 +2565,23 @@ class App(tk.Tk):
             self.active[kind] = remaining[0].get("name", "") if remaining else ""
         self._write_settings()
 
+    def remember_favourite(self, entry, previous=""):
+        """Keep one stack under the favourites, or replace the one renamed."""
+        self.favorites = catalog.put_favourite(self.favorites, entry, previous)
+        self._write_settings()
+
+    def forget_favourite(self, name):
+        self.favorites = catalog.drop_favourite(self.favorites, name)
+        self._write_settings()
+
     def _write_settings(self):
         """Put the three lists back on disk, mode 600 -- they hold keys."""
         try:
             os.makedirs(os.path.dirname(os.path.abspath(self.config_path)),
                         exist_ok=True)
             with open(self.config_path, "w") as handle:
-                json.dump(core.as_settings_file(self.systems, self.active),
+                json.dump(core.as_settings_file(self.systems, self.active,
+                                                self.favorites),
                           handle, indent=2, ensure_ascii=False)
                 handle.write("\n")
             os.chmod(self.config_path, 0o600)

@@ -1,5 +1,42 @@
 # Änderungen
 
+## 2.3.0 — 9. August 2026
+
+**Ein Katalog, aus dem heraus deployt wird — und ein Stack lässt sich endlich
+auch wieder abräumen, samt dem Weg, der zu ihm führte.**
+
+- **★ Katalog** oben im Portainer-Tab öffnet drei Listen. **Bekannte Stacks**
+  kommen aus der `catalog.json` im Repository dieses Programms: gepflegte
+  Einträge mit Beschreibung, deren Compose-Datei an der angegebenen Stelle
+  liegt — Immich, Paperless-ngx, Uptime Kuma und ein paar mehr. Die Liste wird
+  einmal am Tag geholt; ist GitHub nicht erreichbar, gilt die Fassung, die mit
+  dem Programm gekommen ist. Ein Pull Request mit einem weiteren Eintrag ist
+  willkommen.
+- **Meine Favoriten** sind dasselbe, selbst hinterlegt: Name, Beschreibung,
+  Repository, Branch und Pfad zur Compose-Datei. ★ an einer der anderen Listen
+  übernimmt einen Eintrag dorthin, **＋ Eigener Favorit** legt einen von Grund
+  auf an. Sie stehen in derselben Datei wie die Systeme.
+- **Meine Repos** listet auf, was der Token eines Git-Kontos sehen darf — bei
+  GitHub und bei GitLab, private wie öffentliche. Aus der Liste heraus deployen
+  heißt: das Formular geht auf, Repository und Pfad stehen drin, und
+  **Benutzername und Token des passenden Kontos sind eingesetzt**. Zugeordnet
+  wird über den Host der Repository-Adresse, es ist also nichts weiter zu
+  wählen.
+- **Ein Git-Konto ist die vierte Sorte System** unter dem Zahnrad ⚙: Adresse,
+  Benutzername, Token. Darunter steht, welche Rechte reichen — bei einem
+  GitHub-Fine-grained-Token **Contents: Read-only**, bei GitLab
+  `read_repository` — und ein Link führt auf die Seite, die auf genau diesem
+  Host neue Token ausgibt.
+- **Stacks lassen sich löschen.** **Löschen** an der Karte zeigt vorher, was
+  dabei stehen bleibt und was geht: die Container beim Namen, die Host-Ports,
+  die wieder frei werden. Benannte Volumes bleiben liegen, die Daten sind also
+  nicht weg.
+- **Und die HAProxy-Einträge gehen mit.** Zeigt eine Rule auf einen Port dieses
+  Stacks, steht sie im Löschen-Fenster namentlich, und ein Haken nimmt sie mit:
+  Real Server, Backend Pool, Condition, Rule und der DNS-Eintrag, wenn ein
+  AdGuard gewählt ist. Ohne den Haken bleiben sie stehen und zeigen ins Leere —
+  bisher war das die einzige Möglichkeit.
+
 ## 2.2.0 — 9. August 2026
 
 **Nichts mehr wurde gespeichert, ohne dass es jemand gemerkt hätte — und wo

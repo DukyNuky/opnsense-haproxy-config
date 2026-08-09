@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "note": "Bekannte Stacks für den Katalog im Programm. Jeder Eintrag zeigt auf ein öffentliches Repository, in dem an der angegebenen Stelle eine Compose-Datei liegt. Ein Pull Request mit einem weiteren Eintrag ist willkommen: Name, Beschreibung, repository, und compose_file, falls die Datei nicht docker-compose.yml im Wurzelverzeichnis heißt. reference nur angeben, wenn die Datei nicht im Standardbranch liegt.",
+  "stacks": [
+    {
+      "name": "immich",
+      "description": "Fotos und Videos selbst gehostet, mit App fürs Handy. Braucht einige Variablen — der Knopf „aus dem Repository“ holt sie.",
+      "repository": "https://github.com/immich-app/immich",
+      "compose_file": "docker/docker-compose.yml",
+      "homepage": "https://immich.app"
+    },
+    {
+      "name": "paperless-ngx",
+      "description": "Dokumentenverwaltung: scannen, durchsuchbar machen, wiederfinden. Diese Datei nimmt PostgreSQL als Datenbank.",
+      "repository": "https://github.com/paperless-ngx/paperless-ngx",
+      "reference": "main",
+      "compose_file": "docker/compose/docker-compose.postgres.yml",
+      "homepage": "https://docs.paperless-ngx.com"
+    },
+    {
+      "name": "uptime-kuma",
+      "description": "Überwacht Dienste und meldet sich, wenn einer nicht mehr antwortet. Ein Container, kaum einzurichten.",
+      "repository": "https://github.com/louislam/uptime-kuma",
+      "compose_file": "compose.yaml",
+      "homepage": "https://uptime.kuma.pet"
+    },
+    {
+      "name": "audiobookshelf",
+      "description": "Server für Hörbücher und Podcasts, mit eigenen Apps.",
+      "repository": "https://github.com/advplyr/audiobookshelf",
+      "compose_file": "docker-compose.yml",
+      "homepage": "https://www.audiobookshelf.org"
+    },
+    {
+      "name": "mealie",
+      "description": "Rezepte sammeln und Essen planen, mit Einkaufsliste.",
+      "repository": "https://github.com/mealie-recipes/mealie",
+      "compose_file": "docker/docker-compose.yml",
+      "homepage": "https://mealie.io"
+    },
+    {
+      "name": "karakeep",
+      "description": "Lesezeichen, Notizen und Bilder an einem Ort, mit Volltextsuche.",
+      "repository": "https://github.com/karakeep-app/karakeep",
+      "compose_file": "docker/docker-compose.yml",
+      "homepage": "https://karakeep.app"
+    },
+    {
+      "name": "n8n",
+      "description": "Automatisierungen zwischen Diensten, hier mit PostgreSQL daneben.",
+      "repository": "https://github.com/n8n-io/n8n-hosting",
+      "compose_file": "docker-compose/withPostgres/docker-compose.yml",
+      "homepage": "https://n8n.io"
+    },
+    {
+      "name": "wg-easy",
+      "description": "WireGuard-VPN mit Weboberfläche zum Anlegen der Geräte.",
+      "repository": "https://github.com/wg-easy/wg-easy",
+      "compose_file": "docker-compose.yml",
+      "homepage": "https://wg-easy.github.io/wg-easy/"
+    }
+  ]
+}

@@ -13,10 +13,12 @@ without an import running in circles.
 
 import argparse
 import itertools
+import time
 
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import catalog as cat
 import haproxy_gui as ui
 import opnsense_haproxy as core
 import portainer as pcore
@@ -34,8 +36,13 @@ NO_HEALTHCHECK = "— keiner —"
 
 # Where a token for a private repository is handed out. Only these two are
 # offered: they are what the field above them expects an address from.
-GITHUB_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new"
-GITLAB_TOKEN_URL = "https://gitlab.com/-/user_settings/personal_access_tokens"
+GITHUB_TOKEN_URL = cat.TOKEN_PAGES["github.com"][0]
+GITLAB_TOKEN_URL = cat.TOKEN_PAGES["gitlab.com"][0]
+
+# The three lists the catalog window shows, in the order it offers them.
+KNOWN = "Bekannte Stacks"
+FAVOURITES = "Meine Favoriten"
+OWN = "Meine Repos"
 
 # From which port upwards the window looks for a free one. Below 1024 a Linux
 # host wants root, and 80 and 443 belong to whatever is already listening.
@@ -57,6 +64,7 @@ class PortainerTab(ttk.Frame):
         self.last_deploy = None
         self.link_after_deploy = True
         self.dialog = None
+        self.catalog = None
         # what a deploy is waiting to do while the environment is being checked
         self.pending = None
         # stacks whose port list is unfolded; the listing is rebuilt often, so
@@ -96,10 +104,17 @@ class PortainerTab(ttk.Frame):
                                lambda _e: self._endpoint_changed())
         self.endpoint_box.grid_remove()
         ui.Tooltip(self.endpoint_box, "Welche Docker-Umgebung dieses Portainers")
+        self.catalog_button = ttk.Button(picks, text="★ Katalog",
+                                         style="Del.TButton",
+                                         command=self.open_catalog)
+        self.catalog_button.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        ui.Tooltip(self.catalog_button,
+                   "Bekannte Stacks, eigene Favoriten und die eigenen "
+                   "Repositories — zum Deployen ohne Tipparbeit")
         self.new_button = ttk.Button(picks, text="＋ Neuer Stack",
                                      style="Accent.TButton",
                                      command=self.open_deploy)
-        self.new_button.grid(row=0, column=1, sticky="e")
+        self.new_button.grid(row=0, column=2, sticky="e")
 
         ttk.Label(outer, style="Hint.TLabel",
                   text="Welche Ports nach außen offen sind — und damit die, "
@@ -112,8 +127,9 @@ class PortainerTab(ttk.Frame):
 
     def apply_theme(self):
         self.listing.apply_theme(self.app.colors)
-        if self.dialog is not None and self.dialog.winfo_exists():
-            self.dialog.apply_theme(self.app.colors)
+        for window in (self.dialog, self.catalog):
+            if window is not None and window.winfo_exists():
+                window.apply_theme(self.app.colors)
         self.render()
 
     # -- connection --------------------------------------------------------
@@ -301,6 +317,11 @@ class PortainerTab(ttk.Frame):
         buttons.grid(row=0, column=2, rowspan=2)
         ttk.Button(buttons, text="Neu deployen", style="Del.TButton",
                    command=lambda s=stack: self._redeploy(s)).grid(row=0, column=0)
+        remove = ttk.Button(buttons, text="Löschen", style="Del.TButton",
+                            command=lambda s=stack: self._remove_stack(s))
+        remove.grid(row=0, column=1, padx=(6, 0))
+        ui.Tooltip(remove, "Stack samt Containern entfernen — und auf Wunsch "
+                           "die HAProxy-Einträge, die auf seine Ports zeigen")
 
         source = "kein Repository hinterlegt"
         if stack["git"]:
@@ -422,12 +443,34 @@ class PortainerTab(ttk.Frame):
 
     def busy_buttons(self):
         """What the window switches off while something is running."""
-        buttons = [self.new_button]
-        if self.dialog is not None and self.dialog.winfo_exists():
-            buttons.extend(self.dialog.busy_buttons())
+        buttons = [self.new_button, self.catalog_button]
+        for window in (self.dialog, self.catalog):
+            if window is not None and window.winfo_exists():
+                buttons.extend(window.busy_buttons())
         return tuple(buttons)
 
-    def open_deploy(self):
+    def open_catalog(self):
+        """The collection to deploy from, in a window of its own."""
+        if self.catalog is not None and self.catalog.winfo_exists():
+            self.catalog.lift()
+            self.catalog.focus_set()
+            return
+        self.catalog = CatalogDialog(self.app, self)
+
+    def deploy_entry(self, entry):
+        """Open the deploy form with one entry of the collection filled in.
+
+        The credentials come from the Git account that matches the host of the
+        repository, so an own repository needs no more than a click -- and they
+        are filled into the visible fields rather than sent along quietly.
+        """
+        username, token = cat.credentials_for(self.app.systems,
+                                              entry.get("repository", ""))
+        preset = dict(entry)
+        preset["username"], preset["password"] = username, token
+        self.open_deploy(preset)
+
+    def open_deploy(self, preset=None):
         """The form for a new stack, in a window of its own.
 
         It used to be a column squeezed against the left edge of the tab, where
@@ -436,6 +479,8 @@ class PortainerTab(ttk.Frame):
         listing gets the whole width back.
         """
         if self.dialog is not None and self.dialog.winfo_exists():
+            if preset:
+                self.dialog.fill_in(preset)
             self.dialog.lift()
             self.dialog.focus_set()
             return
@@ -449,6 +494,8 @@ class PortainerTab(ttk.Frame):
                 "weiß das Programm nicht, wohin der Stack soll.")
             return
         self.dialog = DeployDialog(self.app, self)
+        if preset:
+            self.dialog.fill_in(preset)
 
     def portainer_names(self):
         return [entry.get("name", "?")
@@ -803,6 +850,93 @@ class PortainerTab(ttk.Frame):
                 username=answer["username"], password=answer["password"],
                 log=ui.LiveLog(report)),
             self._redeployed, activity=f"deploye {stack['name']} neu …")
+
+    def _haproxy_hosts(self, stack):
+        """The HAProxy hosts that send traffic to this stack's ports.
+
+        They are the reason a stack cannot simply be deleted and forgotten: the
+        rule on the firewall stays behind, pointing at a port nothing answers
+        on any more, and the name keeps resolving to it.
+        """
+        target = self.host_ip()
+        if not target or not self.app.connected:
+            return []
+        ports = {str(port["host_port"]) for port in stack["ports"]}
+        found = []
+        for service in self.app.services:
+            for rule in service.get("rules", []):
+                for server in (rule.get("backend") or {}).get("servers") or []:
+                    if (str(server.get("address", "")) == target
+                            and str(server.get("port", "")) in ports
+                            and rule.get("target")):
+                        found.append(rule)
+                        break
+        return found
+
+    def _remove_stack(self, stack):
+        """Delete one stack, and offer to take its way in down with it."""
+        if self.app.busy:
+            return
+        if not self.connected:
+            messagebox.showinfo(ui.APP_TITLE,
+                                "Bitte zuerst verbinden — gelöscht wird nur, "
+                                "was gerade auch zu sehen ist.")
+            return
+        hosts = self._haproxy_hosts(stack)
+        dialog = RemoveDialog(self.app, self.app.colors, stack, hosts,
+                              self._haproxy_note())
+        self.app.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        client = self.client
+        plan = self.app.removal_plan(hosts if dialog.result["haproxy"] else [])
+
+        def work(report):
+            log = ui.LiveLog(report)
+            answer = pcore.run_step(pcore.remove_stack, client, stack, log=log)
+            answer["haproxy"] = []
+            if not answer["ok"]:
+                return answer
+            for opts in plan["steps"]:
+                try:
+                    core.deprovision(plan["client"], opts, out=log,
+                                     adguard=plan["adguard"])
+                    answer["haproxy"].append(opts.target)
+                except (core.UsageError, core.ApiError) as exc:
+                    # the stack is gone by now, so this is worth saying rather
+                    # than raising: the rest of the clean-up still runs
+                    log(f"! {opts.target}: {exc}")
+                    answer["ok"] = False
+            return answer
+
+        self.app.run_async(work, self._removed,
+                           activity=f"entferne {stack['name']} …")
+
+    def _haproxy_note(self):
+        """Why the HAProxy half of the removal may not be on offer."""
+        if not self.app.api:
+            return "Für die OPNsense fehlen die Zugangsdaten (⚙)."
+        if not self.app.connected:
+            return "Dafür muss der Tab „HAProxy“ verbunden sein."
+        if not self.host_ip():
+            return "Es ist nicht bekannt, unter welcher IP der Docker-Host zu "\
+                   "erreichen ist (⚙ beim Portainer)."
+        return ""
+
+    def _removed(self, result):
+        self.app.set_busy(False)
+        lines = list(result["log"])
+        if result.get("error"):
+            lines.append({"text": result["error"], "level": "error"})
+        for target in result.get("haproxy", []):
+            lines.append({"text": f"= {target} ist auch aus HAProxy heraus",
+                          "level": "info"})
+        self.app.write_log("Gelöscht" if result["ok"] else "Fehlgeschlagen",
+                           lines, result["ok"])
+        if result.get("haproxy"):
+            self.app.reload()  # the host list on the other tab is one short now
+        self.after(1200, self.reload)
 
     def _redeployed(self, result):
         self.app.set_busy(False)
@@ -1194,6 +1328,28 @@ class DeployDialog(tk.Toplevel):
         return (f"Belegt auf {self.tab.target_text()}: {shown}. Die Liste "
                 f"lässt diese aus.")
 
+    def fill_in(self, preset):
+        """Take up one entry of the collection: repository, path, credentials.
+
+        The name is offered as the catalog spells it but lowercased, because
+        that is what it becomes in Portainer anyway. Everything stays editable
+        -- this is a starting point, not a decision.
+        """
+        for var, key in ((self.var_name, "name"),
+                         (self.var_repo, "repository"),
+                         (self.var_ref, "reference"),
+                         (self.var_user, "username"),
+                         (self.var_token, "password")):
+            value = str(preset.get(key, "") or "")
+            if value:
+                var.set(value.lower() if key == "name" else value)
+        self.var_compose.set(preset.get("compose_file")
+                             or pcore.DEFAULT_COMPOSE_FILE)
+        note = str(preset.get("description", "") or "")
+        self.note.configure(text=note[:120] + ("…" if len(note) > 120 else ""))
+        self.lift()
+        self.focus_set()
+
     def busy_buttons(self):
         return self.deploy_button, self.env_button
 
@@ -1331,6 +1487,490 @@ class RedeployDialog(tk.Toplevel):
         self.result = {"pull": self.pull.get(), "prune": self.prune.get(),
                        "username": self.username.get().strip(),
                        "password": self.password.get()}
+        self.destroy()
+
+
+class CatalogDialog(tk.Toplevel):
+    """What there is to deploy, in three lists: known, kept, and one's own.
+
+    The point of the window is the second click: pick a line, and the deploy
+    form opens with the repository, the path and -- for an own repository --
+    the account's user name and token already in it.
+    """
+
+    # the curated list is fetched at most once a day; it is a file of a few
+    # kilobytes that changes when somebody adds a stack to it, not by the hour
+    MAX_AGE = 24 * 3600
+
+    def __init__(self, app, tab):
+        super().__init__(app)
+        self.app = app
+        self.tab = tab
+        self.colors = colors = app.colors
+        self.known = []
+        self.own = []
+        self.own_from = ""  # which account the list in hand belongs to
+        self.title("Katalog")
+        self.transient(app)
+        self.configure(bg=colors["bg"])
+        self.rowconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        head = ttk.Frame(self, style="Card.TFrame", padding=(20, 16, 20, 0))
+        head.grid(row=0, column=0, sticky="ew")
+        head.columnconfigure(0, weight=1)
+        ttk.Label(head, text="Stacks zum Deployen", style="H2.TLabel").grid(
+            row=0, column=0, sticky="w")
+
+        picks = ttk.Frame(head, style="Card.TFrame")
+        picks.grid(row=0, column=1, sticky="e")
+        self.var_source = tk.StringVar(value=KNOWN)
+        self.source_box = ttk.Combobox(picks, textvariable=self.var_source,
+                                       state="readonly", width=18,
+                                       values=[KNOWN, FAVOURITES, OWN],
+                                       style="Card.TCombobox")
+        self.source_box.grid(row=0, column=0, padx=(0, 6))
+        self.source_box.bind("<<ComboboxSelected>>",
+                             lambda _e: self._source_changed())
+        self.var_account = tk.StringVar()
+        self.account_box = ttk.Combobox(picks, textvariable=self.var_account,
+                                        state="readonly", width=16,
+                                        style="Card.TCombobox")
+        self.account_box.grid(row=0, column=1, padx=(0, 6))
+        self.account_box.bind("<<ComboboxSelected>>",
+                              lambda _e: self._load_own(force=True))
+        self.account_box.grid_remove()
+        self.reload_button = ttk.Button(picks, text="↻", width=3,
+                                        style="Tool.TButton",
+                                        command=self._refresh)
+        self.reload_button.grid(row=0, column=2)
+        ui.Tooltip(self.reload_button, "Die Liste neu holen")
+
+        self.hint = ttk.Label(head, style="Hint.TLabel", wraplength=560,
+                              justify="left", text="")
+        self.hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(3, 12))
+
+        self.listing = ui.ScrollFrame(self, colors)
+        self.listing.grid(row=1, column=0, sticky="nsew", padx=20)
+
+        footer = ttk.Frame(self, style="Card.TFrame", padding=(20, 12, 20, 16))
+        footer.grid(row=2, column=0, sticky="ew")
+        footer.columnconfigure(1, weight=1)
+        self.add_button = ttk.Button(footer, text="＋ Eigener Favorit",
+                                     style="Del.TButton",
+                                     command=self._new_favourite)
+        self.add_button.grid(row=0, column=0, sticky="w")
+        ttk.Button(footer, text="Schließen", style="Ghost.TButton",
+                   command=self.destroy).grid(row=0, column=2, sticky="e")
+
+        self.geometry("720x620")
+        self.minsize(560, 420)
+        self.bind("<Escape>", lambda _e: self.destroy())
+        _centre(self, app)
+        self._fill_accounts()
+        self._source_changed()
+
+    # -- what is on offer --------------------------------------------------
+
+    def busy_buttons(self):
+        return self.add_button, self.reload_button
+
+    def apply_theme(self, colors):
+        self.colors = colors
+        self.configure(bg=colors["bg"])
+        self.listing.apply_theme(colors)
+        self.render()
+
+    def _fill_accounts(self):
+        names = [entry.get("name", "?") for entry in cat.accounts_of(self.app.systems)]
+        self.account_box.configure(values=names)
+        if self.var_account.get() not in names:
+            self.var_account.set(names[0] if names else "")
+        return names
+
+    def _account(self):
+        for entry in cat.accounts_of(self.app.systems):
+            if entry.get("name") == self.var_account.get():
+                return entry
+        return {}
+
+    def _source_changed(self):
+        source = self.var_source.get()
+        if source == OWN and self._fill_accounts():
+            self.account_box.grid()
+        else:
+            self.account_box.grid_remove()
+        if source == KNOWN and not self.known:
+            self._load_known()
+            return
+        if source == OWN:
+            self._load_own()
+            return
+        self.render()
+
+    def _refresh(self):
+        source = self.var_source.get()
+        if source == KNOWN:
+            self._load_known(force=True)
+        elif source == OWN:
+            self._load_own(force=True)
+        else:
+            self.render()
+
+    def _load_known(self, force=False):
+        """The curated list -- from the cache unless it is old or refused."""
+        cached = self.app.prefs.get("catalog") or {}
+        fresh = (time.time() - float(cached.get("fetched") or 0)) < self.MAX_AGE
+        if not force and fresh and cached.get("stacks"):
+            self.known = [entry for entry in
+                          (cat.clean_entry(raw) for raw in cached["stacks"])
+                          if entry]
+            self.render()
+            return
+        self.app.run_async(lambda _report: cat.fetch_catalog(),
+                           self._known_loaded, on_error=self._failed,
+                           activity="hole den Katalog …")
+
+    def _known_loaded(self, entries):
+        self.app.set_busy(False)
+        self.known = entries
+        self.app.prefs["catalog"] = {"fetched": int(time.time()),
+                                     "stacks": entries}
+        ui.save_prefs(self.app.prefs)
+        if self.winfo_exists():
+            self.render()
+
+    def _load_own(self, force=False):
+        account = self._account()
+        if not account:
+            self.own, self.own_from = [], ""
+            self.render()
+            return
+        if not force and self.own_from == account.get("name"):
+            self.render()
+            return
+        self.app.run_async(lambda _report: cat.own_repos(account),
+                           self._own_loaded, on_error=self._failed,
+                           activity=f"lese die Repositories von "
+                                    f"{account.get('name', '')} …")
+
+    def _own_loaded(self, entries):
+        self.app.set_busy(False)
+        self.own = entries
+        self.own_from = self._account().get("name", "")
+        if self.winfo_exists():
+            self.render()
+
+    def _failed(self, _error):
+        # the window already wrote the reason into the log at the bottom; for
+        # the curated list there is still the copy that came with the program
+        if self.var_source.get() == KNOWN and not self.known:
+            self.known = cat.local_catalog()
+        if self.winfo_exists():
+            self.render()
+
+    def entries(self):
+        source = self.var_source.get()
+        if source == FAVOURITES:
+            return list(self.app.favorites)
+        return list(self.own if source == OWN else self.known)
+
+    # -- drawing -----------------------------------------------------------
+
+    def render(self):
+        self.listing.clear()
+        body = self.listing.body
+        body.columnconfigure(0, weight=1)
+        source = self.var_source.get()
+        self.hint.configure(text=self._hint_text())
+        entries = self.entries()
+        if not entries:
+            ttk.Label(body, style="Hint.TLabel", wraplength=520,
+                      justify="left", text=self._empty_text()).grid(
+                row=0, column=0, sticky="w", pady=(8, 0))
+            return
+        for index, entry in enumerate(entries):
+            self._row(body, entry, source).grid(row=index, column=0,
+                                                sticky="ew", pady=(0, 6))
+
+    def _hint_text(self):
+        source = self.var_source.get()
+        if source == KNOWN:
+            return ("Gepflegt im Repository dieses Programms — Stacks, deren "
+                    "Compose-Datei an der angegebenen Stelle liegt. ★ legt "
+                    "einen davon zu den eigenen Favoriten.")
+        if source == FAVOURITES:
+            return ("Selbst hinterlegt, in derselben Datei wie die Systeme. "
+                    "Kein Zugangsdatum steht hier drin — der Token kommt beim "
+                    "Deployen aus dem passenden Git-Konto.")
+        account = self._account()
+        return (f"Alles, was der Token von {account.get('name')} sehen darf, "
+                f"neu zuerst. Beim Deployen werden Benutzer und Token dieses "
+                f"Kontos eingesetzt." if account else
+                "Für die eigenen Repositories fehlt ein Git-Konto.")
+
+    def _empty_text(self):
+        source = self.var_source.get()
+        if source == FAVOURITES:
+            return ("Noch nichts gemerkt. „＋ Eigener Favorit“ unten legt "
+                    "einen an, und ★ an einer der anderen Listen übernimmt "
+                    "einen von dort.")
+        if source == OWN and not self._account():
+            return ("Unter ⚙ ein Git-Konto anlegen — Adresse, Benutzername "
+                    "und ein Token, das lesen darf. Dann steht hier, was es "
+                    "sehen kann.")
+        return "Nichts gefunden. ↻ versucht es noch einmal."
+
+    def _row(self, parent, entry, source):
+        card = tk.Frame(parent, bg=self.colors["surface2"], padx=12, pady=10)
+        card.columnconfigure(0, weight=1)
+        ttk.Label(card, text=entry["name"], style="Host.TLabel").grid(
+            row=0, column=0, sticky="w")
+        if entry.get("private"):
+            ttk.Label(card, text="privat", style="BadgeMuted.TLabel").grid(
+                row=0, column=1, padx=(8, 0))
+
+        buttons = ttk.Frame(card, style="Sub.TFrame")
+        buttons.grid(row=0, column=2, rowspan=3, padx=(10, 0))
+        ttk.Button(buttons, text="Deployen", style="Accent.TButton",
+                   command=lambda e=entry: self._deploy(e)).grid(row=0, column=0)
+        if source == FAVOURITES:
+            ttk.Button(buttons, text="Ändern", style="Del.TButton",
+                       command=lambda e=entry: self._edit_favourite(e)).grid(
+                row=0, column=1, padx=(6, 0))
+            ttk.Button(buttons, text="Entfernen", style="Del.TButton",
+                       command=lambda e=entry: self._drop_favourite(e)).grid(
+                row=0, column=2, padx=(6, 0))
+        else:
+            kept = cat.is_favourite(self.app.favorites, entry)
+            star = ttk.Button(buttons, text="★" if kept else "☆", width=3,
+                              style="Del.TButton",
+                              command=lambda e=entry: self._keep(e))
+            star.grid(row=0, column=1, padx=(6, 0))
+            ui.Tooltip(star, "Steht schon unter den Favoriten" if kept
+                       else "Zu den eigenen Favoriten legen")
+
+        ttk.Label(card, text=entry.get("description") or "keine Beschreibung",
+                  style="RowHint.TLabel", wraplength=430,
+                  justify="left").grid(row=1, column=0, columnspan=2,
+                                       sticky="w", pady=(2, 0))
+        where = entry["repository"]
+        if entry.get("reference"):
+            where += f"  ({entry['reference']})"
+        if entry.get("compose_file"):
+            where += f"  ·  {entry['compose_file']}"
+        ttk.Label(card, text=where, style="Target.TLabel", wraplength=430,
+                  justify="left").grid(row=2, column=0, columnspan=2,
+                                       sticky="w", pady=(2, 0))
+        return card
+
+    # -- what the buttons do -----------------------------------------------
+
+    def _deploy(self, entry):
+        self.tab.deploy_entry(entry)
+
+    def _keep(self, entry):
+        if cat.is_favourite(self.app.favorites, entry):
+            self.var_source.set(FAVOURITES)
+            self._source_changed()
+            return
+        self.app.remember_favourite(entry)
+        self.render()
+
+    def _new_favourite(self):
+        self._edit_favourite({})
+
+    def _edit_favourite(self, entry):
+        taken = [known["name"] for known in self.app.favorites
+                 if known["name"] != entry.get("name")]
+        dialog = FavouriteDialog(self, self.colors, entry, taken)
+        self.wait_window(dialog)
+        if dialog.result:
+            self.app.remember_favourite(dialog.result, entry.get("name", ""))
+            self.var_source.set(FAVOURITES)
+            self._source_changed()
+
+    def _drop_favourite(self, entry):
+        if messagebox.askyesno(
+                ui.APP_TITLE,
+                f"„{entry['name']}“ aus den Favoriten entfernen?\n\nEs wird "
+                "nur der Eintrag gelöscht; ein laufender Stack bleibt davon "
+                "unberührt.", icon="warning", parent=self):
+            self.app.forget_favourite(entry["name"])
+            self.render()
+
+
+class FavouriteDialog(tk.Toplevel):
+    """One entry of one's own: what it is called, and where it comes from."""
+
+    def __init__(self, parent, colors, entry, taken_names=()):
+        super().__init__(parent)
+        self.colors = colors
+        self.result = None
+        self.taken = set(taken_names)
+        self.title("Favorit bearbeiten" if entry.get("name")
+                   else "Favorit anlegen")
+        self.transient(parent)
+        self.configure(bg=colors["bg"])
+        self.columnconfigure(0, weight=1)
+
+        body = ttk.Frame(self, style="Card.TFrame", padding=20)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        rows = itertools.count()
+        ttk.Label(body, text="Favorit", style="H2.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                  text="Ein Repository, das du wieder deployen willst. "
+                       "Zugangsdaten kommen nicht hier hinein — die holt das "
+                       "Programm beim Deployen aus dem Git-Konto, dessen "
+                       "Adresse zu diesem Repository passt.").grid(
+            row=next(rows), column=0, sticky="w", pady=(3, 12))
+
+        self.vars = {}
+        for label, key, hint in (
+                ("Name", "name", "wie der Stack heißen soll, z.B. immich"),
+                ("Beschreibung", "description", "wofür er gut ist"),
+                ("Repository", "repository", "https://github.com/… "),
+                ("Branch oder Tag", "reference",
+                 "leer = der Standardbranch"),
+                ("Datei im Repository", "compose_file",
+                 f"leer = {pcore.DEFAULT_COMPOSE_FILE}")):
+            self.vars[key] = tk.StringVar(value=str(entry.get(key, "") or ""))
+            ttk.Label(body, text=label, style="FieldLabel.TLabel").grid(
+                row=next(rows), column=0, sticky="w", pady=(8, 3))
+            ttk.Entry(body, textvariable=self.vars[key], width=46,
+                      style="Card.TEntry").grid(row=next(rows), column=0,
+                                                sticky="ew")
+            ttk.Label(body, text=hint, style="Hint.TLabel").grid(
+                row=next(rows), column=0, sticky="w", pady=(2, 0))
+
+        footer = ttk.Frame(self, style="Card.TFrame", padding=(20, 12, 20, 16))
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        buttons = ttk.Frame(footer, style="Card.TFrame")
+        buttons.grid(row=0, column=0, sticky="e")
+        ttk.Button(buttons, text="Abbrechen", style="Ghost.TButton",
+                   command=self.destroy).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="Speichern", style="Accent.TButton",
+                   command=self._go).grid(row=0, column=1)
+
+        self.bind("<Return>", lambda _e: self._go())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        _centre(self, parent)
+        self.grab_set()
+
+    def _go(self):
+        values = {key: var.get().strip() for key, var in self.vars.items()}
+        entry = cat.clean_entry(values)
+        if not entry:
+            messagebox.showwarning(
+                "Unvollständig",
+                "Ein Favorit braucht einen Namen und ein Repository, das mit "
+                "http:// oder https:// anfängt — so klont Portainer es.",
+                parent=self)
+            return
+        if entry["name"] in self.taken:
+            messagebox.showwarning(
+                "Name schon vergeben",
+                f"Es gibt bereits einen Favoriten namens „{entry['name']}“.",
+                parent=self)
+            return
+        self.result = entry
+        self.destroy()
+
+
+class RemoveDialog(tk.Toplevel):
+    """What goes when this stack goes -- and what to do about the way in.
+
+    Deleting a stack in Portainer leaves the HAProxy side untouched: the rule
+    keeps pointing at a port nothing answers on, and the name keeps resolving
+    to it. So the hosts that lead here are listed by name, and taking them with
+    it is one checkbox rather than a second round through the other tab.
+    """
+
+    def __init__(self, parent, colors, stack, hosts, note=""):
+        super().__init__(parent)
+        self.title("Stack löschen")
+        self.colors = colors
+        self.result = None
+        self.transient(parent)
+        self.configure(bg=colors["bg"])
+        self.columnconfigure(0, weight=1)
+
+        body = ttk.Frame(self, style="Card.TFrame", padding=20)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        rows = itertools.count()
+
+        ttk.Label(body, text=f"{stack['name']} löschen", style="H2.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                  text="Portainer stoppt die Container und entfernt den Stack "
+                       "samt seinen Netzwerken. Benannte Volumes bleiben "
+                       "liegen — die Daten sind also nicht weg.").grid(
+            row=next(rows), column=0, sticky="w", pady=(3, 12))
+
+        listed = [f"• {container['name']}"
+                  for container in stack["containers"][:8]]
+        rest = len(stack["containers"]) - len(listed)
+        if rest > 0:
+            listed.append(f"• … und {rest} weitere")
+        if not listed:
+            listed = ["• kein laufender Container"]
+        ports = ", ".join(str(port["host_port"]) for port in stack["ports"])
+        card = tk.Frame(body, bg=colors["surface2"], padx=12, pady=10)
+        card.grid(row=next(rows), column=0, sticky="ew")
+        card.columnconfigure(0, weight=1)
+        ttk.Label(card, text="\n".join(listed), style="Target.TLabel",
+                  justify="left").grid(row=0, column=0, sticky="w")
+        if ports:
+            ttk.Label(card, style="RowHint.TLabel", wraplength=400,
+                      justify="left",
+                      text=f"Freigegebene Host-Ports: {ports}").grid(
+                row=1, column=0, sticky="w", pady=(6, 0))
+
+        self.haproxy = tk.BooleanVar(value=bool(hosts))
+        ttk.Separator(body, orient="horizontal").grid(row=next(rows), column=0,
+                                                      sticky="ew", pady=14)
+        if hosts:
+            names = ", ".join(rule["target"] for rule in hosts)
+            ttk.Checkbutton(body, variable=self.haproxy,
+                            style="Card.TCheckbutton",
+                            text="die HAProxy-Einträge dazu ebenfalls "
+                                 "entfernen").grid(row=next(rows), column=0,
+                                                   sticky="w")
+            ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                      text=f"Betrifft {names} — Real Server, Backend Pool, "
+                           "Condition und Rule, und den DNS-Eintrag, wenn ein "
+                           "AdGuard gewählt ist. Ohne Haken bleiben sie "
+                           "stehen und zeigen ins Leere.").grid(
+                row=next(rows), column=0, sticky="w", pady=(2, 0))
+        else:
+            ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                      text=note or "Auf die Ports dieses Stacks zeigt kein "
+                                   "HAProxy-Eintrag — es bleibt nichts "
+                                   "zurück.").grid(row=next(rows), column=0,
+                                                   sticky="w")
+
+        footer = ttk.Frame(self, style="Card.TFrame", padding=(20, 12, 20, 16))
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        buttons = ttk.Frame(footer, style="Card.TFrame")
+        buttons.grid(row=0, column=0, sticky="e")
+        ttk.Button(buttons, text="Abbrechen", style="Ghost.TButton",
+                   command=self.destroy).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="Löschen", style="Del.TButton",
+                   command=self._go).grid(row=0, column=1)
+
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        _centre(self, parent)
+        self.grab_set()
+
+    def _go(self):
+        self.result = {"haproxy": bool(self.haproxy.get())}
         self.destroy()
 
 
