@@ -1,5 +1,45 @@
 # Änderungen
 
+## 2.2.0 — 9. August 2026
+
+**Nichts mehr wurde gespeichert, ohne dass es jemand gemerkt hätte — und wo
+das Programm nach einem Schlüssel fragt, steht jetzt der Weg dorthin.**
+
+- **Einstellungen wurden nicht mehr geschrieben.** Ohne `--config` blieb der
+  Pfad zur Datei leer, und jeder Versuch zu speichern brach mitten im Klick ab:
+  ohne Meldung, ohne Zeile im Protokoll, einfach nichts. Das traf jeden
+  Wechsel der Verbindung und jede Änderung an einem System. Der Pfad ist jetzt
+  von Anfang an der, der in den Einstellungen unten auch angezeigt wird.
+- **Der Umschalter oben rechts meint den Tab, der vorne ist.** Auf **HAProxy**
+  wählt er die Firewall, auf **Portainer** den Docker-Host. Bisher schaltete er
+  auf beiden Tabs die OPNsense um — auf dem zweiten also etwas, das dort gar
+  nicht zu sehen war. Der zweite Umschalter im Portainer-Tab, der dasselbe
+  tun sollte, ist damit weg; geblieben ist daneben die Auswahl der Umgebung.
+- **Links zu den Seiten, die Schlüssel und Token ausgeben.** Unter *API-Secret*
+  steht, wie in OPNsense Key und Secret zusammen entstehen, samt Link auf die
+  **Benutzerverwaltung der eingetragenen Firewall**; unter *Zugriffstoken* der
+  Link auf **My account → Access tokens** des eingetragenen Portainers. Beide
+  Links werden aus der Adresse gebaut, die im Formular darüber steht, führen
+  also zur eigenen Maschine und nicht in ein Handbuch.
+- **Und beim privaten Repository steht, welche Rechte reichen.** Lesen genügt:
+  bei einem GitHub *Fine-grained token* **Repository access → Only select
+  repositories** und **Permissions → Repository permissions → Contents:
+  Read-only**, bei GitLab der Scope `read_repository`. Daneben je ein Link zur
+  Seite, auf der das Token angelegt wird.
+- **Freie Host-Ports stehen im Formular für den neuen Stack.** Unter den
+  Umgebungsvariablen liegt eine Liste der Ports, die auf der gewählten Umgebung
+  **niemand belegt** — abgeglichen mit allem, was die Container dort nach außen
+  veröffentlichen, Stacks und einzelne Container zusammen. **einsetzen**
+  schreibt die Zahl an die Stelle, an der der Cursor steht. Darunter steht,
+  was belegt ist, damit die Auswahl nachvollziehbar bleibt.
+- **Ein Portainer allein genügt jetzt.** Wer nur einen Docker-Host einträgt und
+  keine OPNsense, bekam einen leeren zweiten Tab mit „kein Portainer
+  eingerichtet“ — die Verbindung wurde nur über die Firewall zusammengesetzt,
+  und ohne Firewall blieb nichts übrig.
+- **Die zuletzt benutzte Umgebung hängt am Portainer**, nicht mehr an der
+  Firewall: bei zwei Docker-Hosts an einer OPNsense war die Umgebung des einen
+  keine Antwort für den anderen.
+
 ## 2.1.0 — 8. August 2026
 
 **Ein zweiter Stack aus demselben Repository scheitert nicht mehr erst beim

@@ -884,6 +884,31 @@ def free_port(state, wanted):
     return port
 
 
+def taken_ports(state):
+    """Every host port something on this environment already answers on."""
+    if not state:
+        return []
+    return sorted({port["host_port"] for port in all_ports(state)})
+
+
+def free_ports(state, start, count=8):
+    """The next ``count`` host ports from ``start`` upwards that nobody holds.
+
+    Measured against the last reading of the environment, so it says what is
+    free among the containers Portainer knows. A port held by something outside
+    Docker, or by a container that is currently stopped, cannot be seen from
+    here -- this is a shortlist worth trying, not a guarantee.
+    """
+    taken = set(taken_ports(state))
+    found = []
+    port = max(int(start or 0), 1)
+    while port < 65536 and len(found) < count:
+        if port not in taken:
+            found.append(port)
+        port += 1
+    return found
+
+
 # --------------------------------------------------------------------------
 # the steps a window runs
 # --------------------------------------------------------------------------

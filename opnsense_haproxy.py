@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -1626,9 +1626,12 @@ def merged_profile(systems, entry, adguard=None, portainer=None):
     the three are kept apart on disk. Passing ``adguard`` or ``portainer``
     overrides what the entry names, which is what the pickers before a deploy
     hand in.
+
+    Without an entry there is still something to build: somebody who set up
+    only a Portainer has no firewall to hang it on, and the Docker half of the
+    window has to work for them too.
     """
-    if not entry:
-        return {}
+    entry = entry or {}
     profile = {k: v for k, v in entry.items() if k not in ("adguard", "portainer")}
     for kind, chosen in (("adguard", adguard), ("portainer", portainer)):
         name = entry.get(kind, "") if chosen is None else chosen

@@ -32,6 +32,15 @@ AUTO_MODES = (AUTO_OFF, AUTO_INTERVAL, AUTO_WEBHOOK)
 
 NO_HEALTHCHECK = "— keiner —"
 
+# Where a token for a private repository is handed out. Only these two are
+# offered: they are what the field above them expects an address from.
+GITHUB_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new"
+GITLAB_TOKEN_URL = "https://gitlab.com/-/user_settings/personal_access_tokens"
+
+# From which port upwards the window looks for a free one. Below 1024 a Linux
+# host wants root, and 80 and 443 belong to whatever is already listening.
+FIRST_FREE_PORT = 8000
+
 
 class PortainerTab(ttk.Frame):
     """Stacks, containers and their published ports -- and the way to HAProxy."""
@@ -72,21 +81,17 @@ class PortainerTab(ttk.Frame):
         ttk.Label(head, text="Stacks und Ports", style="H2.TLabel").grid(
             row=0, column=0, sticky="w")
 
+        # Which Portainer is being worked on is chosen in the header, next to
+        # the connection state -- the same place the firewall is chosen on the
+        # other tab. A second picker for it used to sit here and was easy to
+        # take for the environment picker beside it.
         picks = ttk.Frame(head, style="Card.TFrame")
         picks.grid(row=0, column=2, sticky="e")
-        self.var_portainer = tk.StringVar()
-        self.portainer_box = ttk.Combobox(picks, textvariable=self.var_portainer,
-                                          state="readonly", width=18,
-                                          style="Card.TCombobox")
-        self.portainer_box.grid(row=0, column=0, sticky="e", padx=(0, 6))
-        self.portainer_box.bind("<<ComboboxSelected>>",
-                                lambda _e: self._portainer_changed())
-        ui.Tooltip(self.portainer_box, "Auf welchem Portainer gearbeitet wird")
         self.var_endpoint = tk.StringVar()
         self.endpoint_box = ttk.Combobox(picks, textvariable=self.var_endpoint,
                                          state="readonly", width=18,
                                          style="Card.TCombobox")
-        self.endpoint_box.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        self.endpoint_box.grid(row=0, column=0, sticky="e", padx=(0, 6))
         self.endpoint_box.bind("<<ComboboxSelected>>",
                                lambda _e: self._endpoint_changed())
         self.endpoint_box.grid_remove()
@@ -94,7 +99,7 @@ class PortainerTab(ttk.Frame):
         self.new_button = ttk.Button(picks, text="＋ Neuer Stack",
                                      style="Accent.TButton",
                                      command=self.open_deploy)
-        self.new_button.grid(row=0, column=2, sticky="e")
+        self.new_button.grid(row=0, column=1, sticky="e")
 
         ttk.Label(outer, style="Hint.TLabel",
                   text="Welche Ports nach außen offen sind — und damit die, "
@@ -104,18 +109,6 @@ class PortainerTab(ttk.Frame):
 
         self.listing = ui.ScrollFrame(outer, self.app.colors)
         self.listing.grid(row=2, column=0, sticky="nsew")
-        self._fill_portainers()
-
-    def _fill_portainers(self):
-        """The picker only earns its place once there is a second one."""
-        names = [entry.get("name", "?")
-                 for entry in self.app.systems.get("portainer", [])]
-        self.portainer_box.configure(values=names)
-        self.var_portainer.set(self.app.active.get("portainer", ""))
-        self.portainer_box.grid() if len(names) > 1 else self.portainer_box.grid_remove()
-
-    def _portainer_changed(self):
-        self.app.switch_portainer(self.var_portainer.get())
 
     def apply_theme(self):
         self.listing.apply_theme(self.app.colors)
@@ -132,11 +125,12 @@ class PortainerTab(ttk.Frame):
         self.client, self.settings = pcore.client_from_config(
             profile, insecure=getattr(self.app.args, "insecure", False))
         self.problem = self.settings.get("error", "")
+        # remembered under the Portainer's own name: with two Docker hosts on
+        # one firewall, the environment of the one is no answer for the other
         remembered = (self.app.prefs.get("portainer_endpoint") or {}).get(
-            profile.get("name", ""))
+            (profile.get("portainer") or {}).get("name", ""))
         self.endpoint_id = self.settings.get("endpoint_id") or remembered
         self.endpoint_box.grid_remove()
-        self._fill_portainers()
         self.render()
 
     @property
@@ -199,7 +193,6 @@ class PortainerTab(ttk.Frame):
         self.endpoint_box.grid() if len(names) > 1 else self.endpoint_box.grid_remove()
         self.app.remember_endpoint(self.endpoint_id)
         self.app.paint_connection()
-        self._fill_portainers()
         if self.dialog is not None and self.dialog.winfo_exists():
             self.dialog.refresh_target()
         self.render()
@@ -463,6 +456,16 @@ class PortainerTab(ttk.Frame):
 
     def endpoint_names(self):
         return [entry["name"] for entry in (self.state or {}).get("endpoints", [])]
+
+    def free_ports(self):
+        """Host ports on this environment that nothing answers on, for the form."""
+        if not self.connected:
+            return []
+        return pcore.free_ports(self.state, FIRST_FREE_PORT)
+
+    def taken_ports(self):
+        """Host ports that are gone -- what the free list was measured against."""
+        return pcore.taken_ports(self.state) if self.connected else []
 
     def _load_env(self, values):
         """Ask the repository what this stack expects, before deploying it."""
@@ -851,7 +854,9 @@ class DeployDialog(tk.Toplevel):
         super().__init__(app)
         self.app = app
         self.tab = tab
-        colors = app.colors
+        # kept on the window itself: the tooltips and the links read the theme
+        # off whichever window they hang in
+        self.colors = colors = app.colors
         self.title("Neuer Stack")
         self.transient(app)
         self.configure(bg=colors["bg"])
@@ -878,6 +883,7 @@ class DeployDialog(tk.Toplevel):
         self.var_force_pull = tk.BooleanVar(value=True)
         self.var_git_tls = tk.BooleanVar(value=True)
         self.var_link = tk.BooleanVar(value=True)
+        self.var_free_port = tk.StringVar()
         self.var_portainer = tk.StringVar()
         self.var_endpoint = tk.StringVar()
 
@@ -991,6 +997,61 @@ class DeployDialog(tk.Toplevel):
                   text="Eine Zeile je Variable, KEY=wert — genau wie im "
                        "Textfeld von Portainer.").grid(row=next(rows), column=0,
                                                        sticky="w", pady=(2, 0))
+        self._build_ports(outer, rows)
+
+    def _build_ports(self, outer, rows):
+        """Which host port this stack may take -- and which are gone.
+
+        A published port belongs to the whole Docker host, not to the stack
+        that asks for it, so the number that goes into a variable up there has
+        to be one nothing else answers on. Guessing it is what makes a first
+        stack fail, and the answer is already in the window: the environment
+        was read a moment ago.
+        """
+        self.ports_card = tk.Frame(outer, bg=self.app.colors["surface2"],
+                                   padx=12, pady=10)
+        self.ports_card.grid(row=next(rows), column=0, sticky="ew", pady=(12, 0))
+        self.ports_card.columnconfigure(2, weight=1)
+        ttk.Label(self.ports_card, text="Freie Host-Ports",
+                  style="Switch.TLabel").grid(row=0, column=0, columnspan=3,
+                                              sticky="w")
+        self.ports_hint = ttk.Label(self.ports_card, style="RowHint.TLabel",
+                                    wraplength=330, justify="left", text="")
+        self.ports_hint.grid(row=1, column=0, columnspan=3, sticky="w",
+                             pady=(2, 8))
+        self.port_box = ttk.Combobox(self.ports_card,
+                                     textvariable=self.var_free_port,
+                                     state="readonly", width=8,
+                                     style="Card.TCombobox")
+        self.port_box.grid(row=2, column=0, sticky="w")
+        self.port_button = ttk.Button(self.ports_card, text="einsetzen",
+                                      style="Del.TButton",
+                                      command=self._insert_port)
+        self.port_button.grid(row=2, column=1, sticky="w", padx=(8, 0))
+        ui.Tooltip(self.port_button,
+                   "Schreibt die Zahl an die Stelle, an der oben im Feld der "
+                   "Cursor steht")
+
+    def _insert_port(self):
+        """Put the chosen number where the cursor stands in the variables.
+
+        Only where somebody put it: without a click in the field the cursor is
+        still at the very top, and a number dropped in front of the first line
+        would be a riddle rather than a help. Then it goes at the end, where
+        anything typed next would have gone anyway.
+        """
+        port = self.var_free_port.get()
+        if not port:
+            return
+        try:
+            typing = self.focus_get() is self.env_text
+        except KeyError:  # Tk knows no widget under that name any more
+            typing = False
+        # "end" is behind the newline every Text keeps at the bottom, so the
+        # number would land on a line of its own -- one character earlier is
+        # the end of the last line somebody wrote
+        self.env_text.insert("insert" if typing else "end-1c", port)
+        self.env_text.focus_set()
 
     def _build_right(self, outer):
         rows = itertools.count()
@@ -998,9 +1059,12 @@ class DeployDialog(tk.Toplevel):
             row=next(rows), column=0, sticky="w", pady=(8, 0))
         ttk.Label(outer, style="Hint.TLabel", wraplength=360, justify="left",
                   text="Nur ausfüllen, wenn das Repository nicht öffentlich "
-                       "ist. Die Angaben gehen an Portainer und werden hier "
-                       "nicht gespeichert.").grid(row=next(rows), column=0,
-                                                  sticky="w", pady=(3, 6))
+                       "ist. Als Benutzer der eigene Anmeldename, als Passwort "
+                       "ein Token — GitHub und GitLab nehmen das eigentliche "
+                       "Passwort dafür nicht mehr an. Die Angaben gehen an "
+                       "Portainer und werden hier nicht "
+                       "gespeichert.").grid(row=next(rows), column=0,
+                                            sticky="w", pady=(3, 6))
         for label, var, secret in (("Benutzer", self.var_user, False),
                                    ("Passwort oder Token", self.var_token, True)):
             ttk.Label(outer, text=label, style="FieldLabel.TLabel").grid(
@@ -1008,6 +1072,22 @@ class DeployDialog(tk.Toplevel):
             ttk.Entry(outer, textvariable=var, style="Card.TEntry",
                       show="•" if secret else "").grid(row=next(rows), column=0,
                                                        sticky="ew")
+        ttk.Label(outer, style="Hint.TLabel", wraplength=360, justify="left",
+                  text="Lesen genügt. Bei einem GitHub Fine-grained token: "
+                       "Repository access → Only select repositories → dieses "
+                       "eine, dann Permissions → Repository permissions → "
+                       "Contents auf Read-only. Bei GitLab: Scope "
+                       "read_repository.").grid(row=next(rows), column=0,
+                                                sticky="w", pady=(6, 0))
+        links = ttk.Frame(outer, style="Card.TFrame")
+        links.grid(row=next(rows), column=0, sticky="w", pady=(4, 0))
+        ui.link_label(links, self.app.colors, "GitHub-Token anlegen",
+                      GITHUB_TOKEN_URL,
+                      style="CardLink.TLabel").grid(row=0, column=0)
+        ui.link_label(links, self.app.colors, "GitLab-Token anlegen",
+                      GITLAB_TOKEN_URL,
+                      style="CardLink.TLabel").grid(row=0, column=1,
+                                                    padx=(14, 0))
         ttk.Checkbutton(outer, text="TLS-Zertifikat des Git-Servers prüfen",
                         variable=self.var_git_tls,
                         style="Card.TCheckbutton").grid(row=next(rows), column=0,
@@ -1087,6 +1167,32 @@ class DeployDialog(tk.Toplevel):
                                     else "disabled")
         self.var_endpoint.set((self.tab.state or {}).get("endpoint", {}).get(
             "name", ""))
+        self.refresh_ports()
+
+    def refresh_ports(self):
+        """Say again what is free and what is gone on the chosen environment."""
+        free = [str(port) for port in self.tab.free_ports()]
+        self.port_box.configure(values=free,
+                                state="readonly" if free else "disabled")
+        self.port_button.configure(state="normal" if free else "disabled")
+        if self.var_free_port.get() not in free:
+            self.var_free_port.set(free[0] if free else "")
+        self.ports_hint.configure(text=self._ports_text())
+
+    def _ports_text(self):
+        """What stands in the way, in numbers -- the first few of them."""
+        if not self.tab.connected:
+            return ("Erst nach dem Verbinden bekannt — dann steht hier, was "
+                    f"{self.tab.target_text()} schon belegt.")
+        taken = self.tab.taken_ports()
+        if not taken:
+            return (f"Auf {self.tab.target_text()} veröffentlicht gerade kein "
+                    f"Container einen Port.")
+        shown = ", ".join(str(port) for port in taken[:8])
+        if len(taken) > 8:
+            shown += f" … (+{len(taken) - 8})"
+        return (f"Belegt auf {self.tab.target_text()}: {shown}. Die Liste "
+                f"lässt diese aus.")
 
     def busy_buttons(self):
         return self.deploy_button, self.env_button
@@ -1110,8 +1216,10 @@ class DeployDialog(tk.Toplevel):
                    if line and not line.startswith("#"))
 
     def apply_theme(self, colors):
+        self.colors = colors
         self.configure(bg=colors["bg"])
         self.scroll.apply_theme(colors)
+        self.ports_card.configure(bg=colors["surface2"])
         self.env_text.configure(bg=colors["surface2"], fg=colors["text"],
                                 insertbackground=colors["text"],
                                 selectbackground=colors["accent_soft"],

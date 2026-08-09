@@ -80,7 +80,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.1.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.1.0.zip)**
+**[opnsense-haproxy-2.2.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.2.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -170,7 +170,7 @@ im obersten Abschnitt, dann füllt sich das Fenster so:
 | **Name** | Ein Name für dich, z.B. `Zuhause`. |
 | **Adresse** | Die Adresse deiner OPNsense-Oberfläche, z.B. `https://192.168.1.1` oder `https://opnsense.fritz.box`. |
 | **API-Key** | Die Zeile `key=…` aus `apikey.txt` — **ohne** das `key=` davor. |
-| **API-Secret** | Entsprechend die Zeile `secret=…`. |
+| **API-Secret** | Entsprechend die Zeile `secret=…`. Darunter steht der Weg aus Schritt 4 noch einmal in Kurzform, mit einem Link direkt auf die Benutzerverwaltung der Adresse, die du eine Zeile höher eingetragen hast. |
 | **IP von HAProxy** | Die Adresse, unter der HAProxy erreichbar ist — meistens die IP deiner OPNsense, z.B. `192.168.1.1`. Darauf zeigen später die DNS-Einträge. |
 
 Das Häkchen **TLS-Zertifikat der OPNsense prüfen** bleibt aus, solange deine
@@ -246,10 +246,14 @@ Die Kopfzeile und das Protokoll unten gehören beiden: der Umschalter für die
 Verbindung, die Statusanzeige und **Verbinden** meinen immer den Tab, der
 gerade vorne ist.
 
-**Oben rechts** liegen die Knöpfe: der Umschalter für die OPNsense, das
+**Oben rechts** liegen die Knöpfe: der Umschalter für die Verbindung, das
 Zahnrad ⚙ für die Einstellungen, **Verbinden**, **⇩ Update**, **⤓ Installieren**
 und der Mond/Sonne-Knopf für hell oder dunkel. Was ein Knopf tut, verrät ein
 Hinweis, wenn die Maus einen Moment darauf liegt.
+
+Der Umschalter meint immer den Tab, der vorne ist: auf **HAProxy** wählt er die
+OPNsense, auf **Portainer** den Docker-Host. Ganz unten in seiner Liste steht
+**⚙ Einstellungen …** — der zweite Weg dorthin.
 
 **Von allein verbindet sich nichts.** Das Fenster geht auf und wartet; erst
 **Verbinden** holt die Daten von der OPNsense. Danach heißt derselbe Knopf
@@ -298,10 +302,14 @@ Oben sitzen zwei große Tabs. **HAProxy** ist alles, was oben beschrieben ist.
 stehen.
 
 Ein Standort hat meist eine OPNsense und einen Portainer, also merkt sich jede
-Firewall, welcher Portainer zu ihr gehört: der Umschalter oben rechts bringt
-beide Hälften an denselben Ort. Zwingend ist die Zuordnung nicht — im Tab
-selbst steht ein eigener Umschalter, sobald mehr als ein Portainer eingerichtet
-ist. **Verbinden** gilt immer für den Tab, der gerade vorne ist.
+Firewall, welcher Portainer zu ihr gehört: wer die OPNsense wechselt, bekommt
+den Docker-Host gleich mit. Zwingend ist die Zuordnung nicht — solange dieser
+Tab vorne ist, wählt der Umschalter oben rechts den Portainer, unabhängig
+davon, was die Firewall vorschlägt. **Verbinden** gilt immer für den Tab, der
+gerade vorne ist.
+
+Eine OPNsense braucht es dafür nicht: wer nur einen Portainer einträgt, kann
+diesen Tab allein benutzen.
 
 ### Einrichten
 
@@ -310,19 +318,22 @@ Im Zahnrad ⚙ im Abschnitt **Portainer** auf **＋ Hinzufügen**:
 * **Name** — wie du ihn nennen willst, z.B. `Docker Zuhause`.
 * **Adresse** deines Portainers, z.B. `https://portainer.example.de:9443`.
 * **Anmeldung** — entweder ein **Zugriffstoken** (in Portainer oben rechts auf
-  den Benutzer, dann *My account → Access tokens*) oder **Benutzer und
-  Passwort** wie in der Weboberfläche. Beim Token wird nichts weiter gebraucht;
-  beim Passwort holt sich das Programm bei jedem Start selbst ein Token.
+  den Benutzer, dann *My account → Access tokens → Add access token*) oder
+  **Benutzer und Passwort** wie in der Weboberfläche. Beim Token wird nichts
+  weiter gebraucht; beim Passwort holt sich das Programm bei jedem Start selbst
+  ein Token. Unter dem Feld steht ein Link, der genau diese Seite auf der
+  Adresse öffnet, die du eine Zeile darüber eingetragen hast — das Token zeigt
+  Portainer nur ein einziges Mal an, also gleich herüberkopieren.
 * **IP des Docker-Hosts** — die Adresse, an die HAProxy die Anfragen schickt.
   Bleibt sie leer, wird der Rechner aus der Portainer-Adresse genommen. Das
   stimmt, solange Portainer auf demselben Host läuft wie die Container;
   ansonsten hier die richtige IP eintragen.
 
 Damit der Tab weiß, welchen Portainer er zeigen soll, wählst du ihn bei der
-OPNsense unter **Arbeitet zusammen mit** — oder oben im Tab, wenn mehrere
-eingerichtet sind. Läuft Portainer über mehrere Umgebungen (*Environments*),
-steht daneben noch ein zweites Auswahlfeld. Welche du zuletzt benutzt hast,
-merkt sich das Programm.
+OPNsense unter **Arbeitet zusammen mit** — oder jederzeit oben rechts im
+Umschalter, solange dieser Tab vorne ist. Läuft Portainer über mehrere
+Umgebungen (*Environments*), steht im Tab selbst noch ein Auswahlfeld dafür.
+Welche Umgebung du zuletzt benutzt hast, merkt sich das Programm je Portainer.
 
 ### Was die Liste zeigt
 
@@ -405,9 +416,20 @@ Darunter links die Angaben zum Repository, rechts das Seltenere:
   Textfeld von Portainer. Leere Zeilen und `#`-Kommentare werden übergangen,
   Anführungszeichen um den Wert fallen weg. Den Anfang macht der Knopf
   **aus dem Repository** daneben, siehe unten.
+* **Freie Host-Ports** — unter den Variablen liegt eine Liste der Ports, die
+  auf der gewählten Umgebung niemand belegt, abgeglichen mit allem, was die
+  Container dort nach außen veröffentlichen. **einsetzen** schreibt die Zahl an
+  die Stelle, an der der Cursor im Feld steht; darunter steht, was schon
+  vergeben ist. Sichtbar ist nur, was Portainer sieht — ein Dienst außerhalb
+  von Docker kann denselben Port trotzdem halten.
 * **Privates Repository** — Benutzer und Token. Sie gehen an Portainer, das sie
   beim Stack hinterlegt; **in der Konfigurationsdatei dieses Programms landen
-  sie nicht**.
+  sie nicht**. Als Benutzer der eigene Anmeldename, als Passwort ein Token —
+  das eigentliche Passwort nehmen GitHub und GitLab dafür nicht mehr an. Lesen
+  genügt: bei einem GitHub *Fine-grained token* **Repository access → Only
+  select repositories** und **Permissions → Repository permissions →
+  Contents: Read-only**, bei GitLab der Scope `read_repository`. Links zu
+  beiden Seiten stehen unter dem Feld.
 * **Automatisch aktualisieren** — *regelmäßig nachsehen* (Abstand als `5m`,
   `30m`, `24h`) oder *auf Webhook warten*. Beim Webhook steht die fertige
   URL nach dem Deploy im Protokoll; wer sie in GitHub oder GitLab als Webhook

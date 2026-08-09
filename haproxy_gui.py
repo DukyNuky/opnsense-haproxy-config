@@ -39,6 +39,9 @@ NO_DNS = "— kein DNS-Eintrag —"
 EDIT_PROFILE = "⚙ Einstellungen …"
 TOKEN_LOGIN = "Zugriffstoken"
 USER_LOGIN = "Benutzer und Passwort"
+# what the picker in the header is for -- it changes with the tab in front
+SWITCHER_TIP = {"opnsense": "Welche OPNsense gemeint ist",
+                "portainer": "Auf welchem Portainer gearbeitet wird"}
 
 THEMES = {
     "light": {
@@ -149,6 +152,37 @@ class Tooltip:
              - self.tip.winfo_width() // 2)
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
         self.tip.wm_geometry(f"+{max(x, 0)}+{y}")
+
+
+def link_label(parent, colors, text, url, style="Link.TLabel", tip=""):
+    """A name that opens a page in the browser when it is clicked.
+
+    Only the colour reacts to the mouse. Anything that changes the font
+    changes the size the label asks for, and the row underneath it moves.
+
+    ``url`` may be a function instead of a string: a link that is built from a
+    field somebody is still filling in -- the address of their own Portainer,
+    say -- has to ask where it goes at the moment it is clicked, not while the
+    window is being drawn.
+    """
+    def go(_event=None):
+        target = url() if callable(url) else url
+        if target:
+            webbrowser.open(target)
+
+    def hover(_event=None):
+        # the window itself knows the theme in force, which is what makes the
+        # colour follow a switch between light and dark while it is open
+        live = getattr(link.winfo_toplevel(), "colors", colors)
+        link.configure(foreground=live["text"])
+
+    link = ttk.Label(parent, text=text, style=style, cursor="hand2")
+    link.bind("<Button-1>", go)
+    link.bind("<Enter>", hover)
+    link.bind("<Leave>", lambda _e: link.configure(foreground=""))
+    Tooltip(link, tip or ("Öffnet die Seite im Browser" if callable(url)
+                          else f"{url}  öffnen"))
+    return link
 
 
 class Switch(tk.Canvas):
@@ -354,10 +388,31 @@ SYSTEM_FIELDS = {
                   ("Adresse", "url", False,
                    "https://portainer.example.de:9443")),
 }
+# Where the fields that ask for a key or a token are handed one out. The two
+# paths are appended to the address in the form above them, so the link leads
+# to the machine being set up and not to a manual about somebody else's.
+OPNSENSE_USERS_PATH = "/system_usermanager.php"
+OPNSENSE_API_DOCS = "https://docs.opnsense.org/development/how-tos/api.html"
+PORTAINER_TOKENS_PATH = "/#!/account/tokens"
 VERIFY_LABEL = {"opnsense": "TLS-Zertifikat der OPNsense prüfen",
                 "adguard": "TLS-Zertifikat von AdGuard prüfen",
                 "portainer": "TLS-Zertifikat von Portainer prüfen"}
 NO_LINK = "— keiner —"
+
+
+def page_on(url, path):
+    """One page on the machine whose address stands in the form, or nothing.
+
+    The address is being typed while the link already sits under it, so half of
+    one is the normal case: a link that stays quiet is better than a browser
+    opening on nonsense.
+    """
+    address = str(url or "").strip().rstrip("/")
+    if not address:
+        return ""
+    if "://" not in address:
+        address = "https://" + address
+    return address + path
 
 
 class SystemDialog(tk.Toplevel):
@@ -415,6 +470,7 @@ class SystemDialog(tk.Toplevel):
             if hint:
                 ttk.Label(body, text=hint, style="Hint.TLabel").grid(
                     row=next(rows), column=0, sticky="w", pady=(2, 0))
+            self._field_help(body, rows, name)
 
         if kind == "portainer":
             self._build_portainer(body, rows, entry)
@@ -425,13 +481,6 @@ class SystemDialog(tk.Toplevel):
         ttk.Checkbutton(body, text=VERIFY_LABEL[kind], variable=self.verify,
                         style="Card.TCheckbutton").grid(row=next(rows), column=0,
                                                         sticky="w", pady=(14, 0))
-        if kind == "opnsense":
-            ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
-                      text="Den Schlüssel gibt es in OPNsense unter System → "
-                           "Zugriff → Benutzer, rechts in der Zeile des "
-                           "Benutzers das Briefmarken-Symbol.").grid(
-                row=next(rows), column=0, sticky="w", pady=(12, 0))
-
         self.footer = footer = ttk.Frame(self, style="Card.TFrame",
                                          padding=(20, 12, 20, 16))
         footer.grid(row=1, column=0, sticky="ew")
@@ -451,6 +500,33 @@ class SystemDialog(tk.Toplevel):
         self.update_idletasks()
         _fit_dialog(self, parent, self.scroll, self.footer, floor=460)
         self.grab_set()
+
+    def _field_help(self, body, rows, field):
+        """Under the field that asks for a key: how to get one, and where.
+
+        At the field rather than at the end of the form -- somebody who has no
+        API key yet needs the way there at the moment they run out of things to
+        type, not three fields further down.
+        """
+        if self.kind != "opnsense" or field != "secret":
+            return
+        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                  text="Key und Secret entstehen zusammen: in OPNsense unter "
+                       "System → Zugriff → Benutzer, dort rechts in der Zeile "
+                       "des Benutzers auf das Briefmarken-Symbol. OPNsense "
+                       "lädt daraufhin eine apikey.txt mit beiden Zeilen "
+                       "herunter — das Secret zeigt es kein zweites Mal. Der "
+                       "Benutzer braucht das Recht „Services: HAProxy“.").grid(
+            row=next(rows), column=0, sticky="w", pady=(6, 0))
+        links = ttk.Frame(body, style="Card.TFrame")
+        links.grid(row=next(rows), column=0, sticky="w", pady=(4, 0))
+        link_label(links, self.colors, "Benutzer in OPNsense öffnen",
+                   lambda: page_on(self.vars["url"].get(), OPNSENSE_USERS_PATH),
+                   style="CardLink.TLabel",
+                   tip="Öffnet die Adresse von oben mit "
+                       f"{OPNSENSE_USERS_PATH}").grid(row=0, column=0)
+        link_label(links, self.colors, "Anleitung", OPNSENSE_API_DOCS,
+                   style="CardLink.TLabel").grid(row=0, column=1, padx=(14, 0))
 
     def _build_portainer(self, body, rows, entry):
         """Token or user and password -- only one of the two is ever kept."""
@@ -478,9 +554,19 @@ class SystemDialog(tk.Toplevel):
         ttk.Label(self.pt_token_box, style="Hint.TLabel", wraplength=420,
                   justify="left",
                   text="In Portainer oben rechts auf den Benutzer, dann "
-                       "My account → Access tokens.").grid(row=2, column=0,
-                                                           sticky="w",
-                                                           pady=(2, 0))
+                       "My account → Access tokens → Add access token. Das "
+                       "Token steht nur einmal da, also gleich hierher "
+                       "kopieren.").grid(row=2, column=0, sticky="w",
+                                         pady=(2, 0))
+        link_label(self.pt_token_box, self.colors,
+                   "Access tokens in Portainer öffnen",
+                   lambda: page_on(self.vars["url"].get(),
+                                   PORTAINER_TOKENS_PATH),
+                   style="CardLink.TLabel",
+                   tip="Öffnet die Adresse von oben mit "
+                       f"{PORTAINER_TOKENS_PATH}").grid(row=3, column=0,
+                                                        sticky="w",
+                                                        pady=(4, 0))
 
         self.pt_user_box = ttk.Frame(body, style="Card.TFrame")
         self.pt_user_box.grid(row=next(rows), column=0, sticky="ew")
@@ -1070,7 +1156,9 @@ class App(tk.Tk):
         # against, so a pinned icon and the running window belong together
         super().__init__(className=core.WM_CLASS)
         self.args = args
-        self.config_path = args.config
+        # Without --config this used to stay None, and every attempt to save
+        # died on the way to the file -- in a callback, where nobody sees it.
+        self.config_path = args.config or core.DEFAULT_CONFIG
         self.settings = {}
         self.api = None
         # the three lists from the file, and which of each is selected right
@@ -1152,6 +1240,9 @@ class App(tk.Tk):
         # what the label reports as its size, and the whole row jumps.
         self.font_link = self.font_mono_bold.copy()
         self.font_link.configure(underline=True)
+        # the same idea in the size a hint under a field is written in
+        self.font_link_small = self.font_small.copy()
+        self.font_link_small.configure(underline=True)
         self.font_icon = tkfont.Font(family=base.cget("family"), size=12)
 
     def _apply_theme(self):
@@ -1192,6 +1283,9 @@ class App(tk.Tk):
                         foreground=c["text"], font=self.font_mono_bold)
         style.configure("Link.TLabel", background=c["surface2"],
                         foreground=c["accent"], font=self.font_link)
+        # a link in the running text under a field, on the card behind it
+        style.configure("CardLink.TLabel", background=c["surface"],
+                        foreground=c["accent"], font=self.font_link_small)
         style.configure("Target.TLabel", background=c["surface2"],
                         foreground=c["muted"], font=self.font_mono)
         style.configure("RowHint.TLabel", background=c["surface2"],
@@ -1418,6 +1512,7 @@ class App(tk.Tk):
         for other, page in self.pages.items():
             page.grid() if other == name else page.grid_remove()
         self._paint_tabs()
+        self._fill_switcher()
         self.paint_connection()
 
     def _paint_tabs(self):
@@ -1454,7 +1549,8 @@ class App(tk.Tk):
                                         style="Card.TCombobox")
         self.profile_box.grid(row=0, column=0, padx=(0, 8))
         self.profile_box.bind("<<ComboboxSelected>>",
-                              lambda _e: self._switch_profile())
+                              lambda _e: self._switch_active())
+        self.profile_tip = Tooltip(self.profile_box, SWITCHER_TIP["opnsense"])
 
         self.status_pill = ttk.Label(actions, text="nicht verbunden",
                                      style="IdlePill.TLabel")
@@ -1842,17 +1938,7 @@ class App(tk.Tk):
         return card
 
     def _link(self, parent, text, url, style="Link.TLabel"):
-        """A name that opens a page in the browser when it is clicked.
-
-        Only the colour reacts to the mouse. Anything that changes the font
-        changes the size the label asks for, and the row underneath it moves.
-        """
-        link = ttk.Label(parent, text=text, style=style, cursor="hand2")
-        link.bind("<Button-1>", lambda _e: webbrowser.open(url))
-        link.bind("<Enter>", lambda _e: link.configure(foreground=self.colors["text"]))
-        link.bind("<Leave>", lambda _e: link.configure(foreground=""))
-        Tooltip(link, f"{url}  öffnen")
-        return link
+        return link_label(parent, self.colors, text, url, style)
 
     def _dns_state(self, rule):
         """What AdGuard has to say about this host, and what to offer about it."""
@@ -2041,7 +2127,7 @@ class App(tk.Tk):
         not a credential, and writing the config would rewrite the profiles.
         """
         chosen = dict(self.prefs.get("portainer_endpoint") or {})
-        chosen[self.profile.get("name", "")] = endpoint_id
+        chosen[self.active.get("portainer", "")] = endpoint_id
         self.prefs["portainer_endpoint"] = chosen
         save_prefs(self.prefs)
 
@@ -2161,7 +2247,7 @@ class App(tk.Tk):
         # A missing config file is the normal first start here, not an error --
         # the settings are what fill it in.
         config = {}
-        path = self.config_path or core.DEFAULT_CONFIG
+        path = self.config_path
         if os.path.exists(path):
             try:
                 config = core.load_config(path)
@@ -2182,7 +2268,7 @@ class App(tk.Tk):
             else:
                 self.active["opnsense"] = self.args.profile
         self._follow_links()
-        self._fill_profiles()
+        self._fill_switcher()
         self._use_active(first_run=True, connect=False)
 
     def _follow_links(self):
@@ -2197,13 +2283,22 @@ class App(tk.Tk):
             if named and core.find_system(self.systems, kind, named):
                 self.active[kind] = named
 
-    def _fill_profiles(self):
-        """Always show the switcher -- it is the way to the settings as well."""
-        names = [e.get("name", "?") for e in self.systems.get("opnsense", [])]
+    def _fill_switcher(self):
+        """The picker in the header belongs to whichever half is in front.
+
+        On the HAProxy tab it chooses the firewall, on the Portainer tab the
+        Docker host -- so it always names the thing that is being looked at.
+        It used to switch the firewall on both, which on the second tab changed
+        something that was nowhere on the screen. The way to the settings is at
+        the end of either list.
+        """
+        kind = "portainer" if self.active_tab() == "portainer" else "opnsense"
+        names = [e.get("name", "?") for e in self.systems.get(kind, [])]
         self.profile_box.configure(values=names + [EDIT_PROFILE],
                                    state="readonly")
+        self.var_profile.set(self.active.get(kind, ""))
+        self.profile_tip.text = SWITCHER_TIP[kind]
         self.profile_box.grid()
-        self._fill_dns_choices()
 
     def _fill_dns_choices(self):
         """The AdGuard picker in the form: every one configured, or none."""
@@ -2246,7 +2341,7 @@ class App(tk.Tk):
                                            portainer=self.active.get("portainer"))
         self.connected = False
         self.services, self.domains = [], []
-        self.var_profile.set(self.profile.get("name", ""))
+        self._fill_switcher()
         self._fill_dns_choices()
         # both halves belong to the same window, so the Portainer tab follows
         # what was just chosen -- without reaching out yet
@@ -2296,12 +2391,19 @@ class App(tk.Tk):
             text="Neu laden" if connected else "Verbinden",
             style="Tool.TButton" if connected else "Accent.TButton")
 
-    def _switch_profile(self):
+    def _switch_active(self):
+        """The picker was used: change what the tab in front stands for."""
         choice = self.var_profile.get()
         if choice == EDIT_PROFILE:
-            self.var_profile.set(self.profile.get("name", ""))
+            self._fill_switcher()  # put the name back before the dialog opens
             self.open_settings()
             return
+        if self.active_tab() == "portainer":
+            self.switch_portainer(choice)
+            return
+        self._switch_profile(choice)
+
+    def _switch_profile(self, choice):
         if choice == self.profile.get("name"):
             return
         if core.find_system(self.systems, "opnsense", choice):
@@ -2317,9 +2419,9 @@ class App(tk.Tk):
         that is in use: a place has one firewall and one Docker host, and the
         next start should come up with the pair that was last used together.
         """
-        if not name or name == self.active.get("portainer"):
-            return
-        if not core.find_system(self.systems, "portainer", name):
+        if (not name or name == self.active.get("portainer")
+                or not core.find_system(self.systems, "portainer", name)):
+            self._fill_switcher()  # the picker may be showing something else
             return
         self.active["portainer"] = name
         entry = core.find_system(self.systems, "opnsense", self.active["opnsense"])
@@ -2330,6 +2432,7 @@ class App(tk.Tk):
             self.systems, entry, adguard=self.active.get("adguard"),
             portainer=name)
         self.portainer.use_profile(self.profile)
+        self._fill_switcher()
         self.portainer.reload()
 
     def _build_adguard(self):
@@ -2346,7 +2449,7 @@ class App(tk.Tk):
         """The one place where systems are added, changed and removed."""
         dialog = SettingsDialog(self, self)
         self.wait_window(dialog)
-        self._fill_profiles()
+        self._fill_switcher()
         self.args.insecure = False
         self._use_active()
 
