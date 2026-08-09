@@ -70,6 +70,8 @@ class PortainerTab(ttk.Frame):
         # an entry that was to be deployed before it turned out nothing was
         # connected yet; it opens the form once the connection is there
         self.pending_deploy = None
+        # somebody said they want no firewall in this; taken as said
+        self.skip_opnsense = False
         # stacks whose port list is unfolded; the listing is rebuilt often, so
         # the answer cannot live on the widgets themselves
         self.unfolded = set()
@@ -498,12 +500,11 @@ class PortainerTab(ttk.Frame):
             self.dialog.lift()
             self.dialog.focus_set()
             return
-        if not self.connected:
-            # Reachable straight from the catalog, which needs no connection of
-            # its own to show a list -- so this is where somebody most likely
-            # finds out. Asking which pair to use answers the question and the
-            # follow-up question in one go, instead of sending them off to two
-            # other places and back.
+        if not self.connected or not (self.app.connected or self.skip_opnsense):
+            # Both halves are asked about, not just the one the deploy itself
+            # needs: the way over HAProxy is offered the moment the stack runs,
+            # and a firewall that is not connected turns that offer into a
+            # second round of questions. Better one question, now, up front.
             self._ask_target(preset, asked)
             return
         self.dialog = DeployDialog(self.app, self)
@@ -534,10 +535,14 @@ class PortainerTab(ttk.Frame):
                     "Jetzt einen einrichten?", parent=parent):
                 self.app.open_settings(parent)
             return
-        dialog = TargetDialog(parent, self.app)
+        dialog = TargetDialog(parent, self.app, portainer_ready=self.connected,
+                              opnsense_ready=self.app.connected)
         self.app.wait_window(dialog)
         if not dialog.result:
             return
+        # "no firewall" is an answer, not a gap: asking again before every
+        # deploy would be nagging about something already decided
+        self.skip_opnsense = not dialog.result["opnsense"]
         entry = dict(preset or {})
         entry["read_env"] = True
         self.app.connect_and_deploy(dialog.result["opnsense"],
@@ -1883,7 +1888,7 @@ class TargetDialog(tk.Toplevel):
     program takes it from there.
     """
 
-    def __init__(self, parent, app):
+    def __init__(self, parent, app, portainer_ready=False, opnsense_ready=False):
         super().__init__(parent)
         self.app = app
         self.colors = colors = app.colors
@@ -1899,12 +1904,16 @@ class TargetDialog(tk.Toplevel):
         rows = itertools.count()
         ttk.Label(body, text="Wohin deployen?", style="H2.TLabel").grid(
             row=next(rows), column=0, sticky="w")
+        missing = [what for what, ready in (("Portainer", portainer_ready),
+                                            ("OPNsense", opnsense_ready))
+                   if not ready]
         ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
-                  text="Noch ist nichts verbunden. Der Stack geht auf den "
-                       "Portainer; die OPNsense wird für den Weg über HAProxy "
-                       "gebraucht, den das Programm nach dem Deploy "
-                       "anbietet.").grid(row=next(rows), column=0, sticky="w",
-                                         pady=(3, 12))
+                  text=(f"Nicht verbunden: {' und '.join(missing)}. "
+                        if missing else "")
+                       + "Der Stack geht auf den Portainer; die OPNsense wird "
+                         "für den Weg über HAProxy gebraucht, den das Programm "
+                         "gleich nach dem Deploy anbietet.").grid(
+            row=next(rows), column=0, sticky="w", pady=(3, 12))
 
         portainers = [entry.get("name", "?")
                       for entry in app.systems.get("portainer", [])]
@@ -2235,6 +2244,16 @@ class LinkDialog(tk.Toplevel):
                             style="Card.TCheckbutton").grid(row=next(rows),
                                                             column=0, sticky="w",
                                                             pady=(6, 0))
+        else:
+            # Without this the checkbox was simply absent, and a host came into
+            # being with no DNS entry and no word about why -- the name then
+            # resolves nowhere and nothing says where to look.
+            ttk.Label(body, style="Hint.TLabel", wraplength=380, justify="left",
+                      text="Kein DNS-Eintrag: " + (parent.adguard_problem or
+                           "für diese OPNsense ist kein AdGuard gewählt — im "
+                           "ersten Tab unter „DNS-Eintrag in“, oder unter ⚙ "
+                           "einen anlegen.")).grid(row=next(rows), column=0,
+                                                   sticky="w", pady=(10, 0))
 
         footer = ttk.Frame(self, style="Card.TFrame", padding=(20, 12, 20, 16))
         footer.grid(row=1, column=0, sticky="ew")

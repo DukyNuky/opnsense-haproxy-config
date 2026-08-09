@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.4.2"
+VERSION = "2.4.3"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -545,6 +545,13 @@ def provision(client, opts, out=print, adguard=None):
         out(f"base domain    : {base}")
     if want_dns:
         out(f"dns rewrite    : {host} -> {dns_target}")
+    else:
+        # Said rather than skipped in silence. A host created without its DNS
+        # entry resolves nowhere, and the only thing worse than that is a log
+        # that does not mention DNS at all -- there is nothing to search for.
+        out("dns rewrite    : none -- " + ("no AdGuard for this connection"
+                                           if not adguard else
+                                           "no target address for AdGuard"))
     out("objects        : "
         + ", ".join([names.server, names.backend, names.acl_host]
                     + ([names.acl_path] if path else [])
@@ -702,13 +709,19 @@ def apply_changes(client, opts, out):
         out(report.strip() or "(no output)", file=sys.stderr)
         out("config test failed -- not reloading HAProxy", file=sys.stderr)
         return 1
-    if "configuration file is valid" not in lowered:
-        out(f"warning: unexpected config test output: {report.strip()[:200]}",
+    valid = "configuration file is valid" in lowered
+    if not valid:
+        # Nothing came back at all on some plugin versions. That is not a
+        # refusal -- a refusal is loud -- but it is no confirmation either, and
+        # saying "configuration is valid" here would be inventing one.
+        out("warning: the configuration test said nothing" if not report.strip()
+            else f"warning: unexpected config test output: {report.strip()[:200]}",
             file=sys.stderr)
     for line in report.splitlines():
         if "[warning]" in line.lower():
             out(f"  {line.strip()}")
-    out("configuration is valid, reloading HAProxy ...")
+    out("configuration is valid, reloading HAProxy ..." if valid
+        else "reloading HAProxy ...")
     reply = client.reconfigure()
     if reply.get("status", "ok").lower() not in ("ok", "done"):
         out(f"reload reported: {json.dumps(reply)}", file=sys.stderr)

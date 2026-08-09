@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.4.2.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.4.2.zip)**
+**[opnsense-haproxy-2.4.3.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.4.3.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -389,6 +389,11 @@ Diensten, steht der Dienst vorne dabei: `web-shop`, `admin-shop`.
 Dafür muss der HAProxy-Tab verbunden sein; ohne die Public Services von der
 OPNsense weiß das Programm nicht, wo die Rule hin soll.
 
+Ist für diese OPNsense **kein AdGuard gewählt** (oder fehlt die HAProxy-IP),
+steht das an der Stelle, an der sonst das DNS-Häkchen sitzt — und im Protokoll
+steht dann `dns rewrite : none` samt Grund. Ein Host ohne DNS-Eintrag löst
+nirgends auf; das soll man beim Anlegen sehen und nicht beim Aufrufen.
+
 ### Einen Stack neu deployen
 
 **Neu deployen** auf der Karte fragt zwei Dinge:
@@ -448,6 +453,11 @@ Repository passt. Favoriten stehen in derselben Datei wie die Systeme.
 wie öffentliche. Deployst du eines davon, geht das Formular auf mit Repository,
 Pfad **und den Zugangsdaten dieses Kontos in den sichtbaren Feldern** — nichts
 wird heimlich mitgeschickt, und du kannst es vor dem Deployen noch ändern.
+
+Vor einem Deploy wird geprüft, ob **beides** verbunden ist — Portainer für den
+Stack, OPNsense für den Weg über HAProxy gleich danach. Fehlt eines, kommt
+*Wohin deployen?*; wer dort *— keiner —* als OPNsense wählt, wird in dieser
+Sitzung nicht wieder gefragt.
 
 Der Katalog lässt sich auch ohne Verbindung durchsehen — für *Meine Repos*
 genügt der Token, Portainer wird dafür nicht gebraucht. Erst zum **Deployen**

@@ -1,5 +1,35 @@
 # Änderungen
 
+## 2.4.3 — 9. August 2026
+
+**Vor dem Deploy wird nach beiden Verbindungen gefragt — und wenn kein
+DNS-Eintrag entsteht, steht ab jetzt im Protokoll, warum.**
+
+- **Geprüft wird jetzt Portainer *und* OPNsense.** War Portainer verbunden und
+  die Firewall nicht, ging der Deploy durch und die Rückfrage kam erst
+  hinterher, beim Weg über HAProxy — also genau dann, wenn man dachte, man wäre
+  fertig. *Wohin deployen?* kommt jetzt vorher und sagt, welche der beiden
+  fehlt. Wer dort bei der OPNsense *— keiner —* wählt, wird in dieser Sitzung
+  nicht wieder gefragt: Das ist eine Antwort, keine Lücke.
+- **„dns rewrite : none" steht jetzt im Protokoll**, mit Grund — *kein AdGuard
+  für diese Verbindung* oder *keine Ziel-IP für AdGuard*. Bisher fehlte die
+  DNS-Zeile in dem Fall einfach, und ein Host ohne DNS-Eintrag löst nirgends
+  auf, ohne dass irgendwo stünde, wonach zu suchen wäre.
+- **Und im Fenster „→ HAProxy" steht es vorher.** Wo sonst das Häkchen *Passenden
+  DNS-Eintrag in AdGuard anlegen* sitzt, steht jetzt der Grund, wenn es das
+  Häkchen nicht gibt — bisher war dort nichts, und der Eintrag blieb
+  kommentarlos aus.
+- **An der Zahl im Namen liegt es nicht.** Im ganzen Weg vom Feld bis zu
+  AdGuard wird keine Ziffer entfernt; nachgerechnet für Hostname, Real Server,
+  Backend, Condition und den DNS-Eintrag. Was fehlte, war die Erklärung — die
+  steht jetzt da, und beim nächsten Anlegen ist zu sehen, woran es tatsächlich
+  liegt.
+- **Der Konfigurationstest behauptet nichts mehr.** Antwortet OPNsense mit
+  gar nichts, stand dort erst `warning: unexpected config test output:` und
+  gleich darauf „configuration is valid" — eine Bestätigung, die niemand
+  gegeben hatte. Jetzt heißt es „der Konfigurationstest sagte nichts" und
+  danach schlicht „reloading HAProxy".
+
 ## 2.4.2 — 9. August 2026
 
 **Ein Stack mit einer Zahl am Ende bekam einen Namen ohne sie. Abgeschnitten
