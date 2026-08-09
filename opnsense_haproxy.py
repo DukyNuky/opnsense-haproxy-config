@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -473,10 +473,18 @@ def pick_frontend(client, wanted):
         known = ", ".join(sorted(r.get("name", "?") for r in rows))
         raise UsageError(f"no public service named '{wanted}' (have: {known})")
     if len(rows) > 1:
-        known = ", ".join(sorted(r.get("name", "?") for r in rows))
-        raise UsageError(
-            f"several public services exist -- pick one with --frontend (have: {known})"
-        )
+        # Several listeners, and usually only one of them is the HTTPS entrance
+        # everything arrives at -- the others send browsers to it or serve
+        # something internal. Asking is only worth it when that is not clear.
+        https = [row for row in rows
+                 if serves_https({"bind": ", ".join(selected_values(
+                     client.get("frontend", row["uuid"]).get("bind")))})]
+        if len(https) != 1:
+            known = ", ".join(sorted(r.get("name", "?") for r in rows))
+            raise UsageError(
+                f"several public services exist -- pick one with --frontend "
+                f"(have: {known})")
+        rows = https
     return client.get("frontend", rows[0]["uuid"]), rows[0]["uuid"], rows[0]["name"]
 
 
@@ -836,15 +844,43 @@ def derive_target(conditions):
     return f"{host}{derive_path(conditions)}"
 
 
-def bind_port(bind):
-    """The port a public service listens on, from its bind address.
+# The port that makes a public service the one a browser talks to. Everything
+# else a place has listening -- 80 for the redirect, some port for an internal
+# service -- is not where a new host belongs.
+HTTPS_PORT = "443"
 
-    ``bind`` may hold several addresses (``0.0.0.0:443, [::]:443``); they share
-    a port in every sane setup, so the first one answers the question.
+
+def bind_ports(bind):
+    """Every port a public service listens on, in the order they are bound.
+
+    A frontend can hold several addresses -- "0.0.0.0:443, [::]:443" is the
+    usual pair, and a place with an extra address adds to it. The IPv6 form is
+    why the port is taken from behind the last colon.
     """
-    first = str(bind or "").split(",")[0].strip()
-    port = first.rsplit(":", 1)[-1] if ":" in first else ""
-    return port if port.isdigit() else ""
+    ports = []
+    for entry in str(bind or "").split(","):
+        text = entry.strip()
+        port = text.rsplit(":", 1)[-1] if ":" in text else ""
+        if port.isdigit() and port not in ports:
+            ports.append(port)
+    return ports
+
+
+def bind_port(bind):
+    """The port a public service answers on, or "" when it cannot be read."""
+    found = bind_ports(bind)
+    return found[0] if found else ""
+
+
+def serves_https(service):
+    """Whether this is the public service a browser reaches over HTTPS.
+
+    The one that matters when a host is created: a place with more than one
+    listener usually has a second on port 80 whose whole job is to send
+    browsers to this one, and a rule hung into that one is never what anybody
+    meant.
+    """
+    return HTTPS_PORT in bind_ports((service or {}).get("bind"))
 
 
 def public_url(service, host, path=""):

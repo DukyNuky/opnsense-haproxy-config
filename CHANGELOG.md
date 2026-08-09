@@ -1,5 +1,30 @@
 # Änderungen
 
+## 2.4.1 — 9. August 2026
+
+**Bei mehreren Public Services landete die Rule am erstbesten. Vorgewählt ist
+jetzt der, der auf Port 443 hört.**
+
+- **Die Liste begann bisher beim ersten nach dem Alphabet.** Wer neben dem
+  HTTPS-Eingang noch einen Listener auf Port 80 hat, der Browser nur
+  weiterschickt, bekam die Regel gut möglich dort hinein — sie hängt dann an
+  einer Stelle, an der nichts ankommt, und man sucht den Fehler woanders.
+- **Jetzt entscheidet, worauf ein Listener hört, nicht wie er heißt.**
+  Vorgewählt ist der auf **443**; sind es mehrere, der erste davon,
+  abgeschaltete zuletzt. Gelesen werden dabei alle Adressen eines Listeners,
+  auch die IPv6-Form `[::]:443`.
+- **Alles ohne 443 ist ausgeblendet.** Unter dem Feld steht, wie viele das
+  sind — und **Erweiterte Optionen → „Auch Public Services ohne Port 443
+  zeigen"** holt sie zurück, für einen Eingang auf etwa 8443. Der Schalter
+  bleibt über Programmstarts hinweg gesetzt. Hört keiner auf 443, stehen
+  ohnehin alle zur Wahl, und ein bewusst gewählter bleibt sichtbar.
+- **Unter dem Feld steht ab jetzt, worauf der Gewählte hört** — `0.0.0.0:443,
+  [::]:443` etwa. Ist es keine 443 oder ist der Listener abgeschaltet, steht
+  das dabei.
+- **Auf der Kommandozeile dasselbe:** Bei mehreren Public Services wird der
+  eine auf 443 genommen, statt mit „mehrere vorhanden" abzubrechen. Gibt es
+  dort mehrere, fragt das Programm weiterhin nach `--frontend`.
+
 ## 2.4.0 — 9. August 2026
 
 **Aus dem Katalog heraus deployen, ohne vorher irgendwo verbunden gewesen zu

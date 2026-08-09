@@ -1750,6 +1750,12 @@ class App(tk.Tk):
         self.var_ssl_verify = tk.BooleanVar(value=False)
         self.var_forward_for = tk.BooleanVar(value=True)
         self.var_no_apply = tk.BooleanVar(value=False)
+        # A place with an unusual listener -- 8443, or plain HTTP inside --
+        # would otherwise have to tick this at every start.
+        self.var_all_frontends = tk.BooleanVar(
+            value=bool(self.prefs.get("all_frontends", False)))
+        self.var_all_frontends.trace_add("write",
+                                         lambda *_a: self._fill_frontends())
 
         # Hand out grid rows in order, so inserting a field can never make two
         # widgets share a row again.
@@ -1823,7 +1829,12 @@ class App(tk.Tk):
             row=next(rows), column=0, sticky="w")
         self.frontend_box = ttk.Combobox(outer, textvariable=self.var_frontend,
                                          state="readonly", style="Card.TCombobox")
-        self.frontend_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 12))
+        self.frontend_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
+        self.frontend_box.bind("<<ComboboxSelected>>",
+                               lambda _e: self._frontend_hint())
+        self.frontend_hint = ttk.Label(outer, style="Hint.TLabel", wraplength=320,
+                                       justify="left", text="")
+        self.frontend_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
 
         self.advanced_button = ttk.Button(outer, text="▸  Erweiterte Optionen",
                                           style="Ghost.TButton",
@@ -1862,26 +1873,30 @@ class App(tk.Tk):
         ttk.Checkbutton(parent, text="Nur speichern, HAProxy nicht neu laden",
                         variable=self.var_no_apply,
                         style="Card.TCheckbutton").grid(row=2, column=0, sticky="w",
+                                                        pady=(4, 0))
+        ttk.Checkbutton(parent, text="Auch Public Services ohne Port 443 zeigen",
+                        variable=self.var_all_frontends,
+                        style="Card.TCheckbutton").grid(row=3, column=0, sticky="w",
                                                         pady=(4, 10))
 
         ttk.Label(parent, text="Health Monitor", style="FieldLabel.TLabel").grid(
-            row=3, column=0, sticky="w")
+            row=4, column=0, sticky="w")
         self.healthcheck_box = ttk.Combobox(parent, textvariable=self.var_healthcheck,
                                             state="readonly", style="Card.TCombobox",
                                             values=["— keiner —"])
-        self.healthcheck_box.grid(row=4, column=0, sticky="ew", pady=(4, 10))
+        self.healthcheck_box.grid(row=5, column=0, sticky="ew", pady=(4, 10))
 
         ttk.Label(parent, text="Backend-Modus", style="FieldLabel.TLabel").grid(
-            row=5, column=0, sticky="w")
+            row=6, column=0, sticky="w")
         ttk.Combobox(parent, textvariable=self.var_backend_mode, state="readonly",
                      style="Card.TCombobox",
                      values=["automatisch", "http", "tcp"]).grid(
-            row=6, column=0, sticky="ew", pady=(4, 10))
+            row=7, column=0, sticky="ew", pady=(4, 10))
 
         ttk.Label(parent, text="Namens-Präfix", style="FieldLabel.TLabel").grid(
-            row=7, column=0, sticky="w")
+            row=8, column=0, sticky="w")
         ttk.Entry(parent, textvariable=self.var_prefix, style="Card.TEntry").grid(
-            row=8, column=0, sticky="ew", pady=(4, 0))
+            row=9, column=0, sticky="ew", pady=(4, 0))
 
     def _build_inventory(self, parent):
         outer = ttk.Frame(parent, style="Card.TFrame", padding=(16, 16, 8, 12))
@@ -2445,6 +2460,70 @@ class App(tk.Tk):
         self.profile_tip.text = SWITCHER_TIP[kind]
         self.profile_box.grid()
 
+    def _fill_frontends(self):
+        """The public services to choose from, the one on 443 in front.
+
+        A place with more than one listener usually has a second on port 80
+        whose whole job is to send browsers to the first. A rule hung into that
+        one answers nothing, and up to now the list simply began with whichever
+        came first by name -- so that is what got picked.
+
+        The others are left out rather than merely sorted down, because the
+        choice is between things that look alike from here. What is hidden is
+        said under the field, and the switch in the advanced options brings
+        them back for a place whose HTTPS lives on 8443.
+        """
+        if not hasattr(self, "frontend_box"):
+            return
+        every = list(self.services)
+        shown = every if self.var_all_frontends.get() else [
+            service for service in every if core.serves_https(service)]
+        if not shown:
+            shown = every  # nothing on 443 at all: better all of them than none
+        chosen = self.var_frontend.get()
+        if chosen and chosen not in [service["name"] for service in shown]:
+            # a service somebody picked on purpose does not vanish underneath
+            keep = next((s for s in every if s["name"] == chosen), None)
+            if keep:
+                shown = shown + [keep]
+        # 443 first, then what is switched on, then by name -- so the first
+        # entry is the one to start with even when everything is shown
+        shown.sort(key=lambda service: (0 if core.serves_https(service) else 1,
+                                        0 if service.get("enabled", True) else 1,
+                                        service.get("name", "").lower()))
+        names = [service["name"] for service in shown]
+        self.frontend_box.configure(values=names,
+                                    state="disabled" if len(names) <= 1
+                                    else "readonly")
+        if chosen not in names:
+            preferred = self.profile.get("frontend", "")
+            self.var_frontend.set(preferred if preferred in names
+                                  else (names[0] if names else ""))
+        self.hidden_frontends = len(every) - len(shown)
+        self._frontend_hint()
+
+    def _frontend_hint(self):
+        """What the chosen service listens on, and what is not in the list."""
+        if not hasattr(self, "frontend_hint"):
+            return
+        chosen = next((service for service in self.services
+                       if service["name"] == self.var_frontend.get()), None)
+        parts = []
+        if chosen:
+            bind = chosen.get("bind") or "?"
+            parts.append(f"hört auf {bind}")
+            if not core.serves_https(chosen):
+                parts.append("nicht Port 443 — sicher, dass Anfragen hier "
+                             "ankommen?")
+            elif not chosen.get("enabled", True):
+                parts.append("ist abgeschaltet")
+        hidden = getattr(self, "hidden_frontends", 0)
+        if hidden:
+            parts.append(f"{hidden} ohne 443 ausgeblendet (⚙ Erweiterte "
+                         f"Optionen)" if hidden > 1 else
+                         "einer ohne 443 ausgeblendet (Erweiterte Optionen)")
+        self.frontend_hint.configure(text=" · ".join(parts))
+
     def _fill_dns_choices(self):
         """The AdGuard picker in the form: every one configured, or none."""
         names = [e.get("name", "?") for e in self.systems.get("adguard", [])]
@@ -2755,14 +2834,7 @@ class App(tk.Tk):
         self._set_status(state["status"])
         self.paint_connection()
 
-        names = [service["name"] for service in self.services]
-        self.frontend_box.configure(values=names,
-                                    state="disabled" if len(names) <= 1
-                                    else "readonly")
-        preferred = self.profile.get("frontend", "")
-        if self.var_frontend.get() not in names:
-            self.var_frontend.set(preferred if preferred in names
-                                  else (names[0] if names else ""))
+        self._fill_frontends()
 
         self.healthcheck_box.configure(values=["— keiner —"] + self.healthchecks)
         if self.var_healthcheck.get() not in ["— keiner —"] + self.healthchecks:
@@ -2945,7 +3017,8 @@ class App(tk.Tk):
 
     def _save_prefs(self):
         # keep everything else that is in there, e.g. the update bookkeeping
-        self.prefs.update({"theme": self.theme_name, "geometry": self.geometry()})
+        self.prefs.update({"theme": self.theme_name, "geometry": self.geometry(),
+                           "all_frontends": bool(self.var_all_frontends.get())})
         save_prefs(self.prefs)
 
     def _on_close(self):

@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.4.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.4.0.zip)**
+**[opnsense-haproxy-2.4.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.4.1.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -695,9 +695,13 @@ wenn der Schlüssel längst existiert.
 Der ACME-Client ist nicht installiert oder dem Benutzer fehlt das Recht
 *Services: ACME Client*. Kein Beinbruch: den vollen Hostnamen eintippen.
 
-**„Es gibt mehrere Public Services".**
-Dann muss das Programm wissen, an welchen die Regel soll — im Formular unten
-das Feld **Public Service** auswählen.
+**Im Feld „Public Service" fehlt einer.**
+Zur Wahl stehen nur die Listener, die auf **Port 443** hören — dort kommen die
+Anfragen an. Ein zweiter auf Port 80, der Browser nur weiterschickt, ist keine
+Stelle für eine Regel und wird darum ausgeblendet; unter dem Feld steht, wie
+viele das betrifft. Wer seinen Eingang auf einem anderen Port betreibt (etwa
+8443), holt sie mit **Erweiterte Optionen → „Auch Public Services ohne Port 443
+zeigen"** zurück. Hört überhaupt keiner auf 443, stehen ohnehin alle da.
 
 **Der Name ist schon vergeben.**
 Bestehendes wird nie überschrieben. Das Programm bricht ab und sagt, welches
@@ -728,8 +732,13 @@ beide werden mit **AND** verknüpft.
 
 ## Entscheidungen, die das Programm trifft
 
-* **Public Service**: gibt es nur einen, wird er automatisch benutzt. Bei
-  mehreren musst du wählen.
+* **Public Service**: Vorgewählt ist der Listener auf **Port 443** — mit dem
+  Namen hat das nichts zu tun, es zählt, worauf er hört. Gibt es mehrere auf
+  443, steht der erste davon da und die anderen daneben zur Wahl. Unter dem
+  Feld steht immer, auf welche Adresse der gewählte hört, damit die Entscheidung
+  nicht am Namen hängt. Auf der Kommandozeile gilt dasselbe: Bei mehreren
+  Listenern wird der eine auf 443 genommen; sind es dort mehrere, fragt das
+  Programm nach `--frontend`.
 * **Host-Header oder SNI**: läuft der Public Service im Modus `http`, wird auf
   den Host-Header gematcht. Bei `ssl`/`tcp` (SSL-Passthrough) sieht HAProxy
   keinen Host-Header, deshalb wird dort auf **SNI** gematcht und der Backend
