@@ -995,6 +995,30 @@ class PortainerTab(ttk.Frame):
         if result["ok"]:
             self.after(1200, self.reload)
 
+    def _suggest_name(self, port, stack_name):
+        """The name to offer for this port -- the stack's, not the service's.
+
+        A stack is named by whoever deployed it and exists once on the host.
+        The service inside it comes from the repository and is the same in
+        every copy: offering that meant a second copy, dhom-time2 beside
+        dhom-time, was handed the name of the first -- which looks for all the
+        world as if a digit had been dropped along the way, and lands in
+        HAProxy and in DNS under the wrong name.
+
+        Only where one stack publishes ports out of several services is the
+        service worth naming, and then it goes in front rather than instead.
+        """
+        service = str(port.get("service") or "")
+        if not stack_name:
+            return service  # a container beside a stack answers to its own name
+        published = [p for stack in (self.state or {}).get("stacks", [])
+                     if stack["name"] == stack_name for p in stack["ports"]]
+        services = {str(p.get("service") or "") for p in published}
+        services.discard("")
+        if len(services) > 1 and service and service != stack_name:
+            return f"{service}-{stack_name}"
+        return stack_name
+
     def _link(self, port, stack_name):
         """Hand one published port over to the HAProxy side of the program."""
         if not self.app.api:
@@ -1018,7 +1042,7 @@ class PortainerTab(ttk.Frame):
                 "erreichen ist. Trage sie unter ⚙ beim Portainer ein.",
                 parent=self.app)
             return
-        suggestion = port.get("service") or stack_name or ""
+        suggestion = self._suggest_name(port, stack_name)
         dialog = LinkDialog(self.app, self.app.colors, suggestion, target, port)
         self.app.wait_window(dialog)
         if dialog.result:

@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.4.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.4.1.zip)**
+**[opnsense-haproxy-2.4.2.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.4.2.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -374,10 +374,17 @@ woran der Port gebunden ist.
 ### Vom Port zum Namen
 
 **→ HAProxy** öffnet ein kleines Fenster mit allem schon ausgefüllt: der
-Dienstname als Vorschlag, die IP des Docker-Hosts, der veröffentlichte Port.
-Du wählst noch die Basis-Domain und den Public Service, drückst **Anlegen** —
-und der Rest läuft wie im ersten Tab, samt DNS-Eintrag in AdGuard und
-Protokoll unten.
+**Name des Stacks** als Vorschlag, die IP des Docker-Hosts, der veröffentlichte
+Port. Du wählst noch die Basis-Domain und den Public Service, drückst
+**Anlegen** — und der Rest läuft wie im ersten Tab, samt DNS-Eintrag in AdGuard
+und Protokoll unten. Unter dem Namensfeld steht mit, was daraus wird.
+
+Vorgeschlagen wird der Stack-Name und nicht der Dienst aus der Compose-Datei:
+Den Stack hast du benannt, und es gibt ihn auf dem Host genau einmal — der
+Dienst darin heißt in jeder Kopie gleich. Ein `dhom-time2` neben einem
+`dhom-time` bekäme sonst den Namen des ersten vorgeschlagen, was aussieht, als
+wäre die Zahl verlorengegangen. Veröffentlicht ein Stack Ports aus **mehreren**
+Diensten, steht der Dienst vorne dabei: `web-shop`, `admin-shop`.
 
 Dafür muss der HAProxy-Tab verbunden sein; ohne die Public Services von der
 OPNsense weiß das Programm nicht, wo die Rule hin soll.

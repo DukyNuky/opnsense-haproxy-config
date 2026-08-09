@@ -1,5 +1,24 @@
 # Änderungen
 
+## 2.4.2 — 9. August 2026
+
+**Ein Stack mit einer Zahl am Ende bekam einen Namen ohne sie. Abgeschnitten
+wurde nichts — vorgeschlagen wurde der falsche Name.**
+
+- **→ HAProxy schlug den Dienst aus der Compose-Datei vor, nicht den Stack.**
+  Bei einer zweiten Kopie desselben Repositories heißt der Dienst darin
+  unverändert wie in der ersten: Für den Stack `dhom-time2` stand also
+  `dhom-time` im Feld — und genau so ging es in OPNsense und in AdGuard. Es
+  sieht aus, als hätte jemand die Zahl verloren; tatsächlich war sie nie da.
+- **Vorgeschlagen wird jetzt der Stack-Name.** Den hast du vergeben, und es
+  gibt ihn auf dem Docker-Host genau einmal — der Dienst darin heißt in jeder
+  Kopie gleich. Veröffentlicht ein Stack Ports aus **mehreren** Diensten, steht
+  der Dienst vorne dabei (`web-shop`, `admin-shop`), denn dann sagt er etwas
+  aus. Ein Container ohne Stack behält seinen eigenen Namen.
+- **Was schon falsch angelegt ist**, räumt **Entfernen** in der Hostliste des
+  ersten Tabs ab — Real Server, Backend, Condition, Rule und DNS-Eintrag —,
+  danach über **→ HAProxy** neu anlegen.
+
 ## 2.4.1 — 9. August 2026
 
 **Bei mehreren Public Services landete die Rule am erstbesten. Vorgewählt ist
