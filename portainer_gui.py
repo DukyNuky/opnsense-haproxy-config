@@ -67,6 +67,9 @@ class PortainerTab(ttk.Frame):
         self.catalog = None
         # what a deploy is waiting to do while the environment is being checked
         self.pending = None
+        # an entry that was to be deployed before it turned out nothing was
+        # connected yet; it opens the form once the connection is there
+        self.pending_deploy = None
         # stacks whose port list is unfolded; the listing is rebuilt often, so
         # the answer cannot live on the widgets themselves
         self.unfolded = set()
@@ -195,6 +198,7 @@ class PortainerTab(ttk.Frame):
 
     def _failed(self, _error):
         self.connected = False
+        self.pending_deploy = None  # whatever it was waiting for cannot happen
         self.app.paint_connection()
         self.render()
 
@@ -212,6 +216,9 @@ class PortainerTab(ttk.Frame):
         if self.dialog is not None and self.dialog.winfo_exists():
             self.dialog.refresh_target()
         self.render()
+        if self.pending_deploy is not None:
+            preset, self.pending_deploy = self.pending_deploy, None
+            self.open_deploy(preset, parent=self.catalog)
         if self.last_deploy:
             self._offer_link(self.last_deploy)
             self.last_deploy = None
@@ -457,7 +464,7 @@ class PortainerTab(ttk.Frame):
             return
         self.catalog = CatalogDialog(self.app, self)
 
-    def deploy_entry(self, entry):
+    def deploy_entry(self, entry, parent=None):
         """Open the deploy form with one entry of the collection filled in.
 
         The credentials come from the Git account that matches the host of the
@@ -468,16 +475,22 @@ class PortainerTab(ttk.Frame):
                                               entry.get("repository", ""))
         preset = dict(entry)
         preset["username"], preset["password"] = username, token
-        self.open_deploy(preset)
+        self.open_deploy(preset, parent=parent)
 
-    def open_deploy(self, preset=None):
+    def open_deploy(self, preset=None, parent=None):
         """The form for a new stack, in a window of its own.
 
         It used to be a column squeezed against the left edge of the tab, where
         a compose path and a block of variables had about three hundred pixels
         between them. As a dialog it gets the room those fields need, and the
         listing gets the whole width back.
+
+        ``parent`` is the window the wish came from -- the catalog, usually.
+        Anything asked back has to appear in front of *that* window: a modal
+        box belonging to the main window opens behind the one being looked at,
+        holds the input, and looks for all the world like a freeze.
         """
+        asked = parent if parent is not None else self.app
         if self.dialog is not None and self.dialog.winfo_exists():
             if preset:
                 self.dialog.fill_in(preset)
@@ -485,13 +498,19 @@ class PortainerTab(ttk.Frame):
             self.dialog.focus_set()
             return
         if not self.client:
-            self.app.open_settings()
+            self.app.open_settings(asked)
             return
         if not self.connected:
-            messagebox.showinfo(
-                ui.APP_TITLE,
-                "Bitte zuerst verbinden — ohne die Umgebung aus Portainer "
-                "weiß das Programm nicht, wohin der Stack soll.")
+            # Reachable straight from the catalog, which needs no connection to
+            # show a list -- so this is where somebody most likely notices they
+            # have not connected yet. Offering it here saves the detour.
+            if messagebox.askyesno(
+                    ui.APP_TITLE,
+                    "Dafür muss Portainer verbunden sein — sonst ist nicht "
+                    "bekannt, auf welche Umgebung der Stack soll.\n\n"
+                    "Jetzt verbinden?", parent=asked):
+                self.pending_deploy = preset or {}
+                self.reload()
             return
         self.dialog = DeployDialog(self.app, self)
         if preset:
@@ -880,7 +899,8 @@ class PortainerTab(ttk.Frame):
         if not self.connected:
             messagebox.showinfo(ui.APP_TITLE,
                                 "Bitte zuerst verbinden — gelöscht wird nur, "
-                                "was gerade auch zu sehen ist.")
+                                "was gerade auch zu sehen ist.",
+                                parent=self.app)
             return
         hosts = self._haproxy_hosts(stack)
         dialog = RemoveDialog(self.app, self.app.colors, stack, hosts,
@@ -953,21 +973,23 @@ class PortainerTab(ttk.Frame):
         if not self.app.api:
             messagebox.showinfo(ui.APP_TITLE,
                                 "Für den Weg über HAProxy fehlen die "
-                                "Zugangsdaten der OPNsense (⚙).")
+                                "Zugangsdaten der OPNsense (⚙).",
+                                parent=self.app)
             return
         if not self.app.connected:
             messagebox.showinfo(
                 ui.APP_TITLE,
                 "Bitte zuerst im Tab „HAProxy“ verbinden — ohne die Public "
                 "Services von der OPNsense weiß das Programm nicht, wo die "
-                "Rule hin soll.")
+                "Rule hin soll.", parent=self.app)
             return
         target = self.host_ip()
         if not target:
             messagebox.showinfo(
                 ui.APP_TITLE,
                 "Es ist nicht bekannt, unter welcher IP der Docker-Host zu "
-                "erreichen ist. Trage sie unter ⚙ beim Portainer ein.")
+                "erreichen ist. Trage sie unter ⚙ beim Portainer ein.",
+                parent=self.app)
             return
         suggestion = port.get("service") or stack_name or ""
         dialog = LinkDialog(self.app, self.app.colors, suggestion, target, port)
@@ -1767,7 +1789,7 @@ class CatalogDialog(tk.Toplevel):
     # -- what the buttons do -----------------------------------------------
 
     def _deploy(self, entry):
-        self.tab.deploy_entry(entry)
+        self.tab.deploy_entry(entry, parent=self)
 
     def _keep(self, entry):
         if cat.is_favourite(self.app.favorites, entry):

@@ -2148,7 +2148,14 @@ class App(tk.Tk):
     # -- background work ---------------------------------------------------
 
     def _pump(self):
-        """Deliver finished background work back onto the UI thread."""
+        """Deliver finished background work back onto the UI thread.
+
+        Nothing in here may escape. This runs every 60 ms and schedules its own
+        next turn at the end: an exception on the way out would take that with
+        it, and the window would go on looking alive while never again learning
+        that anything had finished -- busy for good, every button disabled.
+        A broken callback is worth one line in the log, not that.
+        """
         try:
             while True:
                 message = self.results.get_nowait()
@@ -2156,17 +2163,24 @@ class App(tk.Tk):
                     self._set_activity(message[1])
                     continue
                 _, callback, on_error, payload, error = message
-                if error is None:
-                    callback(payload)
-                    continue
-                self._set_busy(False)
-                self._write_log("Fehler",
-                                [{"text": str(error), "level": "error"}], False)
-                if on_error:
-                    on_error(error)
+                try:
+                    if error is None:
+                        callback(payload)
+                        continue
+                    self._set_busy(False)
+                    self._write_log(
+                        "Fehler", [{"text": str(error), "level": "error"}], False)
+                    if on_error:
+                        on_error(error)
+                except Exception as exc:  # noqa: BLE001 - shown, never swallowed
+                    self._set_busy(False)
+                    self._write_log("Fehler im Programm",
+                                    [{"text": f"{type(exc).__name__}: {exc}",
+                                      "level": "error"}], False)
         except queue.Empty:
             pass
-        self._pump_job = self.after(60, self._pump)
+        finally:
+            self._pump_job = self.after(60, self._pump)
 
     def _run_async(self, work, callback, on_error=None, activity=""):
         """Run `work(report)` off the UI thread; `report(text)` shows progress."""
@@ -2576,9 +2590,15 @@ class App(tk.Tk):
             self.adguard_problem = "AdGuard: keine HAProxy-IP eingetragen (⚙)"
         self._refresh_fqdn()
 
-    def open_settings(self):
-        """The one place where systems are added, changed and removed."""
-        dialog = SettingsDialog(self, self)
+    def open_settings(self, parent=None):
+        """The one place where systems are added, changed and removed.
+
+        ``parent`` is the window that asked for it. The dialog is modal, and a
+        modal window belonging to the main window opens *behind* a dialog that
+        is currently in front -- where it holds every click and looks like the
+        program has hung.
+        """
+        dialog = SettingsDialog(parent if parent is not None else self, self)
         self.wait_window(dialog)
         self._fill_switcher()
         self.args.insecure = False

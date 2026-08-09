@@ -1,5 +1,28 @@
 # Änderungen
 
+## 2.3.2 — 9. August 2026
+
+**Deployen aus dem Katalog ließ das Katalogfenster einfrieren. Es war nie
+eingefroren — die Rückfrage stand dahinter.**
+
+- **Wer aus dem Katalog etwas deployen wollte, ohne dass Portainer verbunden
+  war**, bekam einen Hinweis, der dem *Hauptfenster* gehörte. Ein solches
+  Fenster legt sich nicht über den Katalog, sondern dahinter, nimmt aber alle
+  Klicks an sich: Der Katalog ließ sich nur noch verschieben, und passiert ist
+  nichts, weil die Antwort auf eine Frage fehlte, die man nicht sehen konnte.
+  Dasselbe galt für die Einstellungen, wenn noch kein Portainer eingerichtet
+  war. Jede Rückfrage gehört jetzt zu dem Fenster, aus dem sie kommt.
+- **Und sie ist eine Frage geworden.** Statt „Bitte zuerst verbinden“ steht da
+  jetzt *Jetzt verbinden?* — wer zustimmt, bekommt die Verbindung und danach
+  von allein das ausgefüllte Formular für den Eintrag, auf den er geklickt
+  hat. Der Katalog selbst braucht keine Verbindung: *Meine Repos* liest der
+  Token, gebraucht wird Portainer erst beim Deployen.
+- **Ein Fehler in einer Rückmeldung legt das Programm nicht mehr lahm.** Die
+  Schleife, die fertige Hintergrundarbeit ins Fenster zurückgibt, plant ihren
+  nächsten Durchlauf am Ende ein — eine Ausnahme unterwegs nahm den mit, und
+  das Fenster blieb für immer „beschäftigt“, mit abgeschalteten Knöpfen. Jetzt
+  steht so etwas als Zeile im Protokoll, und es geht weiter.
+
 ## 2.3.1 — 9. August 2026
 
 **Wer 2.3.0 über das eingebaute Update geholt hat, konnte es nicht mehr

@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.3.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.3.1.zip)**
+**[opnsense-haproxy-2.3.2.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.3.2.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -441,6 +441,11 @@ Repository passt. Favoriten stehen in derselben Datei wie die Systeme.
 wie öffentliche. Deployst du eines davon, geht das Formular auf mit Repository,
 Pfad **und den Zugangsdaten dieses Kontos in den sichtbaren Feldern** — nichts
 wird heimlich mitgeschickt, und du kannst es vor dem Deployen noch ändern.
+
+Der Katalog lässt sich auch ohne Verbindung durchsehen — für *Meine Repos*
+genügt der Token, Portainer wird dafür nicht gebraucht. Erst zum **Deployen**
+muss verbunden sein; ist es das nicht, fragt das Fenster nach und macht danach
+von allein weiter.
 
 In allen drei Listen ist **Deployen** dasselbe: das Fenster *Neuer Stack* geht
 auf, vorausgefüllt. Name, Variablen und alles Übrige bleiben deine Sache — der
