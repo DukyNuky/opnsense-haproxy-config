@@ -646,7 +646,10 @@ Darunter links die Angaben zum Repository, rechts das Seltenere:
   genügt: bei einem GitHub *Fine-grained token* **Repository access → Only
   select repositories** und **Permissions → Repository permissions →
   Contents: Read-only**, bei GitLab der Scope `read_repository`. Links zu
-  beiden Seiten stehen unter dem Feld.
+  beiden Seiten stehen unter dem Feld. Holt das Compose-File ein **fertiges
+  Image** aus einem privaten Registry, statt es mit `build:` selbst zu bauen,
+  braucht der Token dort zusätzlich Leserecht — siehe [Private Images: die
+  zweite Anmeldung](#private-images-die-zweite-anmeldung).
 * **Automatisch aktualisieren** — *regelmäßig nachsehen* (Abstand als `5m`,
   `30m`, `24h`) oder *auf Webhook warten*. Beim Webhook steht die fertige
   URL nach dem Deploy im Protokoll; wer sie in GitHub oder GitLab als Webhook
@@ -739,6 +742,59 @@ gerade hält.
 Kommt eine solche Absage doch von Portainer — weil die Compose-Datei vorher
 nicht zu lesen war oder in der Zwischenzeit ein Container dazukam —, steht
 unter der Fehlermeldung im Protokoll dieselbe Erklärung.
+
+### Private Images: die zweite Anmeldung
+
+Ein Deploy meldet sich an **zwei** Stellen an, und die beiden haben nichts
+miteinander zu tun:
+
+1. **Das Repository klonen.** Dafür sind Benutzer und Token aus dem Formular
+   da. Sie werden am Stack hinterlegt.
+2. **Das Image holen.** Dafür schaut Portainer *nicht* auf den Stack, sondern
+   in seine eigene Liste unter **Registries**, und sucht dort den Eintrag, der
+   zum Host des Images passt.
+
+Deshalb reicht ein privates Repository allein noch nicht für ein privates
+Image — und deshalb kommt eine Absage, die aussieht, als hätte der Token nicht
+gestimmt, obwohl er es tat:
+
+```
+Error response from daemon: error from registry: unauthorized
+```
+
+**Baut der Stack sein Image selbst, entfällt die zweite Anmeldung ganz.** Steht
+im Compose-File ein `build:`, kommt das Dockerfile mit dem Repository und der
+Docker-Host baut das Image dort. Dann wird nie ein Registry gefragt, und ein
+privates Repository genügt für alles — auch für *Automatisch aktualisieren*,
+das neu klont und neu baut.
+
+Nur ein **fertiges** Image von einem eigenen Host (`image: ghcr.io/…` ohne
+`build:`) ist ein echter Pull. Das erkennt das Programm beim Prüfen vor dem
+Deploy und fragt nach:
+
+```
+Diese Images holt der Stack fertig von einem Registry:
+
+• web → ghcr.io/dukynuky/dhom-time:latest
+    ghcr.io — kein Login hinterlegt
+
+Ja: Benutzer und Token als Registry hinterlegen, für ghcr.io.
+Nein: unverändert deployen — bei einem privaten Image scheitert der Pull.
+```
+
+**Ja** legt den Eintrag in Portainer an — mit denselben Benutzerdaten, die
+schon im Formular stehen. Die Registries-Seite von Portainer musst du dafür
+nicht öffnen. Gibt es für den Host schon einen Eintrag, wird dessen Token
+ersetzt, und die Rückfrage sagt das vorher: es bleibt bei **einem Eintrag pro
+Host**, sonst greift Docker beim Deploy womöglich zum falschen Token.
+
+Der Token braucht dafür ein Recht mehr als fürs Klonen: bei GitHub-Packages
+`read:packages`, bei GitLab `read_registry`. Und der Pfad bei `ghcr.io` ist
+immer kleingeschrieben, auch wenn das Repository Großbuchstaben hat.
+
+Öffentliche Images auf Docker Hub (`postgres:16-alpine`) werden dabei
+übergangen — sie brauchen keine Anmeldung, und eine Rückfrage bei jedem von
+ihnen würde die eine verdecken, auf die es ankommt.
 
 ## Der dritte Tab: AdGuard
 

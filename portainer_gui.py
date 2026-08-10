@@ -721,20 +721,91 @@ class PortainerTab(ttk.Frame):
             # repository, Portainer says it better while deploying
             self._start_deploy(opts)
             return
-        clashes = result["result"]["clashes"]
-        if not clashes:
-            self._start_deploy(opts)
-            return
-        answer = self._ask_clashes(clashes, result["result"]["compose"])
-        if answer is None:
+
+        def stopped():
             self.app.write_log(
                 "Deploy abgebrochen",
                 list(result["log"])
                 + [{"text": "= nichts angelegt", "level": "info"}], False)
+
+        found = result["result"]
+        clashes = found["clashes"]
+        if clashes:
+            answer = self._ask_clashes(clashes, found["compose"])
+            if answer is None:
+                stopped()
+                return
+            if answer:
+                self._resolve(opts, clashes)
+        # Images from a registry of their own are a second login, and one the
+        # stack cannot carry. Asking now beats a 500 out of Portainer later.
+        if not self._ask_registry(opts, found.get("registry") or []):
+            stopped()
             return
-        if answer:
-            self._resolve(opts, clashes)
         self._start_deploy(opts)
+
+    def _ask_registry(self, opts, hosts):
+        """Settle where the image pull gets its login. False means: stop.
+
+        Sets ``opts.registry`` to the hosts the deploy should store the typed
+        token under -- empty when there is nothing to do or nothing was
+        agreed to.
+        """
+        opts.registry = []
+        if not hosts:
+            return True
+        parent = self.dialog if (self.dialog is not None
+                                 and self.dialog.winfo_exists()) else self
+        unknown = [entry for entry in hosts if not entry["id"]]
+        if not (opts.username or opts.password):
+            # nothing to offer: without a token there is no login to store
+            if not unknown:
+                return True
+            return messagebox.askyesno(
+                "Image aus einem Registry", self._registry_text(hosts, False),
+                default=messagebox.YES, parent=parent)
+        answer = messagebox.askyesnocancel(
+            "Image aus einem Registry", self._registry_text(hosts, True),
+            parent=parent)
+        if answer is None:
+            return False
+        if answer:
+            opts.registry = list(hosts)
+        return True
+
+    @staticmethod
+    def _registry_text(hosts, offer):
+        """What the images need, and what saying yes would do about it."""
+        lines = ["Diese Images holt der Stack fertig von einem Registry:", ""]
+        for entry in hosts:
+            where = (f"vorhandener Eintrag „{entry['name']}“"
+                     if entry["id"] else "kein Login hinterlegt")
+            lines.append(f"• {entry['service']} → {entry['image']}")
+            lines.append(f"    {entry['host']} — {where}")
+        lines += ["",
+                  "Benutzer und Token am Stack gelten nur für das Klonen des "
+                  "Repositories. Den Login für das Image sucht Portainer in "
+                  "seiner eigenen Registry-Liste, nach Host. Ist das Image "
+                  "öffentlich, braucht es dort nichts."]
+        if not offer:
+            lines += ["", "Im Formular steht kein Token, der sich hinterlegen "
+                          "ließe. Ist das Image privat, scheitert der Pull.",
+                      "", "Trotzdem deployen?"]
+            return "\n".join(lines)
+        replaces = [entry for entry in hosts if entry["id"]]
+        lines += ["", "Ja: Benutzer und Token als Registry hinterlegen, für "
+                      + ", ".join(entry["host"] for entry in hosts) + "."]
+        if replaces:
+            lines.append("    Der vorhandene Token wird dabei ersetzt — ein "
+                         "Eintrag pro Host, sonst greift Docker womöglich zum "
+                         "falschen.")
+        lines += ["Nein: unverändert deployen — bei einem privaten Image "
+                  "scheitert der Pull.",
+                  "Abbrechen: zurück zum Formular.",
+                  "",
+                  "Für GitHub-Packages muss der Token read:packages dürfen, "
+                  "und der Pfad ist dort immer kleingeschrieben."]
+        return "\n".join(lines)
 
     def _ask_clashes(self, clashes, compose):
         """Ask what to do about it: change the values, deploy anyway, or stop.
@@ -821,7 +892,8 @@ class PortainerTab(ttk.Frame):
         lines = list(result["log"])
         if result.get("error"):
             lines.append({"text": result["error"], "level": "error"})
-            hint = self._conflict_hint(result["error"])
+            hint = (self._registry_hint(result["error"])
+                    or self._conflict_hint(result["error"]))
             if hint:
                 lines.append({"text": hint, "level": "info"})
         title = "Stack deployt" if result["ok"] else "Deploy fehlgeschlagen"
@@ -843,6 +915,26 @@ class PortainerTab(ttk.Frame):
             self.dialog.destroy()
         self.dialog = None
         self.after(1200, self.reload)
+
+    @staticmethod
+    def _registry_hint(message):
+        """Docker's "unauthorized", said in the one way that helps.
+
+        The two logins in a deploy are easy to mix up. This message means the
+        clone worked and the image was refused, which is a different token in
+        a different place.
+        """
+        if not pcore.registry_refused(message):
+            return ""
+        return ("= Das Repository war in Ordnung — geklont hat Portainer es, "
+                "abgewiesen wurde erst das Image. Für den Pull nimmt Portainer "
+                "nicht die Zugangsdaten des Stacks, sondern seine Registry-"
+                "Liste. Drei Dinge sind zu prüfen: Ist unter Registries ein "
+                "Eintrag für den Host des Images? Darf der Token dort lesen "
+                "(bei GitHub-Packages: read:packages)? Und stimmt der Image-"
+                "Name genau — bei ghcr.io alles klein? Wird das Image aus dem "
+                "Repository selbst gebaut (build: im Compose-File), braucht "
+                "es davon nichts.")
 
     @staticmethod
     def _conflict_hint(message):
@@ -1289,8 +1381,13 @@ class DeployDialog(tk.Toplevel):
                        "Repository access → Only select repositories → dieses "
                        "eine, dann Permissions → Repository permissions → "
                        "Contents auf Read-only. Bei GitLab: Scope "
-                       "read_repository.").grid(row=next(rows), column=0,
-                                                sticky="w", pady=(6, 0))
+                       "read_repository.\n\nHolt das Compose-File ein fertiges "
+                       "Image aus einem privaten Registry, statt es mit build: "
+                       "selbst zu bauen, braucht der Token dort zusätzlich "
+                       "Leserecht (GitHub: read:packages, GitLab: "
+                       "read_registry). Das Programm fragt vor dem Deploy "
+                       "nach.").grid(row=next(rows), column=0,
+                                     sticky="w", pady=(6, 0))
         links = ttk.Frame(outer, style="Card.TFrame")
         links.grid(row=next(rows), column=0, sticky="w", pady=(4, 0))
         ui.link_label(links, self.app.colors, "GitHub-Token anlegen",

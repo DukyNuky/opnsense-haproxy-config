@@ -1,5 +1,34 @@
 # Änderungen
 
+## 2.7.0 — 11. August 2026
+
+**Ein Deploy meldet sich an zwei Stellen an, und das Programm kümmert sich
+jetzt um beide: das Repository klonen und das Image holen.**
+
+- **Fertige Images aus einem privaten Registry werden vor dem Deploy
+  erkannt.** Benutzer und Token am Stack gelten nur fürs Klonen; den Login
+  fürs Image sucht Portainer in seiner eigenen Registry-Liste, nach Host. Wer
+  das nicht weiß, bekommt nach einem scheinbar richtigen Token eine Absage,
+  die nach einem falschen aussieht: `error from registry: unauthorized`. Das
+  Programm liest die Compose-Datei jetzt auch daraufhin und fragt vorher.
+- **Ja hinterlegt den Registry-Eintrag gleich mit** — mit denselben
+  Zugangsdaten, die schon im Formular stehen. Die Registries-Seite von
+  Portainer muss man dafür nicht öffnen. Existiert für den Host schon ein
+  Eintrag, wird dessen Token ersetzt statt ein zweiter angelegt; die
+  Rückfrage sagt das vorher. Der Grund: Portainer gibt dem Deploy alle
+  Registries mit und lässt Docker nach Host auswählen — bei zwei Einträgen
+  für denselben Host ist es Zufall, welcher Token genommen wird.
+- **Ein Stack, der sein Image selbst baut, wird in Ruhe gelassen.** Steht im
+  Compose-File ein `build:`, kommt das Dockerfile mit dem Repository und der
+  Host baut es dort — es gibt keine zweite Anmeldung, also auch keine Frage.
+  Genauso übergangen werden öffentliche Images von Docker Hub.
+- **Und wenn es doch schiefgeht, sagt das Protokoll die richtige Ursache.**
+  Bisher stand dort Dockers `unauthorized` und nichts weiter. Jetzt steht
+  darunter, dass das Klonen funktioniert hat, dass der Pull an einer anderen
+  Anmeldung hängt, welches Recht der Token dafür braucht
+  (`read:packages`, `read_registry`) und dass `ghcr.io` nur Kleinbuchstaben
+  im Pfad annimmt.
+
 ## 2.6.1 — 10. August 2026
 
 **Listener lassen sich auch wieder entfernen, und der öffentliche Name setzt

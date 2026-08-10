@@ -37,6 +37,17 @@ MAX_ENV_PROBES = 7
 # containers and would need a second reading of everything below.
 SWARM_STACK, COMPOSE_STACK, KUBERNETES_STACK = 1, 2, 3
 
+# The names Docker Hub answers to. An image may spell one of them out, and it
+# still means the registry everybody reaches without a login.
+DOCKER_HUB_HOSTS = ("docker.io", "index.docker.io", "registry-1.docker.io",
+                    "registry.hub.docker.com")
+
+# Portainer's own number for a registry that is nothing but a host with a
+# login. The other kinds it knows (GitLab, ECR, Quay and their like) only add
+# fields for their own conveniences; the plain one reaches every registry that
+# speaks the usual protocol, and means the same on every Portainer version.
+CUSTOM_REGISTRY = 3
+
 STACK_KIND = {SWARM_STACK: "Swarm", COMPOSE_STACK: "Compose",
               KUBERNETES_STACK: "Kubernetes"}
 
@@ -179,6 +190,16 @@ class Portainer:
                           f"?all=1")
         return reply if isinstance(reply, list) else []
 
+    def registries(self):
+        """The registries Portainer keeps a login for.
+
+        This is where an image pull gets its credentials from -- the ones on a
+        stack are for the git clone alone. Reading the list needs no special
+        right; changing it does.
+        """
+        reply = self.call("registries")
+        return reply if isinstance(reply, list) else []
+
     def repo_file(self, repository, target_file, reference="", username="",
                   password="", skip_tls_verify=False):
         """Read one file out of a git repository -- Portainer does the cloning.
@@ -209,6 +230,28 @@ class Portainer:
         return reply.get("FileContent", "")
 
     # -- writing -----------------------------------------------------------
+
+    def create_registry(self, url, username, password, name=""):
+        """Store a login for one registry, so image pulls can use it."""
+        return self.call("registries", {
+            "Name": name or url,
+            "Type": CUSTOM_REGISTRY,
+            "URL": url,
+            "BaseURL": "",
+            "Authentication": True,
+            "Username": username,
+            "Password": password,
+        }, method="POST")
+
+    def update_registry(self, registry_id, url, username, password, name=""):
+        """Put a new login into a registry that is already there."""
+        return self.call(f"registries/{registry_id}", {
+            "Name": name or url,
+            "URL": url,
+            "Authentication": True,
+            "Username": username,
+            "Password": password,
+        }, method="PUT")
 
     def deploy_repository(self, endpoint_id, name, repository, reference="",
                           compose_file="", env=None, username="", password="",
@@ -334,6 +377,24 @@ def conflict_in(message):
     # complaint is the best guess left
     numbers = re.findall(r":(\d+)", before)
     return {"kind": "port", "value": int(numbers[-1])} if numbers else None
+
+
+# What the daemon says when the image, not the repository, was refused. The
+# two are easy to mix up: both end in a deploy that failed over a login.
+REGISTRY_DENIED = re.compile(
+    r"from registry:\s*unauthorized|pull access denied|"
+    r"unauthorized:\s*authentication required|no basic auth credentials|"
+    r"denied:\s*requested access to the resource is denied", re.I)
+
+
+def registry_refused(message):
+    """Whether a deploy failed at the image pull rather than at the clone.
+
+    Worth telling apart: the credentials on the stack are the repository's,
+    and a message about the registry means they did their job and something
+    else is missing.
+    """
+    return bool(REGISTRY_DENIED.search(str(message or "")))
 
 
 def _message_of(raw):
@@ -746,6 +807,111 @@ def compose_names(text):
     return list(dict.fromkeys(names))
 
 
+def compose_services(text):
+    """Every service, with the image it names and whether it builds its own.
+
+    Read by line, for the reason given at env_file, and only as deep as the
+    question needs: ``services:`` at the top, one step in each service, one
+    more its keys. That is enough to tell an image that has to be fetched from
+    one the host builds itself out of the repository.
+    """
+    services, current, service_indent = [], None, None
+    in_services = False
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if not in_services:
+            in_services = indent == 0 and stripped.startswith("services:")
+            continue
+        if indent == 0:
+            break  # the next key at the top ends the services block
+        if service_indent is None:
+            service_indent = indent
+        if indent <= service_indent:
+            current = {"name": stripped.split(":", 1)[0].strip(),
+                       "image": "", "build": False}
+            services.append(current)
+            continue
+        if current is None:
+            continue
+        if stripped.startswith("image:"):
+            current["image"] = _scalar(stripped[len("image:"):])
+        elif stripped.startswith("build:"):
+            current["build"] = True
+    return services
+
+
+def registry_host_of(image):
+    """The registry an image is fetched from, or "" when Docker Hub serves it.
+
+    Docker reads the part before the first slash as a host only when it looks
+    like one: it carries a dot or a port, or it is localhost. Anything else is
+    a name on Docker Hub, and a name without a slash at all is one of Docker's
+    own. A reference still holding a ``${VAR}`` is left alone -- half a host
+    name is worse than none.
+    """
+    ref = str(image or "").strip()
+    if not ref or "/" not in ref:
+        return ""
+    head = ref.split("/", 1)[0]
+    if VARIABLE.search(head):
+        return ""
+    if head == "localhost" or "." in head or ":" in head:
+        return head.lower()
+    return ""
+
+
+def images_to_pull(text, variables=None):
+    """The images this compose file fetches from a registry of its own.
+
+    A service that builds its image needs no registry at all: the Dockerfile
+    comes with the repository and the host builds it right there, which is why
+    a private repository alone gets by with the credentials on the stack. Only
+    a prebuilt image from a host of its own is a second login, and Portainer
+    takes that one from its registry list rather than from the stack.
+
+    Docker Hub is left out on purpose, whether an image names it or leaves it
+    out. Nearly everything served from there is public, and a warning on every
+    ``postgres:16-alpine`` would bury the one that matters. A private image on
+    Docker Hub is the one case this misses, and it is answered afterwards by
+    what the failed deploy says.
+    """
+    found = []
+    for service in compose_services(text):
+        if service["build"] or not service["image"]:
+            continue
+        host = registry_host_of(expand(service["image"], variables))
+        if host and host not in DOCKER_HUB_HOSTS:
+            found.append({"service": service["name"], "host": host,
+                          "image": expand(service["image"], variables)})
+    return found
+
+
+def same_registry(url, host):
+    """Whether a registry entry points at that host -- scheme and path aside.
+
+    Portainer stores what was typed, which may carry an ``https://`` or a
+    trailing slash; an image reference never does.
+    """
+    def bare(value):
+        text = str(value or "").strip().rstrip("/").lower()
+        if "//" in text:
+            text = text.split("//", 1)[1]
+        return text.split("/", 1)[0]
+
+    return bool(bare(url)) and bare(url) == bare(host)
+
+
+def registry_for(registries, host):
+    """The entry that already covers that host, if there is one."""
+    for entry in registries or []:
+        if same_registry(entry.get("URL", ""), host):
+            return entry
+    return None
+
+
 def compose_port_entries(text):
     """Every line under a ``ports:`` key, still as written.
 
@@ -984,7 +1150,68 @@ def check_deploy(client, opts, state, out=print):
 
     if clashes:
         out(f"= {len(clashes)} of them already in use on this environment")
-    return {"compose": compose_path, "clashes": clashes}
+    return {"compose": compose_path, "clashes": clashes,
+            "registry": check_registries(client, compose, variables, out)}
+
+
+def check_registries(client, compose, variables, out=print):
+    """Whether the images in this compose file can be fetched at all.
+
+    The credentials on a stack open the git repository; the image pull is a
+    second login that Portainer looks up in its own registry list, by host.
+    A service that builds its image asks for neither, which is why a private
+    repository on its own gets along without any of this.
+
+    Returns one entry per registry host that would be asked for a login,
+    saying whether Portainer already knows it. Nothing here changes anything.
+    """
+    wanted = images_to_pull(compose, variables)
+    if not wanted:
+        return []
+    try:
+        known = client.registries()
+    except PortainerError as exc:
+        out(f"= cannot read the registries of this Portainer: {exc}")
+        return []
+
+    hosts, seen = [], set()
+    for entry in wanted:
+        if entry["host"] in seen:
+            continue
+        seen.add(entry["host"])
+        holder = registry_for(known, entry["host"])
+        out(f"{entry['service']} pulls {entry['image']}"
+            + (f" -- {entry['host']} is a registry Portainer knows"
+               if holder else f" -- no login stored for {entry['host']}"))
+        hosts.append({"host": entry["host"], "service": entry["service"],
+                      "image": entry["image"],
+                      "id": holder.get("Id") if holder else 0,
+                      "name": (holder or {}).get("Name", "")})
+    return hosts
+
+
+def ensure_registry(client, host, username, password, registry_id=0, name="",
+                    out=print):
+    """Store the login an image pull will need, under that host.
+
+    One entry per host is the point. Portainer hands every registry it holds
+    to the deploy and lets Docker match them by host, so a second entry for a
+    host that already has one is a coin toss over which token gets used.
+    """
+    try:
+        if registry_id:
+            client.update_registry(registry_id, host, username, password,
+                                   name=name)
+            out(f"+ {host}: the stored login was replaced with this token")
+        else:
+            client.create_registry(host, username, password)
+            out(f"+ {host} added to the registries, with this user and token")
+        return True
+    except PortainerError as exc:
+        out(f"= {host} could not be stored as a registry: {exc}")
+        if exc.status in (401, 403):
+            out("= adding a registry needs a Portainer administrator")
+        return False
 
 
 def deploy(client, opts, out=print):
@@ -1011,6 +1238,15 @@ def deploy(client, opts, out=print):
         out(f"environment {len(variables)} variables")
     if getattr(opts, "username", "") or getattr(opts, "password", ""):
         out("repository credentials go to Portainer, not into the config file")
+    # The same token, a second time and in the other place: what the stack
+    # carries is read by the git clone, what the images need is read from the
+    # registry list. Only what was agreed to in the form lands here.
+    for entry in getattr(opts, "registry", None) or []:
+        ensure_registry(client, entry["host"],
+                        getattr(opts, "username", ""),
+                        getattr(opts, "password", ""),
+                        registry_id=entry.get("id") or 0,
+                        name=entry.get("name", ""), out=out)
     auto = getattr(opts, "auto_update", None)
     if auto:
         if auto.get("Interval"):
