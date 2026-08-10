@@ -318,7 +318,8 @@ class AdGuardTab(ttk.Frame):
             self.pending_new = True
             self.reload()
             return
-        dialog = RewriteDialog(self.app, self.app.colors, target=self.target)
+        dialog = RewriteDialog(self.app, self.app.colors, target=self.target,
+                               entries=self.entries)
         self.app.wait_window(dialog)
         if dialog.result:
             self._write(dialog.result)
@@ -327,7 +328,7 @@ class AdGuardTab(ttk.Frame):
         if self.app.busy or not self.client:
             return
         dialog = RewriteDialog(self.app, self.app.colors, target=self.target,
-                               entry=entry)
+                               entry=entry, entries=self.entries)
         self.app.wait_window(dialog)
         if dialog.result:
             self._write(dialog.result, previous=entry)
@@ -409,8 +410,9 @@ class AdGuardTab(ttk.Frame):
 class RewriteDialog(tk.Toplevel):
     """One rewrite: the name, and what AdGuard answers when it is asked."""
 
-    def __init__(self, parent, colors, target="", entry=None):
+    def __init__(self, parent, colors, target="", entry=None, entries=()):
         super().__init__(parent)
+        self.entries = list(entries)
         self.title("Umschreibung ändern" if entry else "Neue Umschreibung")
         self.result = None
         self.target = target
@@ -447,15 +449,19 @@ class RewriteDialog(tk.Toplevel):
 
         ttk.Label(body, text="Ziel", style="FieldLabel.TLabel").grid(
             row=next(rows), column=0, sticky="w")
-        self.answer_box = ttk.Entry(body, textvariable=self.var_answer,
-                                    style="Card.TEntry", font=parent.font_mono)
+        # A list to pick from and a field to type in, in one widget: almost
+        # every new rewrite points where one of the others already points --
+        # at HAProxy, at the NAS, at the one machine that answers for three
+        # names -- and those addresses are nothing anybody enjoys retyping.
+        self.answer_box = ttk.Combobox(body, textvariable=self.var_answer,
+                                       style="CardMono.TCombobox",
+                                       values=self._known_answers())
         self.answer_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 3))
-        note = "IP-Adresse oder ein anderer Name."
-        if target:
-            note += f"  ·  {target} ist HAProxy — dorthin zeigen die Hosts " \
-                    "aus dem ersten Tab."
-        ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
-                  text=note).grid(row=next(rows), column=0, sticky="w")
+        self.answer_hint = ttk.Label(body, style="Hint.TLabel", wraplength=420,
+                                     justify="left", text="")
+        self.answer_hint.grid(row=next(rows), column=0, sticky="w")
+        self.var_answer.trace_add("write", lambda *_a: self._paint_answer())
+        self._paint_answer()
 
         self.note = ttk.Label(body, style="Hint.TLabel", wraplength=420,
                               justify="left", text="")
@@ -483,6 +489,42 @@ class RewriteDialog(tk.Toplevel):
         self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
         self.domain_box.focus_set()
         self.grab_set()
+
+    def _known_answers(self):
+        """Every address the rewrites already answer with, HAProxy in front."""
+        seen = []
+        for entry in self.entries:
+            answer = entry["answer"]
+            if answer and answer not in seen:
+                seen.append(answer)
+        seen.sort()
+        if self.target and self.target in seen:
+            seen.remove(self.target)
+        if self.target:
+            seen.insert(0, self.target)
+        return seen
+
+    def _paint_answer(self):
+        """Say what the address in the field means, while it is being picked."""
+        answer = self.var_answer.get().strip()
+        if not answer:
+            self.answer_hint.configure(
+                text="IP-Adresse oder ein anderer Name — aus der Liste oder "
+                     "neu eingetippt.")
+            return
+        if answer == self.target:
+            self.answer_hint.configure(
+                text=f"{answer} ist HAProxy — der Weg über den Reverse Proxy.")
+            return
+        others = sum(1 for entry in self.entries if entry["answer"] == answer)
+        if others:
+            self.answer_hint.configure(
+                text=f"Dorthin zeigt schon {others} anderer Name."
+                if others == 1 else
+                f"Dorthin zeigen schon {others} andere Namen.")
+        else:
+            self.answer_hint.configure(
+                text="Neue Adresse — bisher zeigt kein Eintrag dorthin.")
 
     def _say(self, text):
         self.note.configure(text=text)

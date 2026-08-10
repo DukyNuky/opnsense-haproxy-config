@@ -77,6 +77,25 @@ APP_TITLE = "HAProxy · OPNsense"
 AUTHOR_URL = "https://github.com/DukyNuky/opnsense-haproxy-config"
 NO_BASE = "— keine —"
 NO_DNS = "— kein DNS-Eintrag —"
+NO_CERT = "— kein Zertifikat —"
+# What a listener can be, in the words of what it does rather than the
+# plugin's own. Only these three; the ids are the plugin's.
+LISTENER_MODES = {
+    "tcp": "TCP — TLS endet hier",
+    "ssl": "SSL — durchgereicht, nur nach SNI sortiert",
+    "http": "HTTP — der übliche Web-Eingang",
+}
+LISTENER_MODE_HINTS = {
+    "tcp": "HAProxy nimmt die Verbindung an, beendet dort die "
+           "TLS-Verschlüsselung und reicht den Inhalt weiter. Das ist der "
+           "Fall für TURN, IMAP, SMTP oder eine Datenbank.",
+    "ssl": "Die Verschlüsselung bleibt bis zum Dienst bestehen; HAProxy "
+           "liest nur den Namen aus dem Handshake. Der Dienst braucht dann "
+           "sein eigenes Zertifikat.",
+    "http": "Wie der Eingang, an dem die Hosts aus dem ersten Formular "
+            "hängen — mit Host-Header, Pfaden und X-Forwarded-For.",
+}
+NO_HEALTHCHECK = "— keiner —"
 EDIT_PROFILE = "⚙ Einstellungen …"
 TOKEN_LOGIN = "Zugriffstoken"
 USER_LOGIN = "Benutzer und Passwort"
@@ -1264,6 +1283,547 @@ class InstallDialog(tk.Toplevel):
         self.action.grid_remove()
 
 
+class FormDialog(tk.Toplevel):
+    """What the two forms of the HAProxy tab have in common.
+
+    Both stand in front of the window whose log they write into, so neither
+    may be modal: a preview is meant to be read while the form is still
+    standing. What they edit lives on the window (see ``_init_form_vars``), so
+    closing one in the middle of typing loses nothing that was picked.
+    """
+
+    title_text = ""
+    subtitle = ""
+    floor = 780
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.colors = colors = app.colors
+        self.title(self.title_text)
+        self.transient(app)
+        self.configure(bg=colors["bg"])
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.scroll = ScrollFrame(self, colors)
+        self.scroll.grid(row=0, column=0, sticky="nsew")
+        self.scroll.body.columnconfigure(0, weight=1)
+
+        body = ttk.Frame(self.scroll.body, style="Card.TFrame", padding=22)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1, uniform="half")
+        body.columnconfigure(1, weight=1, uniform="half")
+
+        ttk.Label(body, text=self.title_text, style="H2.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=700, justify="left",
+                  text=self.subtitle).grid(row=1, column=0, columnspan=2,
+                                           sticky="w", pady=(3, 16))
+
+        left = ttk.Frame(body, style="Card.TFrame")
+        left.grid(row=2, column=0, sticky="nsew", padx=(0, 12))
+        left.columnconfigure(0, weight=1)
+        right = ttk.Frame(body, style="Card.TFrame")
+        right.grid(row=2, column=1, sticky="nsew", padx=(12, 0))
+        right.columnconfigure(0, weight=1)
+        self.build(left, right)
+
+        self.footer = footer = ttk.Frame(self, style="Card.TFrame",
+                                         padding=(22, 12, 22, 16))
+        footer.grid(row=1, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        self.note = ttk.Label(footer, style="Hint.TLabel", text="",
+                              wraplength=460, justify="left")
+        self.note.grid(row=0, column=0, sticky="w")
+        ttk.Button(footer, text="Abbrechen", style="Ghost.TButton",
+                   command=self.destroy).grid(row=0, column=1, padx=(0, 8))
+        self.preview_button = ttk.Button(footer, text="Vorschau",
+                                         style="Ghost.TButton",
+                                         command=lambda: self.go(True))
+        self.preview_button.grid(row=0, column=2, padx=(0, 8))
+        self.submit_button = ttk.Button(footer, text=self.action_text,
+                                        style="Accent.TButton",
+                                        command=lambda: self.go(False))
+        self.submit_button.grid(row=0, column=3)
+
+        self.apply_theme(colors)
+        self.refresh()
+        self.bind("<Return>", lambda _e: self.go(False))
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        _fit_dialog(self, app, self.scroll, self.footer, floor=self.floor)
+
+    # -- what the window asks of a form ------------------------------------
+
+    def busy_buttons(self):
+        return self.preview_button, self.submit_button
+
+    def say(self, text, ok=True):
+        """The one line the form itself shows: the log is behind it."""
+        self.note.configure(text=text,
+                            style="Hint.TLabel" if ok else "Bad.TLabel")
+
+    def apply_theme(self, colors):
+        self.colors = colors
+        self.configure(bg=colors["bg"])
+        self.scroll.apply_theme(colors)
+        # the sliding switch paints itself, so it has to be told
+        if getattr(self, "ssl_switch", None) is not None:
+            self.ssl_switch.apply_theme(colors, colors["surface2"])
+            self.switch_box.configure(bg=colors["surface2"],
+                                      highlightbackground=colors["border"])
+
+    def _field(self, parent, rows, label, variable, hint="", mono=True):
+        """Label, entry and the sentence under it -- the shape every field has.
+
+        ``rows`` is the counter the column hands out its rows from, so a field
+        added in the middle cannot make two widgets share a row again.
+        """
+        ttk.Label(parent, text=label, style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        extra = {"font": self.app.font_mono} if mono else {}
+        entry = ttk.Entry(parent, textvariable=variable, style="Card.TEntry",
+                          **extra)
+        entry.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
+        note = ttk.Label(parent, style="Hint.TLabel", text=hint, wraplength=340,
+                         justify="left")
+        note.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
+        return entry, note
+
+    def _switch(self, parent, rows, variable, label, command):
+        """The sliding switch with its two lines, on its own surface."""
+        box = tk.Frame(parent, bg=self.colors["surface2"], highlightthickness=1,
+                       bd=0)
+        box.grid(row=next(rows), column=0, sticky="ew", pady=(0, 12))
+        box.columnconfigure(1, weight=1)
+        switch = Switch(box, self.colors, command=command)
+        switch.set(bool(variable.get()))
+        switch.grid(row=0, column=0, rowspan=2, padx=12, pady=10)
+        ttk.Label(box, text=label, style="Switch.TLabel").grid(
+            row=0, column=1, sticky="w", pady=(10, 0))
+        note = ttk.Label(box, style="RowHint.TLabel", text="")
+        note.grid(row=1, column=1, sticky="w", pady=(0, 10))
+        return box, switch, note
+
+
+class HostDialog(FormDialog):
+    """A name that HAProxy answers for, and the server behind it."""
+
+    title_text = "Neuer Host"
+    action_text = "Anlegen"
+    subtitle = ("Legt Real Server, Backend Pool, Condition und Rule an und "
+                "hängt die Rule in den Public Service. Der Name wird dort am "
+                "Host-Header (oder an der SNI) erkannt.")
+
+    def build(self, left, right):
+        app = self.app
+        rows = itertools.count()
+
+        ttk.Label(left, text="Basis-Domain", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        self.base_box = ttk.Combobox(left, textvariable=app.var_base,
+                                     state="readonly", style="Card.TCombobox",
+                                     values=[NO_BASE])
+        self.base_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 12))
+        self.base_box.bind("<<ComboboxSelected>>",
+                           lambda _e: self.refresh_hints())
+
+        entry, self.fqdn_hint = self._field(
+            left, rows, "Hostname", app.var_target,
+            "app.example.com oder https://example.com/api")
+        entry.focus_set()
+        self._fqdn_trace = app.var_target.trace_add(
+            "write", lambda *_a: self.refresh_hints())
+
+        pair = ttk.Frame(left, style="Card.TFrame")
+        pair.grid(row=next(rows), column=0, sticky="ew")
+        pair.columnconfigure(0, weight=1)
+        ttk.Label(pair, text="Server-IP", style="FieldLabel.TLabel").grid(
+            row=0, column=0, sticky="w")
+        ttk.Entry(pair, textvariable=app.var_ip, style="Card.TEntry",
+                  font=app.font_mono).grid(row=1, column=0, sticky="ew",
+                                           padx=(0, 10), pady=(4, 12))
+        ttk.Label(pair, text="Port", style="FieldLabel.TLabel").grid(
+            row=0, column=1, sticky="w")
+        port = ttk.Entry(pair, textvariable=app.var_port, width=8,
+                         style="Card.TEntry", font=app.font_mono)
+        port.grid(row=1, column=1, sticky="w", pady=(4, 12))
+        port.bind("<KeyRelease>", app._port_typed)
+
+        self.switch_box, self.ssl_switch, self.ssl_note = self._switch(
+            left, rows, app.var_ssl, "SSL zum Backend", self._ssl_changed)
+        self._ssl_changed()
+
+        rows = itertools.count()
+        ttk.Label(right, text="DNS-Eintrag in", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        self.dns_box = ttk.Combobox(right, textvariable=app.var_dns_target,
+                                    state="readonly", style="Card.TCombobox",
+                                    values=[NO_DNS])
+        self.dns_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
+        self.dns_box.bind("<<ComboboxSelected>>",
+                          lambda _e: app._dns_target_changed())
+        self.dns_hint = ttk.Label(right, style="Hint.TLabel", text="",
+                                  wraplength=340, justify="left")
+        self.dns_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
+
+        ttk.Label(right, text="Public Service", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        self.frontend_box = ttk.Combobox(right, textvariable=app.var_frontend,
+                                         state="readonly",
+                                         style="Card.TCombobox")
+        self.frontend_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
+        self.frontend_box.bind("<<ComboboxSelected>>",
+                               lambda _e: self.frontend_hint())
+        self.hidden_frontends = 0
+        self.frontend_note = ttk.Label(right, style="Hint.TLabel", text="",
+                                       wraplength=340, justify="left")
+        self.frontend_note.grid(row=next(rows), column=0, sticky="w",
+                                pady=(0, 12))
+
+        ttk.Separator(right, orient="horizontal").grid(
+            row=next(rows), column=0, sticky="ew", pady=(4, 12))
+        ttk.Label(right, text="Erweiterte Optionen",
+                  style="Group.TLabel").grid(row=next(rows), column=0, sticky="w",
+                                             pady=(0, 8))
+        for text, variable in (
+                ("Backend-Zertifikat prüfen", app.var_ssl_verify),
+                ("X-Forwarded-For setzen", app.var_forward_for),
+                ("Nur speichern, HAProxy nicht neu laden", app.var_no_apply),
+                ("Auch Public Services ohne Port 443 zeigen",
+                 app.var_all_frontends)):
+            ttk.Checkbutton(right, text=text, variable=variable,
+                            style="Card.TCheckbutton").grid(
+                row=next(rows), column=0, sticky="w", pady=(0, 4))
+
+        ttk.Label(right, text="Health Monitor", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w", pady=(8, 0))
+        self.healthcheck_box = ttk.Combobox(
+            right, textvariable=app.var_healthcheck, state="readonly",
+            style="Card.TCombobox", values=[NO_HEALTHCHECK])
+        self.healthcheck_box.grid(row=next(rows), column=0, sticky="ew",
+                                  pady=(4, 10))
+
+        ttk.Label(right, text="Backend-Modus", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Combobox(right, textvariable=app.var_backend_mode, state="readonly",
+                     style="Card.TCombobox",
+                     values=["automatisch", "http", "tcp"]).grid(
+            row=next(rows), column=0, sticky="ew", pady=(4, 10))
+
+        ttk.Label(right, text="Namens-Präfix", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Entry(right, textvariable=app.var_prefix,
+                  style="Card.TEntry").grid(row=next(rows), column=0,
+                                            sticky="ew", pady=(4, 0))
+
+    def destroy(self):
+        if getattr(self, "_fqdn_trace", None):
+            self.app.var_target.trace_remove("write", self._fqdn_trace)
+            self._fqdn_trace = None
+        if self.app.host_dialog is self:
+            self.app.host_dialog = None
+        super().destroy()
+
+    def go(self, dry_run):
+        self.app._submit(dry_run)
+
+    # -- keeping up with the firewall --------------------------------------
+
+    def refresh(self):
+        """Take up what the last reading of the firewall brought."""
+        app = self.app
+        self.base_box.configure(
+            values=[NO_BASE] + [entry["domain"] for entry in app.domains])
+        self.healthcheck_box.configure(
+            values=[NO_HEALTHCHECK] + app.healthchecks)
+        self.fill_dns_choices()
+        self.fill_frontends()
+        self.refresh_hints()
+
+    def fill_dns_choices(self):
+        names = [e.get("name", "?") for e in self.app.systems.get("adguard", [])]
+        self.dns_box.configure(values=[NO_DNS] + names,
+                               state="readonly" if names else "disabled")
+
+    def fill_frontends(self):
+        """The public services to choose from, the one on 443 in front.
+
+        A place with more than one listener usually has a second on port 80
+        whose whole job is to send browsers to the first. A rule hung into that
+        one answers nothing, and the list used to begin with whichever came
+        first by name -- so that is what got picked.
+
+        The others are left out rather than merely sorted down, because the
+        choice is between things that look alike from here. What is hidden is
+        said under the field, and the switch in the advanced options brings
+        them back for a place whose HTTPS lives on 8443.
+        """
+        app = self.app
+        every = list(app.services)
+        shown = every if app.var_all_frontends.get() else [
+            service for service in every if core.serves_https(service)]
+        if not shown:
+            shown = every  # nothing on 443 at all: better all of them than none
+        chosen = app.var_frontend.get()
+        if chosen and chosen not in [service["name"] for service in shown]:
+            # a service somebody picked on purpose does not vanish underneath
+            keep = next((s for s in every if s["name"] == chosen), None)
+            if keep:
+                shown = shown + [keep]
+        # 443 first, then what is switched on, then by name -- so the first
+        # entry is the one to start with even when everything is shown
+        shown.sort(key=lambda service: (0 if core.serves_https(service) else 1,
+                                        0 if service.get("enabled", True) else 1,
+                                        service.get("name", "").lower()))
+        names = [service["name"] for service in shown]
+        self.frontend_box.configure(values=names,
+                                    state="disabled" if len(names) <= 1
+                                    else "readonly")
+        if chosen not in names:
+            preferred = app.profile.get("frontend", "")
+            app.var_frontend.set(preferred if preferred in names
+                                 else (names[0] if names else ""))
+        self.hidden_frontends = len(every) - len(shown)
+        self.frontend_hint()
+
+    def frontend_hint(self):
+        """What the chosen service listens on, and what is not in the list."""
+        chosen = next((service for service in self.app.services
+                       if service["name"] == self.app.var_frontend.get()), None)
+        parts = []
+        if chosen:
+            parts.append(f"hört auf {chosen.get('bind') or '?'}")
+            if not core.serves_https(chosen):
+                parts.append("nicht Port 443 — sicher, dass Anfragen hier "
+                             "ankommen?")
+            elif not chosen.get("enabled", True):
+                parts.append("ist abgeschaltet")
+        elif not self.app.connected:
+            parts.append("erst nach dem Verbinden bekannt")
+        if self.hidden_frontends:
+            parts.append(f"{self.hidden_frontends} ohne 443 ausgeblendet "
+                         "(Erweiterte Optionen)" if self.hidden_frontends > 1
+                         else "einer ohne 443 ausgeblendet (Erweiterte Optionen)")
+        self.frontend_note.configure(text=" · ".join(parts))
+
+    def refresh_hints(self):
+        """Show the name that will actually be created, and what DNS will do."""
+        app = self.app
+        base = "" if app.var_base.get() == NO_BASE else app.var_base.get()
+        raw = core.with_base(app.var_target.get(), base)
+        host = raw.split("/", 1)[0].strip()
+        full = core.build_fqdn(host, base) if host else ""
+        if not full:
+            self.fqdn_hint.configure(
+                text="app.example.com oder https://example.com/api")
+        else:
+            entry = next((d for d in app.domains if d["domain"] == base), None)
+            note = "" if entry is None or core.covered_by(entry, full) \
+                else "  ·  kein Zertifikat dafür"
+            self.fqdn_hint.configure(text=f"→ {full}{note}")
+
+        if app.var_dns_target.get() == NO_DNS:
+            self.dns_hint.configure(text="DNS bleibt unangetastet"
+                                    if app.systems.get("adguard")
+                                    else "Noch kein AdGuard eingerichtet (⚙)")
+        elif not app.adguard:
+            self.dns_hint.configure(
+                text=app.adguard_problem or "AdGuard antwortet hier nicht (⚙)")
+        else:
+            self.dns_hint.configure(
+                text=f"{full or 'name'} → {app.adguard_target or '?'}")
+
+    def _ssl_changed(self):
+        on = self.ssl_switch.get()
+        self.app.var_ssl.set(on)
+        self.ssl_note.configure(text="HAProxy spricht HTTPS mit dem Server" if on
+                                else "HAProxy spricht HTTP mit dem Server")
+        if not self.app.port_touched:
+            self.app.var_port.set("")
+
+
+class ListenerDialog(FormDialog):
+    """A public service of its own: TLS outside, whatever fits inside.
+
+    The other form hangs a name into an entrance that already exists, which is
+    what a web service needs. A TURN server, an IMAP server or a database has
+    no name in the request to match on -- it has a port. This builds that: the
+    listener, the pool and the server behind it in one go.
+    """
+
+    title_text = "Neuer TCP-Listener"
+    action_text = "Listener anlegen"
+    subtitle = ("Ein eigener Public Service auf einem eigenen Port. HAProxy "
+                "beendet dort die TLS-Verbindung mit einem öffentlichen "
+                "Zertifikat und spricht nach innen so, wie der Dienst es "
+                "will — auch ganz ohne Verschlüsselung.")
+
+    def build(self, left, right):
+        app = self.app
+        rows = itertools.count()
+
+        ttk.Label(left, text="Außen — was ankommt",
+                  style="Group.TLabel").grid(row=next(rows), column=0,
+                                             sticky="w", pady=(0, 10))
+        self._field(left, rows, "Name", app.var_listen_name,
+                    "So heißt der Public Service in OPNsense, z.B. turn-tls",
+                    mono=False)
+        self._field(left, rows, "Port", app.var_listen_port,
+                    "Der Port, auf dem HAProxy nach außen hört, z.B. 5349")
+        self._field(left, rows, "Adresse", app.var_listen_address,
+                    "0.0.0.0 = alle IPv4-Adressen der Firewall")
+
+        ttk.Label(left, text="Modus", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        self.mode_box = ttk.Combobox(left, state="readonly",
+                                     style="Card.TCombobox",
+                                     values=list(LISTENER_MODES.values()))
+        self.mode_box.set(LISTENER_MODES[app.var_listen_mode.get()])
+        self.mode_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
+        self.mode_box.bind("<<ComboboxSelected>>", lambda _e: self._mode_changed())
+        self.mode_hint = ttk.Label(left, style="Hint.TLabel", text="",
+                                   wraplength=340, justify="left")
+        self.mode_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
+
+        ttk.Label(left, text="Zertifikat", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        self.cert_box = ttk.Combobox(left, textvariable=app.var_listen_cert,
+                                     state="readonly", style="Card.TCombobox",
+                                     values=[NO_CERT])
+        self.cert_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
+        self.cert_box.bind("<<ComboboxSelected>>", lambda _e: self._mode_changed())
+        self.cert_hint = ttk.Label(left, style="Hint.TLabel", text="",
+                                   wraplength=340, justify="left")
+        self.cert_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
+
+        rows = itertools.count()
+        ttk.Label(right, text="Innen — wohin es geht",
+                  style="Group.TLabel").grid(row=next(rows), column=0,
+                                             sticky="w", pady=(0, 10))
+        pair = ttk.Frame(right, style="Card.TFrame")
+        pair.grid(row=next(rows), column=0, sticky="ew")
+        pair.columnconfigure(0, weight=1)
+        ttk.Label(pair, text="Server-IP", style="FieldLabel.TLabel").grid(
+            row=0, column=0, sticky="w")
+        ttk.Entry(pair, textvariable=app.var_listen_ip, style="Card.TEntry",
+                  font=app.font_mono).grid(row=1, column=0, sticky="ew",
+                                           padx=(0, 10), pady=(4, 2))
+        ttk.Label(pair, text="Port", style="FieldLabel.TLabel").grid(
+            row=0, column=1, sticky="w")
+        ttk.Entry(pair, textvariable=app.var_listen_backend_port, width=8,
+                  style="Card.TEntry", font=app.font_mono).grid(
+            row=1, column=1, sticky="w", pady=(4, 2))
+        ttk.Label(right, style="Hint.TLabel", wraplength=340, justify="left",
+                  text="Der Dienst dahinter. Ohne Port derselbe wie außen.").grid(
+            row=next(rows), column=0, sticky="w", pady=(0, 12))
+
+        self.switch_box, self.ssl_switch, self.ssl_note = self._switch(
+            right, rows, app.var_listen_ssl, "TLS zum Server",
+            self._ssl_changed)
+        self._ssl_changed()
+        ttk.Checkbutton(right, text="Zertifikat des Servers prüfen",
+                        variable=app.var_listen_ssl_verify,
+                        style="Card.TCheckbutton").grid(
+            row=next(rows), column=0, sticky="w", pady=(0, 12))
+
+        ttk.Separator(right, orient="horizontal").grid(
+            row=next(rows), column=0, sticky="ew", pady=(4, 12))
+        ttk.Label(right, text="Name nach außen", style="Group.TLabel").grid(
+            row=next(rows), column=0, sticky="w", pady=(0, 8))
+        self._field(right, rows, "Öffentlicher Name", app.var_listen_host,
+                    "Für den DNS-Eintrag und das Zertifikat, z.B. "
+                    "turn.example.de. Leer = kein DNS-Eintrag.")
+        self.dns_check = ttk.Checkbutton(
+            right, text="Passenden DNS-Eintrag in AdGuard anlegen",
+            variable=app.var_listen_dns, style="Card.TCheckbutton")
+        self.dns_check.grid(row=next(rows), column=0, sticky="w")
+        self.dns_hint = ttk.Label(right, style="Hint.TLabel", text="",
+                                  wraplength=340, justify="left")
+        self.dns_hint.grid(row=next(rows), column=0, sticky="w", pady=(2, 0))
+        self._dns_trace = app.var_listen_host.trace_add(
+            "write", lambda *_a: self._paint_dns())
+
+    def destroy(self):
+        if getattr(self, "_dns_trace", None):
+            self.app.var_listen_host.trace_remove("write", self._dns_trace)
+            self._dns_trace = None
+        if self.app.listener_dialog is self:
+            self.app.listener_dialog = None
+        super().destroy()
+
+    def go(self, dry_run):
+        self.app.var_listen_mode.set(self._mode_id())
+        self.app.create_listener(dry_run)
+
+    def refresh(self):
+        """Take up the certificates and modes the firewall just reported."""
+        choices = self.app.listener_choices
+        names = [entry["name"] for entry in choices["certificates"]]
+        self.cert_box.configure(values=[NO_CERT] + names,
+                                state="readonly" if names else "disabled")
+        if self.app.var_listen_cert.get() not in names:
+            self.app.var_listen_cert.set(NO_CERT)
+        offered = [choice["id"] for choice in choices["modes"]] \
+            or list(LISTENER_MODES)
+        # in the order this form thinks about them, not the plugin's: the one
+        # this window is for stands first
+        self.mode_box.configure(values=[label for key, label
+                                        in LISTENER_MODES.items()
+                                        if key in offered])
+        self._mode_changed()
+        self._paint_dns()
+
+    def _mode_id(self):
+        shown = self.mode_box.get()
+        return next((key for key, label in LISTENER_MODES.items()
+                     if label == shown), "tcp")
+
+    def _mode_changed(self):
+        mode = self._mode_id()
+        cert = self.app.var_listen_cert.get() != NO_CERT
+        self.mode_hint.configure(text=LISTENER_MODE_HINTS[mode])
+        if not self.app.listener_choices["certificates"]:
+            self.cert_hint.configure(
+                text="Noch keine Zertifikate gelesen — dafür einmal verbinden."
+                if not self.app.connected else
+                "Diese OPNsense hat keine Zertifikate (System → Trust).")
+        elif cert:
+            self.cert_hint.configure(
+                text="Damit antwortet HAProxy nach außen; die Verbindung "
+                     "endet hier." if mode != "ssl" else
+                     "Im SSL-Modus wird die Verbindung durchgereicht — das "
+                     "Zertifikat wird dann nicht gebraucht.")
+        else:
+            self.cert_hint.configure(
+                text="Ohne Zertifikat reicht der Listener nur weiter. Der "
+                     "Dienst dahinter braucht dann sein eigenes TLS.")
+
+    def _ssl_changed(self):
+        on = self.ssl_switch.get()
+        self.app.var_listen_ssl.set(on)
+        self.ssl_note.configure(
+            text="HAProxy spricht TLS mit dem Dienst" if on else
+                 "HAProxy spricht unverschlüsselt mit dem Dienst")
+
+    def _paint_dns(self):
+        host = self.app.var_listen_host.get().strip()
+        if not host:
+            self.dns_hint.configure(text="Ohne Namen wird kein DNS-Eintrag "
+                                         "angelegt.")
+            self.dns_check.configure(state="disabled")
+            return
+        self.dns_check.configure(state="normal")
+        if not self.app.adguard:
+            self.dns_hint.configure(
+                text=self.app.adguard_problem
+                     or "Kein AdGuard für diese OPNsense (⚙)")
+            return
+        self.dns_hint.configure(
+            text=f"{host} → {self.app.adguard_target or '?'}")
+
+
 class App(tk.Tk):
     def __init__(self, args):
         # the class name is what the task bar matches the desktop starter
@@ -1299,6 +1859,13 @@ class App(tk.Tk):
         # has an answer of its own and the header shows one of the two
         self.haproxy_pill = ("nicht verbunden", "IdlePill.TLabel")
 
+        # what a new listener could be given, read from the plugin when the
+        # firewall is read; empty until then
+        self.listener_choices = {"certificates": [], "modes": []}
+        # the two forms of this tab, each in a window of its own
+        self.host_dialog = None
+        self.listener_dialog = None
+
         self.update_release = None
         self.update_checking = False
 
@@ -1312,6 +1879,7 @@ class App(tk.Tk):
         self._set_icon()
 
         self._init_fonts()
+        self._init_form_vars()
         self._build()
         self._apply_theme()
 
@@ -1394,6 +1962,10 @@ class App(tk.Tk):
                         foreground=c["muted"], font=self.font_small)
         style.configure("Hint.TLabel", background=c["surface"],
                         foreground=c["muted"], font=self.font_small)
+        # the same line when it carries bad news -- a form says in itself what
+        # went wrong, because the log it wrote into stands behind it
+        style.configure("Bad.TLabel", background=c["surface"],
+                        foreground=c["danger"], font=self.font_small)
         style.configure("FieldLabel.TLabel", background=c["surface"],
                         foreground=c["muted"], font=self.font_small)
         style.configure("Host.TLabel", background=c["surface2"],
@@ -1450,6 +2022,13 @@ class App(tk.Tk):
                   bordercolor=[("focus", c["accent"])],
                   selectbackground=[("readonly", c["surface2"])],
                   selectforeground=[("readonly", c["text"])])
+        # the same picker for things that are typed as much as chosen -- an
+        # address reads better in the same face as the field above it
+        style.configure("CardMono.TCombobox", fieldbackground=c["surface2"],
+                        background=c["surface2"], foreground=c["text"],
+                        arrowcolor=c["muted"], bordercolor=c["border"],
+                        lightcolor=c["border"], darkcolor=c["border"],
+                        borderwidth=1, padding=6, font=self.font_mono)
 
         style.configure("Accent.TButton", background=c["accent"],
                         foreground=c["accent_text"], borderwidth=0,
@@ -1541,16 +2120,15 @@ class App(tk.Tk):
         self.log.tag_configure("error", foreground=c["danger"])
         self.log_frame.configure(bg=c["surface"])
 
-        self.ssl_switch.apply_theme(c, c["surface2"])
-        self.switch_box.configure(bg=c["surface2"],
-                                  highlightbackground=c["border"])
         self.inventory.apply_theme(c)
-        self.form_scroll.apply_theme(c)
         self.theme_button.configure(text="☀" if self.theme_name == "dark" else "🌙")
         self._paint_update_button()
         self._render_inventory()
         self.portainer.apply_theme()
         self.dns.apply_theme()
+        for dialog in (self.host_dialog, self.listener_dialog):
+            if dialog is not None and dialog.winfo_exists():
+                dialog.apply_theme(c)
         self._paint_tabs()
         self.paint_connection()
 
@@ -1607,11 +2185,9 @@ class App(tk.Tk):
 
         proxy = ttk.Frame(pages, style="TFrame")
         proxy.grid(row=0, column=0, sticky="nsew")
-        proxy.columnconfigure(0, weight=0, minsize=380)
-        proxy.columnconfigure(1, weight=1)
+        proxy.columnconfigure(0, weight=1)
         proxy.rowconfigure(0, weight=1)
-        self._build_form(proxy)
-        self._build_inventory(proxy)
+        self._build_hosts(proxy)
 
         self.portainer = (portainer_gui.PortainerTab(pages, self)
                           if portainer_gui else MissingTab(pages, self))
@@ -1732,38 +2308,25 @@ class App(tk.Tk):
                            pady=(4, 0))
         self.activity.grid_remove()
 
-    def _build_form(self, parent):
-        # The form is taller than a small window, so it lives in its own
-        # scroller -- otherwise the buttons at the bottom become unreachable.
-        holder = ttk.Frame(parent, style="Card.TFrame")
-        holder.grid(row=0, column=0, sticky="nsew", padx=(0, 9), pady=(0, 9))
-        holder.rowconfigure(0, weight=1)
-        holder.columnconfigure(0, weight=1)
-        self.form_scroll = ScrollFrame(holder, self.colors)
-        self.form_scroll.grid(row=0, column=0, sticky="nsew")
-        self.form_scroll.body.columnconfigure(0, weight=1)
+    def _init_form_vars(self):
+        """What the two forms of this tab hold, kept by the window itself.
 
-        outer = ttk.Frame(self.form_scroll.body, style="Card.TFrame",
-                          padding=(18, 16))
-        outer.grid(row=0, column=0, sticky="nsew")
-        outer.columnconfigure(0, weight=1)
-
-        ttk.Label(outer, text="Neuer Host", style="H2.TLabel").grid(
-            row=0, column=0, sticky="w")
-        ttk.Label(outer, style="Hint.TLabel", wraplength=320, justify="left",
-                  text="Legt Real Server, Backend Pool, Condition und Rule an "
-                       "und hängt die Rule in den Public Service.").grid(
-            row=1, column=0, sticky="w", pady=(3, 14))
-
+        The forms live in windows that come and go; what was typed into a
+        picker should not. Keeping the variables here also means the removal
+        of a host and a deploy from the Portainer tab can read the same
+        switches -- "do not reload yet", "which AdGuard" -- without a form
+        having to be open anywhere.
+        """
         self.var_target = tk.StringVar()
         self.var_ip = tk.StringVar()
         self.var_port = tk.StringVar()
         self.var_base = tk.StringVar(value=NO_BASE)
         self.var_dns_target = tk.StringVar(value=NO_DNS)
         self.var_frontend = tk.StringVar()
-        self.var_healthcheck = tk.StringVar(value="— keiner —")
+        self.var_healthcheck = tk.StringVar(value=NO_HEALTHCHECK)
         self.var_backend_mode = tk.StringVar(value="automatisch")
         self.var_prefix = tk.StringVar()
+        self.var_ssl = tk.BooleanVar(value=False)
         self.var_ssl_verify = tk.BooleanVar(value=False)
         self.var_forward_for = tk.BooleanVar(value=True)
         self.var_no_apply = tk.BooleanVar(value=False)
@@ -1774,155 +2337,53 @@ class App(tk.Tk):
         self.var_all_frontends.trace_add("write",
                                          lambda *_a: self._fill_frontends())
 
-        # Hand out grid rows in order, so inserting a field can never make two
-        # widgets share a row again.
-        rows = itertools.count(2)
+        # the second form of this tab: a listener of its own
+        self.var_listen_name = tk.StringVar()
+        self.var_listen_port = tk.StringVar()
+        self.var_listen_address = tk.StringVar(value="0.0.0.0")
+        self.var_listen_mode = tk.StringVar(value="tcp")
+        self.var_listen_cert = tk.StringVar(value=NO_CERT)
+        self.var_listen_ip = tk.StringVar()
+        self.var_listen_backend_port = tk.StringVar()
+        self.var_listen_ssl = tk.BooleanVar(value=False)
+        self.var_listen_ssl_verify = tk.BooleanVar(value=False)
+        self.var_listen_host = tk.StringVar()
+        self.var_listen_dns = tk.BooleanVar(value=True)
 
-        ttk.Label(outer, text="Basis-Domain", style="FieldLabel.TLabel").grid(
-            row=next(rows), column=0, sticky="w")
-        self.base_box = ttk.Combobox(outer, textvariable=self.var_base,
-                                     state="readonly", style="Card.TCombobox",
-                                     values=[NO_BASE])
-        self.base_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 12))
-        self.base_box.bind("<<ComboboxSelected>>", lambda _e: self._refresh_fqdn())
+    def _build_hosts(self, parent):
+        """The listing of this tab, and the two ways to add to it.
 
-        ttk.Label(outer, text="Hostname", style="FieldLabel.TLabel").grid(
-            row=next(rows), column=0, sticky="w")
-        entry = ttk.Entry(outer, textvariable=self.var_target, style="Card.TEntry",
-                          font=self.font_mono)
-        entry.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
-        entry.focus_set()
-        self.fqdn_hint = ttk.Label(outer, style="Hint.TLabel",
-                                   text="app.example.com oder https://example.com/api")
-        self.fqdn_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
-        self.var_target.trace_add("write", lambda *_: self._refresh_fqdn())
-
-        pair = ttk.Frame(outer, style="Card.TFrame")
-        pair.grid(row=next(rows), column=0, sticky="ew")
-        pair.columnconfigure(0, weight=1)
-        pair.columnconfigure(1, weight=0)
-
-        ttk.Label(pair, text="Server-IP", style="FieldLabel.TLabel").grid(
-            row=0, column=0, sticky="w")
-        ttk.Entry(pair, textvariable=self.var_ip, style="Card.TEntry",
-                  font=self.font_mono).grid(row=1, column=0, sticky="ew",
-                                            padx=(0, 10), pady=(4, 12))
-        ttk.Label(pair, text="Port", style="FieldLabel.TLabel").grid(
-            row=0, column=1, sticky="w")
-        port_entry = ttk.Entry(pair, textvariable=self.var_port, width=8,
-                               style="Card.TEntry", font=self.font_mono)
-        port_entry.grid(row=1, column=1, sticky="w", pady=(4, 12))
-        port_entry.bind("<KeyRelease>", self._port_typed)
-
-        self.switch_box = tk.Frame(outer, bg=self.colors["surface2"],
-                                   highlightthickness=1, bd=0)
-        self.switch_box.grid(row=next(rows), column=0, sticky="ew", pady=(0, 12))
-        self.switch_box.columnconfigure(1, weight=1)
-        self.ssl_switch = Switch(self.switch_box, self.colors,
-                                 command=self._ssl_changed)
-        self.ssl_switch.grid(row=0, column=0, rowspan=2, padx=12, pady=10)
-        ttk.Label(self.switch_box, text="SSL zum Backend",
-                  style="Switch.TLabel").grid(row=0, column=1, sticky="w",
-                                              pady=(10, 0))
-        self.ssl_note = ttk.Label(self.switch_box, style="RowHint.TLabel",
-                                  text="HAProxy spricht HTTP mit dem Server")
-        self.ssl_note.grid(row=1, column=1, sticky="w", pady=(0, 10))
-
-        # Which AdGuard gets the entry is asked here rather than in the
-        # settings: it is a decision about the host being created, and with
-        # several of them configured it changes from one host to the next.
-        ttk.Label(outer, text="DNS-Eintrag in", style="FieldLabel.TLabel").grid(
-            row=next(rows), column=0, sticky="w")
-        self.dns_box = ttk.Combobox(outer, textvariable=self.var_dns_target,
-                                    state="readonly", style="Card.TCombobox",
-                                    values=[NO_DNS])
-        self.dns_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
-        self.dns_box.bind("<<ComboboxSelected>>",
-                          lambda _e: self._dns_target_changed())
-        self.dns_hint = ttk.Label(outer, style="Hint.TLabel", text="")
-        self.dns_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
-
-        ttk.Label(outer, text="Public Service", style="FieldLabel.TLabel").grid(
-            row=next(rows), column=0, sticky="w")
-        self.frontend_box = ttk.Combobox(outer, textvariable=self.var_frontend,
-                                         state="readonly", style="Card.TCombobox")
-        self.frontend_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
-        self.frontend_box.bind("<<ComboboxSelected>>",
-                               lambda _e: self._frontend_hint())
-        self.frontend_hint = ttk.Label(outer, style="Hint.TLabel", wraplength=320,
-                                       justify="left", text="")
-        self.frontend_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
-
-        self.advanced_button = ttk.Button(outer, text="▸  Erweiterte Optionen",
-                                          style="Ghost.TButton",
-                                          command=self._toggle_advanced)
-        self.advanced_button.grid(row=next(rows), column=0, sticky="ew")
-
-        self.advanced = ttk.Frame(outer, style="Card.TFrame", padding=(0, 12, 0, 0))
-        self.advanced.grid(row=next(rows), column=0, sticky="ew")
-        self.advanced.grid_remove()
-        self.advanced_open = False
-        self._build_advanced(self.advanced)
-
-        buttons = ttk.Frame(outer, style="Card.TFrame")
-        buttons.grid(row=next(rows), column=0, sticky="ew", pady=(14, 0))
-        buttons.columnconfigure(1, weight=1)
-        self.preview_button = ttk.Button(buttons, text="Vorschau",
-                                         style="Ghost.TButton",
-                                         command=lambda: self._submit(True))
-        self.preview_button.grid(row=0, column=0, padx=(0, 8))
-        self.submit_button = ttk.Button(buttons, text="Anlegen",
-                                        style="Accent.TButton",
-                                        command=lambda: self._submit(False))
-        self.submit_button.grid(row=0, column=1, sticky="ew")
-
-        self.bind("<Return>", lambda _e: self._submit(False))
-
-    def _build_advanced(self, parent):
-        parent.columnconfigure(0, weight=1)
-        ttk.Checkbutton(parent, text="Backend-Zertifikat prüfen",
-                        variable=self.var_ssl_verify,
-                        style="Card.TCheckbutton").grid(row=0, column=0, sticky="w")
-        ttk.Checkbutton(parent, text="X-Forwarded-For setzen",
-                        variable=self.var_forward_for,
-                        style="Card.TCheckbutton").grid(row=1, column=0, sticky="w",
-                                                        pady=(4, 0))
-        ttk.Checkbutton(parent, text="Nur speichern, HAProxy nicht neu laden",
-                        variable=self.var_no_apply,
-                        style="Card.TCheckbutton").grid(row=2, column=0, sticky="w",
-                                                        pady=(4, 0))
-        ttk.Checkbutton(parent, text="Auch Public Services ohne Port 443 zeigen",
-                        variable=self.var_all_frontends,
-                        style="Card.TCheckbutton").grid(row=3, column=0, sticky="w",
-                                                        pady=(4, 10))
-
-        ttk.Label(parent, text="Health Monitor", style="FieldLabel.TLabel").grid(
-            row=4, column=0, sticky="w")
-        self.healthcheck_box = ttk.Combobox(parent, textvariable=self.var_healthcheck,
-                                            state="readonly", style="Card.TCombobox",
-                                            values=["— keiner —"])
-        self.healthcheck_box.grid(row=5, column=0, sticky="ew", pady=(4, 10))
-
-        ttk.Label(parent, text="Backend-Modus", style="FieldLabel.TLabel").grid(
-            row=6, column=0, sticky="w")
-        ttk.Combobox(parent, textvariable=self.var_backend_mode, state="readonly",
-                     style="Card.TCombobox",
-                     values=["automatisch", "http", "tcp"]).grid(
-            row=7, column=0, sticky="ew", pady=(4, 10))
-
-        ttk.Label(parent, text="Namens-Präfix", style="FieldLabel.TLabel").grid(
-            row=8, column=0, sticky="w")
-        ttk.Entry(parent, textvariable=self.var_prefix, style="Card.TEntry").grid(
-            row=9, column=0, sticky="ew", pady=(4, 0))
-
-    def _build_inventory(self, parent):
+        Built like the other two tabs: the whole width for what is there, and
+        a button in the head for what is not yet. The form for a new host used
+        to be a column pressed against the left edge, which left it about a
+        third of the window for fields that are wider than that -- and left
+        the listing squeezed for the rest of the time, which is most of it.
+        """
         outer = ttk.Frame(parent, style="Card.TFrame", padding=(16, 16, 8, 12))
-        outer.grid(row=0, column=1, sticky="nsew", padx=(9, 0), pady=(0, 9))
+        outer.grid(row=0, column=0, sticky="nsew", padx=18, pady=(0, 9))
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(2, weight=1)
 
-        ttk.Label(outer, text="Bestehende Hosts", style="H2.TLabel").grid(
+        head = ttk.Frame(outer, style="Card.TFrame")
+        head.grid(row=0, column=0, sticky="ew")
+        head.columnconfigure(1, weight=1)
+        ttk.Label(head, text="Bestehende Hosts", style="H2.TLabel").grid(
             row=0, column=0, sticky="w")
+
+        picks = ttk.Frame(head, style="Card.TFrame")
+        picks.grid(row=0, column=2, sticky="e")
+        self.listener_button = ttk.Button(picks, text="＋ TCP-Listener",
+                                          style="Del.TButton",
+                                          command=self.open_listener)
+        self.listener_button.grid(row=0, column=0, sticky="e", padx=(0, 6))
+        Tooltip(self.listener_button,
+                "Ein eigener Public Service auf einem eigenen Port — für "
+                "Dienste ohne Hostnamen, z.B. TURN, IMAP oder eine Datenbank")
+        self.new_host_button = ttk.Button(picks, text="＋ Neuer Host",
+                                          style="Accent.TButton",
+                                          command=self.open_host)
+        self.new_host_button.grid(row=0, column=1, sticky="e")
+
         ttk.Label(outer, style="Hint.TLabel",
                   text="Was aktuell an welchem Public Service hängt.").grid(
             row=1, column=0, sticky="w", pady=(3, 12))
@@ -1980,13 +2441,18 @@ class App(tk.Tk):
             return
         if not self.services:
             self._placeholder("Kein Public Service",
-                              "In OPNsense muss zuerst ein Public Service "
-                              "angelegt werden.")
+                              "Es gibt noch keinen Eingang, in den ein Host "
+                              "hineinkönnte. ＋ TCP-Listener legt einen an — "
+                              "oder du baust ihn in OPNsense selbst.",
+                              button="＋ TCP-Listener",
+                              command=self.open_listener)
             return
-        if not any(service["rules"] for service in self.services):
+        if not any(service["rules"] or service.get("default")
+                   for service in self.services):
             self._placeholder("Noch nichts angelegt",
-                              "Links eine URL eintragen, um den ersten Host "
-                              "zu erstellen.")
+                              "＋ Neuer Host trägt den ersten Namen in einen "
+                              "der Public Services ein.",
+                              button="＋ Neuer Host", command=self.open_host)
             return
 
         row = 0
@@ -1997,12 +2463,25 @@ class App(tk.Tk):
                 row=0, column=0, sticky="w")
             ttk.Label(header, text=service["mode"], style="Badge.TLabel").grid(
                 row=0, column=1, padx=8)
+            column = 2
             if service["bind"]:
                 ttk.Label(header, text=service["bind"],
-                          style="BadgeMuted.TLabel").grid(row=0, column=2)
+                          style="BadgeMuted.TLabel").grid(row=0, column=column)
+                column += 1
+            if service.get("tls"):
+                badge = ttk.Label(header, text="TLS", style="BadgeOk.TLabel")
+                badge.grid(row=0, column=column, padx=(6, 0))
+                Tooltip(badge, "Die TLS-Verbindung endet hier — HAProxy "
+                               "antwortet mit einem eigenen Zertifikat")
             row += 1
 
-            if not service["rules"]:
+            if service.get("default"):
+                # a listener that sends everything to one pool: the port is
+                # the whole address, and there is no rule to look for
+                self._default_row(body, service).grid(
+                    row=row, column=0, sticky="ew", pady=(0, 6), padx=(0, 6))
+                row += 1
+            elif not service["rules"]:
                 ttk.Label(body, text="keine Rules", style="Hint.TLabel").grid(
                     row=row, column=0, sticky="w", padx=4, pady=(0, 8))
                 row += 1
@@ -2025,6 +2504,34 @@ class App(tk.Tk):
         if button:
             ttk.Button(holder, text=button, style="Accent.TButton",
                        command=command).grid(row=2, column=0, pady=(16, 0))
+
+    def _default_row(self, parent, service):
+        """Where a listener sends everything that arrives on its port."""
+        card = tk.Frame(parent, bg=self.colors["surface2"], padx=12, pady=9)
+        card.columnconfigure(0, weight=1)
+        port = core.bind_port(service["bind"])
+        ttk.Label(card, text=f"alles auf Port {port}" if port
+                  else "alles auf diesem Port", style="Host.TLabel").grid(
+            row=0, column=0, sticky="w")
+
+        servers = (service["default"] or {}).get("servers") or []
+        if servers:
+            first = servers[0]
+            more = f"  (+{len(servers) - 1})" if len(servers) > 1 else ""
+            target = (f"→  {'tls' if first['ssl'] else 'plain'}://"
+                      f"{first['address']}:{first['port']}{more}")
+        else:
+            target = "→  Backend ohne Server"
+        ttk.Label(card, text=target, style="Target.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(2, 0))
+
+        marks = ttk.Frame(card, style="Sub.TFrame")
+        marks.grid(row=0, column=1, rowspan=2, padx=(10, 8))
+        badge = ttk.Label(marks, text="Listener", style="BadgeMuted.TLabel")
+        badge.grid(row=0, column=0, padx=2)
+        Tooltip(badge, "Kein Hostname im Spiel: dieser Public Service reicht "
+                       "alles weiter, was auf seinem Port ankommt")
+        return card
 
     def _rule_row(self, parent, service, rule):
         card = tk.Frame(parent, bg=self.colors["surface2"], padx=12, pady=9)
@@ -2235,9 +2742,13 @@ class App(tk.Tk):
     def _set_busy(self, busy, activity=""):
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for button in (self.submit_button, self.preview_button,
-                       self.connect_button, *self.portainer.busy_buttons(),
-                       *self.dns.busy_buttons()):
+        buttons = [self.connect_button, self.new_host_button,
+                   self.listener_button, *self.portainer.busy_buttons(),
+                   *self.dns.busy_buttons()]
+        for dialog in (self.host_dialog, self.listener_dialog):
+            if dialog is not None and dialog.winfo_exists():
+                buttons += list(dialog.busy_buttons())
+        for button in buttons:
             button.configure(state=state)
         self.configure(cursor="watch" if busy else "")
         if busy:
@@ -2482,76 +2993,22 @@ class App(tk.Tk):
         self.profile_box.grid()
 
     def _fill_frontends(self):
-        """The public services to choose from, the one on 443 in front.
-
-        A place with more than one listener usually has a second on port 80
-        whose whole job is to send browsers to the first. A rule hung into that
-        one answers nothing, and up to now the list simply began with whichever
-        came first by name -- so that is what got picked.
-
-        The others are left out rather than merely sorted down, because the
-        choice is between things that look alike from here. What is hidden is
-        said under the field, and the switch in the advanced options brings
-        them back for a place whose HTTPS lives on 8443.
-        """
-        if not hasattr(self, "frontend_box"):
-            return
-        every = list(self.services)
-        shown = every if self.var_all_frontends.get() else [
-            service for service in every if core.serves_https(service)]
-        if not shown:
-            shown = every  # nothing on 443 at all: better all of them than none
-        chosen = self.var_frontend.get()
-        if chosen and chosen not in [service["name"] for service in shown]:
-            # a service somebody picked on purpose does not vanish underneath
-            keep = next((s for s in every if s["name"] == chosen), None)
-            if keep:
-                shown = shown + [keep]
-        # 443 first, then what is switched on, then by name -- so the first
-        # entry is the one to start with even when everything is shown
-        shown.sort(key=lambda service: (0 if core.serves_https(service) else 1,
-                                        0 if service.get("enabled", True) else 1,
-                                        service.get("name", "").lower()))
-        names = [service["name"] for service in shown]
-        self.frontend_box.configure(values=names,
-                                    state="disabled" if len(names) <= 1
-                                    else "readonly")
-        if chosen not in names:
-            preferred = self.profile.get("frontend", "")
-            self.var_frontend.set(preferred if preferred in names
-                                  else (names[0] if names else ""))
-        self.hidden_frontends = len(every) - len(shown)
-        self._frontend_hint()
-
-    def _frontend_hint(self):
-        """What the chosen service listens on, and what is not in the list."""
-        if not hasattr(self, "frontend_hint"):
-            return
-        chosen = next((service for service in self.services
-                       if service["name"] == self.var_frontend.get()), None)
-        parts = []
-        if chosen:
-            bind = chosen.get("bind") or "?"
-            parts.append(f"hört auf {bind}")
-            if not core.serves_https(chosen):
-                parts.append("nicht Port 443 — sicher, dass Anfragen hier "
-                             "ankommen?")
-            elif not chosen.get("enabled", True):
-                parts.append("ist abgeschaltet")
-        hidden = getattr(self, "hidden_frontends", 0)
-        if hidden:
-            parts.append(f"{hidden} ohne 443 ausgeblendet (⚙ Erweiterte "
-                         f"Optionen)" if hidden > 1 else
-                         "einer ohne 443 ausgeblendet (Erweiterte Optionen)")
-        self.frontend_hint.configure(text=" · ".join(parts))
+        """Let an open form take up a fresh reading of the public services."""
+        if self.host_dialog is not None and self.host_dialog.winfo_exists():
+            self.host_dialog.fill_frontends()
 
     def _fill_dns_choices(self):
-        """The AdGuard picker in the form: every one configured, or none."""
+        """Which AdGuard the next host gets -- the one this OPNsense uses.
+
+        The choice itself lives here rather than in the form: it is written
+        down on the firewall, the header picker on the AdGuard tab changes it
+        too, and a host removed while no form is open has to know it as well.
+        """
         names = [e.get("name", "?") for e in self.systems.get("adguard", [])]
-        self.dns_box.configure(values=[NO_DNS] + names,
-                               state="readonly" if names else "disabled")
         chosen = self.active.get("adguard", "")
         self.var_dns_target.set(chosen if chosen in names else NO_DNS)
+        if self.host_dialog is not None and self.host_dialog.winfo_exists():
+            self.host_dialog.fill_dns_choices()
 
     def _dns_target_changed(self):
         """A different AdGuard for what is about to be created.
@@ -2882,6 +3339,13 @@ class App(tk.Tk):
                 domains = core.base_domains(client)
             except core.ApiError:
                 domains = []  # the ACME plugin is optional
+            report("lese, was ein Listener bekommen kann …")
+            try:
+                listener_choices = core.listener_choices(client)
+            except core.ApiError:
+                # only the second form needs them; the rest of the tab is
+                # worth more than an empty certificate list costs
+                listener_choices = {"certificates": [], "modes": []}
             entries, rewrites_error = None, ""
             if adguard:
                 report("lese DNS-Einträge aus AdGuard …")
@@ -2892,6 +3356,7 @@ class App(tk.Tk):
                     rewrites_error = str(exc)
             return {"status": status, "services": services,
                     "healthchecks": healthchecks, "domains": domains,
+                    "listener_choices": listener_choices,
                     "entries": entries, "rewrites_error": rewrites_error}
 
         self._run_async(work, self._state_loaded,
@@ -2918,23 +3383,23 @@ class App(tk.Tk):
             # read on the way past, so the third tab is filled in without a
             # connect of its own
             self.dns.take(state["entries"])
+        self.listener_choices = state["listener_choices"]
         self._set_status(state["status"])
         self.paint_connection()
 
-        self._fill_frontends()
-
-        self.healthcheck_box.configure(values=["— keiner —"] + self.healthchecks)
-        if self.var_healthcheck.get() not in ["— keiner —"] + self.healthchecks:
-            self.var_healthcheck.set("— keiner —")
-
         self.domains = state["domains"]
         bases = [NO_BASE] + [entry["domain"] for entry in self.domains]
-        self.base_box.configure(values=bases)
-        preferred = self.profile.get("defaults", {}).get("base_domain", "")
         if self.var_base.get() not in bases:
+            preferred = self.profile.get("defaults", {}).get("base_domain", "")
             self.var_base.set(preferred if preferred in bases else NO_BASE)
+        if self.var_healthcheck.get() not in [NO_HEALTHCHECK] + self.healthchecks:
+            self.var_healthcheck.set(NO_HEALTHCHECK)
 
-        self._refresh_fqdn()
+        # a form that is open was filled from what we knew a moment ago
+        for dialog in (self.host_dialog, self.listener_dialog):
+            if dialog is not None and dialog.winfo_exists():
+                dialog.refresh()
+
         self._render_inventory()
         # the ports over there are marked with what HAProxy already does with
         # them, so a fresh reading of the rules changes that list too
@@ -2964,11 +3429,11 @@ class App(tk.Tk):
             target=self.var_target.get().strip(),
             ip=self.var_ip.get().strip(),
             port=int(self.var_port.get()) if self.var_port.get().strip() else None,
-            ssl=self.ssl_switch.get(),
+            ssl=self.var_ssl.get(),
             ssl_verify=self.var_ssl_verify.get(),
             frontend=self.var_frontend.get() or None,
             backend_mode=None if mode == "automatisch" else mode,
-            healthcheck=None if healthcheck.startswith("—") else healthcheck,
+            healthcheck=None if healthcheck.startswith("\u2014") else healthcheck,
             forward_for=self.var_forward_for.get(),
             prefix=self.var_prefix.get().strip(),
             dry_run=dry_run,
@@ -2976,14 +3441,45 @@ class App(tk.Tk):
             yes=True,
         )
 
-    def _submit(self, dry_run):
-        if self.busy or not self.api:
+    def open_host(self):
+        """The form for a new host, in a window of its own.
+
+        Like the deploy form on the Portainer tab, and for the same reason: as
+        a column beside the listing it had a third of the window for fields
+        that want more, and the listing had the rest of the time to be narrow
+        in. Not modal -- the log at the bottom belongs to this, and a preview
+        is meant to be read while the form is still standing.
+        """
+        if self.host_dialog is not None and self.host_dialog.winfo_exists():
+            self.host_dialog.lift()
+            self.host_dialog.focus_set()
             return
+        self.host_dialog = HostDialog(self)
+
+    def open_listener(self):
+        """The form for a public service of its own."""
+        if self.listener_dialog is not None and self.listener_dialog.winfo_exists():
+            self.listener_dialog.lift()
+            self.listener_dialog.focus_set()
+            return
+        self.listener_dialog = ListenerDialog(self)
+
+    def _ready_to_write(self):
+        """Nothing is created from a firewall nobody has read yet."""
+        if not self.api:
+            messagebox.showinfo(APP_TITLE,
+                                "Für die OPNsense fehlen die Zugangsdaten (\u2699).")
+            return False
         if not self.connected:
             messagebox.showinfo(APP_TITLE,
-                                "Bitte zuerst verbinden — ohne die Public "
-                                "Services von der OPNsense weiß das Programm "
+                                "Bitte zuerst verbinden \u2014 ohne die Public "
+                                "Services von der OPNsense wei\u00df das Programm "
                                 "nicht, wo die Rule hin soll.")
+            return False
+        return True
+
+    def _submit(self, dry_run):
+        if self.busy or not self._ready_to_write():
             return
         opts = self._form_options(dry_run)
         if not opts.target:
@@ -2997,7 +3493,41 @@ class App(tk.Tk):
             lambda report: core.run_step(core.provision, client, opts, adguard,
                                          log=LiveLog(report)),
             lambda result: self._step_done(result, dry_run),
-            activity="prüfe Vorhandenes …")
+            activity="pr\u00fcfe Vorhandenes \u2026")
+
+    def create_listener(self, dry_run):
+        """Build the public service the second form describes."""
+        if self.busy or not self._ready_to_write():
+            return
+        cert = next((entry for entry in self.listener_choices["certificates"]
+                     if entry["name"] == self.var_listen_cert.get()), None)
+        host = self.var_listen_host.get().strip().lower().rstrip(".")
+        opts = argparse.Namespace(
+            name=self.var_listen_name.get().strip(),
+            port=self.var_listen_port.get().strip(),
+            backend_port=self.var_listen_backend_port.get().strip(),
+            address=self.var_listen_address.get().strip(),
+            mode=self.var_listen_mode.get(),
+            certificate=cert["id"] if cert else "",
+            certificate_name=cert["name"] if cert else "",
+            ip=self.var_listen_ip.get().strip(),
+            ssl=self.var_listen_ssl.get(),
+            ssl_verify=self.var_listen_ssl_verify.get(),
+            host=host,
+            dns_target=self.adguard_target,
+            prefix=self.var_prefix.get().strip(),
+            dry_run=dry_run,
+            no_apply=self.var_no_apply.get(),
+            yes=True,
+        )
+        adguard = self._active_adguard() if (self.var_listen_dns.get()
+                                             and host) else None
+        client = self.api
+        self._run_async(
+            lambda report: core.run_step(core.provision_listener, client, opts,
+                                         adguard, log=LiveLog(report)),
+            lambda result: self._step_done(result, dry_run, form="listener"),
+            activity="pr\u00fcfe Vorhandenes \u2026")
 
     def _active_adguard(self):
         """The chosen AdGuard, unless the picker says to leave DNS alone."""
@@ -3034,73 +3564,44 @@ class App(tk.Tk):
         marker = rule["name"].find("rule_")
         return rule["name"][:marker] if marker > 0 else ""
 
-    def _step_done(self, result, dry_run, clear=True):
+    def _step_done(self, result, dry_run, clear=True, form="host"):
         self._set_busy(False)
         lines = list(result["log"])
         if result.get("error"):
             lines.append({"text": result["error"], "level": "error"})
         if not lines:
-            lines = [{"text": "keine Rückmeldung", "level": "error"}]
+            lines = [{"text": "keine R\u00fcckmeldung", "level": "error"}]
         title = ("Vorschau" if dry_run else "Fertig") if result["ok"] \
             else "Fehlgeschlagen"
         self._write_log(title, lines, result["ok"])
+
+        # The form stands in front of the log, so what it set off has to reach
+        # it as well: a preview and a failure keep the window and say so in it,
+        # a finished one closes.
+        dialog = self.listener_dialog if form == "listener" else self.host_dialog
+        if dialog is not None and dialog.winfo_exists():
+            if result["ok"] and not dry_run:
+                dialog.destroy()
+            else:
+                dialog.say(lines[-1]["text"], ok=result["ok"])
         if result["ok"] and not dry_run:
-            # a host created from the Portainer tab must not empty the form
+            # a host created from the Portainer tab must not empty a form
             # somebody may have been filling in over here
             if clear:
-                self.var_target.set("")
-                self.var_ip.set("")
-                self.var_port.set("")
+                for var in (self.var_target, self.var_ip, self.var_port):
+                    var.set("")
                 self.port_touched = False
             self.reload()
 
     # -- small interactions ------------------------------------------------
 
     def _refresh_fqdn(self):
-        """Show the name that will actually be created, and what DNS will do."""
-        base = "" if self.var_base.get() == NO_BASE else self.var_base.get()
-        raw = core.with_base(self.var_target.get(), base)
-        host = raw.split("/", 1)[0].strip()
-        full = core.build_fqdn(host, base) if host else ""
-        if not full:
-            self.fqdn_hint.configure(
-                text="app.example.com oder https://example.com/api")
-        else:
-            entry = next((d for d in self.domains if d["domain"] == base), None)
-            note = ""
-            if entry and not core.covered_by(entry, full):
-                note = "  ·  kein Zertifikat dafür"
-            self.fqdn_hint.configure(text=f"→ {full}{note}")
-
-        if self.var_dns_target.get() == NO_DNS:
-            self.dns_hint.configure(text="DNS bleibt unangetastet"
-                                    if self.systems.get("adguard")
-                                    else "Noch kein AdGuard eingerichtet (⚙)")
-        elif not self.adguard:
-            self.dns_hint.configure(
-                text=self.adguard_problem or "AdGuard antwortet hier nicht (⚙)")
-        else:
-            self.dns_hint.configure(
-                text=f"{full or 'name'} → {self.adguard_target or '?'}")
-
-    def _ssl_changed(self):
-        on = self.ssl_switch.get()
-        self.ssl_note.configure(text="HAProxy spricht HTTPS mit dem Server" if on
-                                else "HAProxy spricht HTTP mit dem Server")
-        if not self.port_touched:
-            self.var_port.set("")
+        """The open form shows the name it would create; without one, nothing."""
+        if self.host_dialog is not None and self.host_dialog.winfo_exists():
+            self.host_dialog.refresh_hints()
 
     def _port_typed(self, _event):
         self.port_touched = bool(self.var_port.get().strip())
-
-    def _toggle_advanced(self):
-        self.advanced_open = not self.advanced_open
-        if self.advanced_open:
-            self.advanced.grid()
-            self.advanced_button.configure(text="▾  Erweiterte Optionen")
-        else:
-            self.advanced.grid_remove()
-            self.advanced_button.configure(text="▸  Erweiterte Optionen")
 
     def _save_prefs(self):
         # keep everything else that is in there, e.g. the update bookkeeping

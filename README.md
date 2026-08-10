@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.5.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.5.0.zip)**
+**[opnsense-haproxy-2.6.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.6.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -200,7 +200,8 @@ du lesen darfst.
 
 ## Schritt 6: Den ersten Host anlegen
 
-Links im Fenster steht das Formular **Neuer Host**:
+Oben rechts über der Liste sitzt **＋ Neuer Host**. Der Knopf öffnet das
+Formular in einem eigenen Fenster:
 
 1. **Basis-Domain** aus der Liste wählen (z.B. `home.example.com`) — das sind
    deine Zertifikats-Domains. Ist die Liste leer, macht das nichts: dann trägst
@@ -213,13 +214,16 @@ Links im Fenster steht das Formular **Neuer Host**:
 5. **SSL zum Backend**: aus, wenn dein Server intern nur HTTP spricht (der
    häufigste Fall). An, wenn er HTTPS erwartet. Unter dem Schalter steht immer,
    was gerade gilt.
-6. **Vorschau** drücken. Das ändert noch **nichts**, sondern zeigt unten im
-   Protokoll, was angelegt würde. Ein guter Reflex beim ersten Mal.
+6. **Vorschau** drücken. Das ändert noch **nichts**, sondern zeigt im Protokoll
+   des Hauptfensters, was angelegt würde. Ein guter Reflex beim ersten Mal —
+   das Formular bleibt dabei stehen.
 7. **Anlegen**. Unten läuft mit, was passiert: die vier Objekte, das Einhängen
-   in den Public Service, der Konfigurationstest, der Reload.
+   in den Public Service, der Konfigurationstest, der Reload. Danach schließt
+   sich das Fenster; geht etwas schief, bleibt es offen und sagt es in seiner
+   Fußzeile.
 
-Danach steht der Name rechts in der Liste **Bestehende Hosts**. Ein Klick
-darauf öffnet die Seite im Browser.
+Danach steht der Name in der Liste **Bestehende Hosts**. Ein Klick darauf
+öffnet die Seite im Browser.
 
 Klappt der Aufruf nicht sofort: Dein Rechner muss den Namen erst zur HAProxy-IP
 auflösen können. Mit AdGuard erledigt das Programm das mit; ohne trägst du den
@@ -271,16 +275,29 @@ dorthin.
 Einstellungen wird automatisch gelesen — das ist ja schon die Ansage, dass es
 losgehen soll.
 
-**Links** das Formular für den neuen Host. Darin steht auch **DNS-Eintrag in**:
-Dort wählst du, welches AdGuard den Eintrag bekommt — oder *kein
-DNS-Eintrag*, dann bleibt DNS unangetastet. Die Wahl bleibt an der Firewall
-hängen, beim nächsten Start ist wieder dasselbe Paar da. Darunter **Erweiterte
-Optionen** für alles, was man selten braucht (Backend-Zertifikat prüfen,
-X-Forwarded-For, Health Monitor, Backend-Modus, Namens-Präfix, „nur speichern,
-nicht neu laden").
+**Der Tab selbst** zeigt über die ganze Breite die bestehenden Hosts, sortiert
+nach Public Service. Über der Liste stehen die zwei Knöpfe, mit denen etwas
+dazukommt: **＋ Neuer Host** und **＋ TCP-Listener**. Beide öffnen ein eigenes
+Fenster — wie **＋ Neuer Stack** im Portainer-Tab, und aus demselben Grund: Als
+Spalte am linken Rand hatte das Formular ein Drittel des Fensters für Felder,
+die mehr wollen, und die Liste hatte den Rest der Zeit zu schmal zu sein.
 
-**Rechts** die bestehenden Hosts, sortiert nach Public Service. Jede Zeile
-zeigt, was AdGuard zu diesem Namen weiß:
+Die Formulare sind **nicht modal**: Das Protokoll unten gehört zum Hauptfenster,
+und eine **Vorschau** ist zum Lesen da, während das Formular noch steht. Fertig
+angelegt schließt sich das Fenster von selbst; schlägt etwas fehl, bleibt es
+offen und sagt den Grund in seiner Fußzeile.
+
+Im Formular **Neuer Host** steht auch **DNS-Eintrag in**: Dort wählst du,
+welches AdGuard den Eintrag bekommt — oder *kein DNS-Eintrag*, dann bleibt DNS
+unangetastet. Die Wahl bleibt an der Firewall hängen, beim nächsten Start ist
+wieder dasselbe Paar da. Rechts daneben die **Erweiterten Optionen** für alles,
+was man selten braucht (Backend-Zertifikat prüfen, X-Forwarded-For, Health
+Monitor, Backend-Modus, Namens-Präfix, „nur speichern, nicht neu laden").
+
+Was in die Formulare eingetragen wurde, gehört dem Fenster und nicht ihnen:
+Zumachen und wieder aufmachen verliert keine getroffene Wahl.
+
+Jede Zeile der Liste zeigt, was AdGuard zu diesem Namen weiß:
 
 | | |
 | --- | --- |
@@ -293,6 +310,12 @@ zeigen** oder **DNS löschen**, je nachdem was fehlt. Das geht nur an AdGuard,
 an HAProxy ändert sich dabei nichts. **Entfernen** räumt umgekehrt den ganzen
 Eintrag ab — Real Server, Backend, Condition, Rule und DNS.
 
+Ein Public Service, der **alles** auf seinem Port weiterreicht statt nach Namen
+zu sortieren, hat gar keine Rules. Er steht trotzdem in der Liste — mit einer
+Zeile **alles auf Port …** und der Marke **Listener**, dazu **TLS** in der
+Kopfzeile, wenn die Verschlüsselung dort endet. So sieht man einen frisch
+angelegten TCP-Listener sofort, statt „keine Rules" zu lesen.
+
 Rules, die du früher in OPNsense von Hand angelegt hast, stehen mit in der
 Liste: ihr Hostname wird auch aus einer `hdr_beg`-Bedingung gelesen, sie sind
 also anklickbar und bekommen ihren DNS-Knopf. **Entfernen** gibt es für sie
@@ -304,6 +327,62 @@ dort — nicht in einem Popup, das man wegklickt und dann nicht mehr findet.
 
 Alle Abfragen laufen im Hintergrund, das Fenster friert also nicht ein, während
 die OPNsense antwortet. Theme und Fenstergröße merkt es sich.
+
+## Ein eigener Listener: TLS außen, ohne innen
+
+Alles oben Beschriebene hängt einen **Namen** in einen Eingang, den es schon
+gibt: HAProxy liest den Host-Header (oder die SNI) und sortiert danach. Für
+einen Webdienst ist das genau richtig.
+
+Ein TURN-Server, ein IMAP-Server oder eine Datenbank haben aber keinen Namen im
+Protokoll, nach dem sich sortieren ließe — sie haben einen **Port**. Und oft
+sprechen sie gar kein TLS, obwohl sie von außen erreichbar sein sollen. Dafür
+ist **＋ TCP-Listener** da: HAProxy nimmt die Verbindung auf einem eigenen Port
+an, beendet dort die Verschlüsselung mit einem öffentlichen Zertifikat und
+spricht nach innen so, wie der Dienst es will.
+
+> **Beispiel.** Ein TURN-Server auf `192.168.1.40:3478`, ohne TLS. Außen soll
+> `turn.example.com:5349` mit einem gültigen Zertifikat antworten. Ein Listener
+> auf Port 5349, Modus **TCP**, Zertifikat gewählt, Ziel `192.168.1.40:3478`,
+> *TLS zum Server* aus — fertig. Der Client redet TLS mit HAProxy, HAProxy
+> redet Klartext mit dem TURN-Server.
+
+Das Fenster hat zwei Spalten, und die sind genau die beiden Seiten:
+
+**Außen — was ankommt**
+
+| Feld | |
+| --- | --- |
+| **Name** | So heißt der Public Service danach in OPNsense, z.B. `turn-tls`. |
+| **Port** | Worauf HAProxy nach außen hört. Ist der Port schon von einem anderen Public Service belegt, sagt das Programm das, bevor es etwas anlegt. |
+| **Adresse** | `0.0.0.0` = alle IPv4-Adressen der Firewall. |
+| **Modus** | **TCP** — die TLS-Verbindung endet hier (der Fall oben). **SSL** — sie wird durchgereicht und nur nach SNI sortiert, der Dienst braucht dann sein eigenes Zertifikat. **HTTP** — der übliche Web-Eingang. |
+| **Zertifikat** | Die Liste kommt aus der Firewall selbst — dieselbe, die auch das HAProxy-Plugin anbietet, also auch die Zertifikate des ACME-Clients. Ohne Zertifikat reicht der Listener nur weiter. |
+
+**Innen — wohin es geht**
+
+| Feld | |
+| --- | --- |
+| **Server-IP / Port** | Der Dienst dahinter. Ohne Port derselbe wie außen. |
+| **TLS zum Server** | Aus, wenn der Dienst Klartext spricht. An, wenn er selbst TLS erwartet — dann optional noch **Zertifikat des Servers prüfen** für den Fall, dass es kein selbstsigniertes ist. |
+| **Öffentlicher Name** | Nur für den DNS-Eintrag, z.B. `turn.example.com`. Leer lassen heißt: kein DNS-Eintrag. |
+
+Angelegt werden drei Dinge: Real Server, Backend Pool im Modus `tcp` und der
+Public Service selbst, der alles an diesen Pool schickt. Keine Condition, keine
+Rule — es gibt ja nichts zu prüfen. Danach steht der Listener in der Liste, mit
+der Marke **Listener** und der Zeile, wohin er alles weiterreicht.
+
+**Nachgelesen wird, was ankam.** Das Plugin nimmt die Felder, die es kennt, und
+übergeht den Rest wortlos — ein Feldname, den eine andere Plugin-Version anders
+schreibt, kostet also keine Fehlermeldung, sondern einen Listener auf dem
+falschen Port. Deshalb wird der frisch angelegte Public Service sofort wieder
+gelesen und mit dem verglichen, was geschickt wurde. Stimmt etwas nicht, wird
+alles wieder abgeräumt und der Grund steht im Protokoll.
+
+**Löschen** geht hier nicht: Ein Public Service, an dem später Rules hängen,
+wäre mit einem Klick zu viel weg. Wer einen Listener wieder loswerden will,
+löscht ihn in OPNsense unter *Services → HAProxy → Real Servers / Backend
+Pools / Public Services*.
 
 ## Der zweite Tab: Portainer
 
@@ -666,8 +745,12 @@ zeigen und wie viele gerade zur Suche passen.
 **＋ Neue Umschreibung** fragt nach zweierlei:
 
 * **Name** — `nas.example.de`, oder `*.example.de` für alles darunter.
-* **Ziel** — eine IP-Adresse oder ein anderer Name. Vorausgefüllt ist die
-  HAProxy-IP, denn das ist der häufigste Fall; überschreiben kostet nichts.
+* **Ziel** — eine Auswahlliste, in die man auch tippen kann. Darin stehen alle
+  Adressen, auf die dieses AdGuard schon zeigt, die HAProxy-IP zuerst; eine
+  neue IP trägt man einfach ein. Unter dem Feld steht, was die gewählte
+  Adresse bedeutet: *ist HAProxy*, *dorthin zeigen schon 3 andere Namen* oder
+  *neue Adresse*. Vorausgefüllt ist die HAProxy-IP, denn das ist der häufigste
+  Fall.
 
 **Ändern** an einer Zeile öffnet dasselbe Fenster mit den Werten darin,
 **Löschen** fragt einmal nach und nimmt den Eintrag heraus. Danach löst der
@@ -809,6 +892,17 @@ Für `app.example.com` mit Ziel `192.168.1.50:8080`:
 Bei einem Pfad (`example.com/api`) kommt eine zweite Condition `path_beg` dazu;
 beide werden mit **AND** verknüpft.
 
+Für einen **TCP-Listener** `turn-tls` auf Port 5349 mit Ziel `192.168.1.40:3478`
+sind es drei andere Objekte — ohne Condition und ohne Rule, denn es gibt keinen
+Namen zu prüfen:
+
+| Objekt in OPNsense | Name | Inhalt |
+| --- | --- | --- |
+| Real Server | `srv_turn-tls` | 192.168.1.40:3478 |
+| Backend Pool | `be_turn-tls` | Modus `tcp`, verweist auf den Real Server |
+| Public Service | `turn-tls` | `bind 0.0.0.0:5349`, Modus `tcp`, Zertifikat, Default Backend |
+| AdGuard-Umschreibung | — | `turn.example.com` → HAProxy-IP (optional) |
+
 ## Entscheidungen, die das Programm trifft
 
 * **Public Service**: Vorgewählt ist der Listener auf **Port 443** — mit dem
@@ -848,8 +942,13 @@ beide werden mit **AND** verknüpft.
 * Bestehende Einträge werden nicht verändert; ist ein Name schon vergeben,
   bricht das Anlegen ab und sagt, was im Weg ist.
 * Zertifikate für den Public Service (Let's Encrypt o.ä.) verwaltet das
-  Programm nicht — das bleibt Sache des ACME-Clients.
-* Den Public Service selbst legt es nicht an.
+  Programm nicht — das bleibt Sache des ACME-Clients. Es sucht sie nur aus der
+  Liste, die die Firewall selbst anbietet.
+* Einen Public Service legt **＋ TCP-Listener** an, aber er löscht keinen: an
+  einem hängen später womöglich Rules, und das wäre ein Klick zu viel. Weg
+  kommt er in OPNsense.
+* Ein bestehender Listener wird nicht verändert — kein Umstellen von Port,
+  Modus oder Zertifikat. Auch das macht OPNsense selbst.
 * Bei Portainer geht es um **Compose-Stacks auf einem einzelnen Docker-Host**.
   Swarm- und Kubernetes-Stacks werden in der Liste als solche gekennzeichnet,
   aber nicht deployt — dort kommen die Ports aus den Services und nicht aus den
@@ -892,6 +991,9 @@ Build-Schritt.
 ```sh
 ./opnsense_haproxy.py init                                         # einrichten
 ./opnsense_haproxy.py add app.example.com -i 192.168.1.50 --no-ssl # anlegen
+./opnsense_haproxy.py certificates                                 # Zertifikate
+./opnsense_haproxy.py listener turn-tls -p 5349 -i 192.168.1.40 \
+    --backend-port 3478 --certificate 5f2a1b3c4d5e6                # Listener
 ./haproxy_gui.py                                                   # Fenster
 ```
 
@@ -927,10 +1029,28 @@ Oder alles direkt:
 ./opnsense_haproxy.py add test.example.com -i 10.0.0.5 --no-ssl --dry-run
 ```
 
+Ein eigener Listener geht genauso. `certificates` sagt vorher, welche
+Zertifikate es gibt — die refid davor ist, was `--certificate` erwartet (der
+Name geht auch):
+
+```sh
+# TLS außen, Klartext innen -- der TURN-Fall
+./opnsense_haproxy.py listener turn-tls -p 5349 -i 192.168.1.40 \
+    --backend-port 3478 --certificate 5f2a1b3c4d5e6 \
+    --host turn.example.com
+
+# durchgereicht, der Dienst hat sein eigenes Zertifikat
+./opnsense_haproxy.py listener imap -p 993 -i 192.168.1.60 --mode ssl --ssl
+
+# erst mal nur anschauen
+./opnsense_haproxy.py listener db -p 5432 -i 10.0.0.7 --dry-run
+```
+
 Weitere Befehle:
 
 ```sh
 ./opnsense_haproxy.py list                        # was hängt an welchem Public Service
+./opnsense_haproxy.py certificates                # Zertifikate für einen Listener
 ./opnsense_haproxy.py domains                     # Basis-Domains aus dem ACME-Client
 ./opnsense_haproxy.py profiles                    # eingerichtete Verbindungen
 ./opnsense_haproxy.py -P Zweitstandort list       # eine bestimmte Verbindung

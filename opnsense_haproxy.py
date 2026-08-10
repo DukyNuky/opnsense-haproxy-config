@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -145,6 +145,18 @@ class Client:
     def get(self, kind, uuid):
         reply = self.call(f"haproxy/settings/get{ENDPOINT_NAME[kind]}/{uuid}")
         return reply[kind]
+
+    def blank(self, kind):
+        """The empty add form of a model, with every choice it offers in it.
+
+        Asked without a uuid, OPNsense answers with the model's defaults --
+        and, more to the point, with the option fields filled in: which
+        certificates exist, which modes there are. It is where the plugin's
+        own web interface gets the contents of its dropdowns, and there is no
+        second place to ask.
+        """
+        reply = self.call(f"haproxy/settings/get{ENDPOINT_NAME[kind]}")
+        return reply.get(kind) or {}
 
     def add(self, kind, body):
         reply = self.call(f"haproxy/settings/add{ENDPOINT_NAME[kind]}", {kind: body})
@@ -514,6 +526,17 @@ def selected_values(field):
     return [v for v in str(field or "").split(",") if v]
 
 
+def option_list(field):
+    """Every choice an option or relation field offers, as id and label."""
+    if not isinstance(field, dict):
+        return []
+    choices = []
+    for key, value in field.items():
+        label = value.get("value", key) if isinstance(value, dict) else str(value)
+        choices.append({"id": key, "name": str(label)})
+    return choices
+
+
 def provision(client, opts, out=print, adguard=None):
     base = (getattr(opts, "base_domain", "") or "").strip().strip(".")
     host, path = parse_target(with_base(opts.target, base))
@@ -686,6 +709,251 @@ def provision(client, opts, out=print, adguard=None):
         raise
 
     return apply_changes(client, opts, out)
+
+
+# --------------------------------------------------------------------------
+# Listeners: a public service of one's own
+# --------------------------------------------------------------------------
+
+# What a listener may be. "tcp" is the one this is for: HAProxy answers on a
+# port, does the TLS there and hands the connection on as it is. "ssl" looks
+# at the SNI and passes the handshake through untouched, "http" is the usual
+# web entrance -- both are offered because the plugin has them, and a listener
+# built here can be any of the three.
+LISTEN_MODES = ("tcp", "http", "ssl")
+
+
+class ListenerNames:
+    """The object names of a listener and the pool behind it."""
+
+    def __init__(self, name, prefix=""):
+        self.prefix = prefix or ""
+        self.dotted = slug(name, allow_dots=True)
+        self.plain = slug(name, allow_dots=False)
+
+    @property
+    def frontend(self):
+        # the listener carries the name it was given: it is what the host list
+        # and OPNsense's own overview show as the public service
+        return f"{self.prefix}{self.plain}"
+
+    @property
+    def server(self):
+        return f"{self.prefix}srv_{self.dotted}"
+
+    @property
+    def backend(self):
+        return f"{self.prefix}be_{self.dotted}"
+
+
+def listen_bind(address, port):
+    """One bind entry, with an IPv6 address in the brackets it needs."""
+    address = str(address or "").strip() or "0.0.0.0"
+    if ":" in address and not address.startswith("["):
+        address = f"[{address}]"
+    return f"{address}:{port}"
+
+
+def listener_choices(client):
+    """What a new listener can be offered, read from the plugin itself.
+
+    Certificates are referred to by a refid that means nothing on its own, so
+    the list has to come from the firewall. The empty add form carries it;
+    should a plugin version answer that one differently, an existing frontend
+    holds the same field and does just as well.
+    """
+    try:
+        record = client.blank("frontend")
+    except ApiError:
+        record = {}
+    if not record.get("ssl_certificates"):
+        rows = client.search("frontend")
+        if rows:
+            record = client.get("frontend", rows[0]["uuid"])
+    return {"certificates": option_list(record.get("ssl_certificates")),
+            "modes": [choice for choice in option_list(record.get("mode"))
+                      if choice["id"] in LISTEN_MODES]}
+
+
+def verify_frontend(client, uuid, wanted):
+    """Read a freshly written listener back and insist it says what we sent.
+
+    The plugin applies the fields it is given and quietly ignores the rest, so
+    a name it does not know costs no error -- it costs a listener on the wrong
+    port, or in the wrong mode, found weeks later. Reading it back turns that
+    into something to say now, while there is still a rollback to do.
+    """
+    written = client.get("frontend", uuid)
+    problems = []
+    if selected_value(written.get("mode")) != wanted["mode"]:
+        problems.append(f"mode is {selected_value(written.get('mode')) or '?'}, "
+                        f"not {wanted['mode']}")
+    bound = ", ".join(selected_values(written.get("bind")))
+    if wanted["bind"] not in bound:
+        problems.append(f"listens on {bound or 'nothing'}, not {wanted['bind']}")
+    if selected_value(written.get("defaultBackend")) != wanted["backend"]:
+        problems.append("the backend pool did not stick")
+    if wanted["certificate"] and wanted["certificate"] not in selected_values(
+            written.get("ssl_certificates")):
+        problems.append("the certificate did not stick")
+    if problems:
+        raise ApiError("the listener was not stored as asked: "
+                       + "; ".join(problems))
+
+
+def provision_listener(client, opts, out=print, adguard=None):
+    """A public service of its own, with the pool and the server behind it.
+
+    What ``provision`` hangs into an existing entrance, this builds from the
+    ground up: HAProxy answers on a port of its own, ends the TLS there with a
+    certificate that the outside world trusts, and speaks to the service
+    inside the way that service wants to be spoken to -- plainly, or with a
+    self-signed certificate nobody has to trust but HAProxy.
+
+    That is what a TURN server, an IMAP server or a database has instead of a
+    web entrance: no Host header to match on, no path, just a port.
+    """
+    name = (getattr(opts, "name", "") or "").strip()
+    if not name:
+        raise UsageError("a listener needs a name")
+    names = ListenerNames(name, getattr(opts, "prefix", ""))
+    if not names.frontend:
+        raise UsageError(f"'{name}' leaves nothing usable as a name")
+
+    port = _port_number(getattr(opts, "port", None), "the public port")
+    backend_port = _port_number(getattr(opts, "backend_port", None)
+                                or port, "the port inside")
+    mode = (getattr(opts, "mode", "") or "tcp").lower()
+    if mode not in LISTEN_MODES:
+        raise UsageError(f"'{mode}' is not a mode ({', '.join(LISTEN_MODES)})")
+    if not (getattr(opts, "ip", "") or "").strip():
+        raise UsageError("the listener needs the address of the server behind it")
+    ip = opts.ip.strip()
+    certificate = (getattr(opts, "certificate", "") or "").strip()
+    cert_label = (getattr(opts, "certificate_name", "") or certificate)
+    bind = listen_bind(getattr(opts, "address", ""), port)
+
+    host = (getattr(opts, "host", "") or "").strip().lower().rstrip(".")
+    dns_target = (getattr(opts, "dns_target", "") or "").strip()
+    want_dns = bool(adguard and dns_target and host)
+
+    out(f"public service : {names.frontend} on {bind} (mode {mode})")
+    out("tls            : " + (f"ends here, certificate {cert_label}"
+                               if certificate else
+                               "none -- passed on as it arrives"))
+    out(f"real server    : {ip}:{backend_port} "
+        + ("ssl" if getattr(opts, "ssl", False) else "plain")
+        + (", verify cert" if getattr(opts, "ssl", False)
+           and getattr(opts, "ssl_verify", False) else ""))
+    if want_dns:
+        out(f"dns rewrite    : {host} -> {dns_target}")
+    elif host:
+        out("dns rewrite    : none -- " + ("no AdGuard for this connection"
+                                           if not adguard else
+                                           "no target address for AdGuard"))
+    out(f"objects        : {names.server}, {names.backend}, {names.frontend}")
+
+    if mode != "tcp" and certificate:
+        out(f"note           : {mode} mode with a certificate ends the TLS "
+            "here as well", file=sys.stderr)
+    if not certificate:
+        out("note           : without a certificate this listener only "
+            "forwards; the service behind it needs its own TLS",
+            file=sys.stderr)
+
+    clashes = [f"{what} '{obj}'"
+               for kind, what, obj in (("server", "real server", names.server),
+                                       ("backend", "backend pool", names.backend),
+                                       ("frontend", "public service",
+                                        names.frontend))
+               if client.find(kind, obj)]
+    if clashes:
+        raise UsageError("already there (" + ", ".join(clashes)
+                         + ") -- pick another name or remove it in OPNsense")
+    taken = [row.get("name", "?") for row in client.search("frontend")
+             if str(port) in bind_ports(", ".join(selected_values(
+                 client.get("frontend", row["uuid"]).get("bind"))))]
+    if taken:
+        raise UsageError(f"port {port} is already taken by public service "
+                         f"'{taken[0]}'")
+
+    if getattr(opts, "dry_run", False):
+        out("\ndry run -- nothing was changed")
+        return 0
+
+    created = []
+    try:
+        server_uuid = client.add("server", {
+            "enabled": "1",
+            "name": names.server,
+            "description": f"managed: {name}",
+            "address": ip,
+            "port": str(backend_port),
+            "mode": "active",
+            "type": "static",
+            "ssl": "1" if getattr(opts, "ssl", False) else "0",
+            "sslVerify": "1" if (getattr(opts, "ssl", False)
+                                 and getattr(opts, "ssl_verify", False)) else "0",
+        })
+        created.append(("server", server_uuid))
+        out(f"+ real server   {names.server}")
+
+        backend_uuid = client.add("backend", {
+            "enabled": "1",
+            "name": names.backend,
+            "description": f"managed: {name}",
+            # A pool behind a listener speaks the listener's language. In http
+            # mode that is http, in the other two it is a stream of bytes.
+            "mode": "http" if mode == "http" else "tcp",
+            "linkedServers": server_uuid,
+            "healthCheckEnabled": "0",
+        })
+        created.append(("backend", backend_uuid))
+        out(f"+ backend pool  {names.backend}")
+
+        frontend_uuid = client.add("frontend", {
+            "enabled": "1",
+            "name": names.frontend,
+            "description": f"managed: {name}",
+            "bind": bind,
+            "mode": mode,
+            "defaultBackend": backend_uuid,
+            "ssl_enabled": "1" if certificate else "0",
+            "ssl_certificates": certificate,
+        })
+        created.append(("frontend", frontend_uuid))
+        out(f"+ public service {names.frontend}")
+        verify_frontend(client, frontend_uuid,
+                        {"mode": mode, "bind": bind, "backend": backend_uuid,
+                         "certificate": certificate})
+
+        if want_dns:
+            existing = adguard.find_rewrite(host)
+            if existing is None:
+                adguard.add_rewrite(host, dns_target)
+                created.append(("dns", (host, dns_target)))
+                out(f"+ dns rewrite   {host} -> {dns_target}")
+            elif str(existing.get("answer", "")) == dns_target:
+                out(f"= dns rewrite   {host} -> {dns_target} (already there)")
+            else:
+                out(f"! dns rewrite   {host} already points at "
+                    f"{existing.get('answer')} -- left untouched", file=sys.stderr)
+    except Exception:
+        out("\nsomething went wrong -- rolling back", file=sys.stderr)
+        rollback(client, created, out, adguard)
+        raise
+
+    return apply_changes(client, opts, out)
+
+
+def _port_number(value, what="the port"):
+    try:
+        port = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise UsageError(f"{what} has to be a number") from None
+    if not 1 <= port <= 65535:
+        raise UsageError(f"{port} is not a port ({what})")
+    return port
 
 
 def rollback(client, created, out, adguard=None):
@@ -926,10 +1194,18 @@ def inventory(client):
     services = []
     for row in sorted(client.search("frontend"), key=lambda r: r.get("name", "")):
         frontend = client.get("frontend", row["uuid"])
+        # A listener without rules is not an empty listener: it may send
+        # everything that arrives to one pool, which is what a port for one
+        # service looks like. Reading it is the difference between "nothing
+        # here" and "everything here goes to 192.168.1.40".
+        default_uuid = selected_value(frontend.get("defaultBackend"))
         services.append({
             "uuid": row["uuid"],
             "name": row.get("name", ""),
             "mode": selected_value(frontend.get("mode")) or "http",
+            "tls": str(frontend.get("ssl_enabled", "0")) == "1",
+            "default": _read_backend(client, default_uuid) if default_uuid
+                       else None,
             # bind arrives as an option map on newer plugin versions and as a
             # plain string on older ones; both end up as "addr:port, addr:port"
             "bind": ", ".join(selected_values(frontend.get("bind"))),
@@ -964,23 +1240,31 @@ def _read_rule(client, action_uuid):
     rule["target"] = derive_target(rule["conditions"])
 
     backend_uuid = selected_value(action.get("use_backend"))
-    if not backend_uuid:
-        return rule
-    backend = client.get("backend", backend_uuid)
-    rule["backend"] = {
-        "name": backend.get("name", ""),
-        "mode": selected_value(backend.get("mode")),
-        "servers": [],
-    }
+    if backend_uuid:
+        rule["backend"] = _read_backend(client, backend_uuid)
+    return rule
+
+
+def _read_backend(client, uuid):
+    """One pool with the servers in it, or None when it cannot be read."""
+    try:
+        backend = client.get("backend", uuid)
+    except ApiError:
+        return None
+    pool = {"name": backend.get("name", ""),
+            "mode": selected_value(backend.get("mode")), "servers": []}
     for server_uuid in selected_values(backend.get("linkedServers")):
-        server = client.get("server", server_uuid)
-        rule["backend"]["servers"].append({
+        try:
+            server = client.get("server", server_uuid)
+        except ApiError:
+            continue
+        pool["servers"].append({
             "name": server.get("name", ""),
             "address": server.get("address", ""),
             "port": server.get("port", ""),
             "ssl": str(server.get("ssl", "0")) == "1",
         })
-    return rule
+    return pool
 
 
 def show(client, opts, out=print):
@@ -1964,6 +2248,40 @@ def cmd_add(args, config):
     return provision(client, args, out=_out, adguard=adguard)
 
 
+def cmd_listener(args, config):
+    profile = pick_profile(config, args.profile)
+    client = build_client(args, profile)
+    if not args.name:
+        args.name = ask("name of the public service")
+    if not args.port:
+        args.port = ask("port it listens on")
+    if not args.ip:
+        args.ip = ask("IP of the server behind it")
+    args.prefix = args.prefix if args.prefix is not None else \
+        profile.get("defaults", {}).get("prefix", "")
+    if args.certificate:
+        chosen = next((c for c in listener_choices(client)["certificates"]
+                       if args.certificate in (c["id"], c["name"])), None)
+        if chosen is None:
+            raise UsageError(f"no certificate '{args.certificate}' -- see the "
+                             "`certificates` command")
+        args.certificate, args.certificate_name = chosen["id"], chosen["name"]
+    adguard = _adguard_for(args, profile) if args.host else None
+    return provision_listener(client, args, out=_out, adguard=adguard)
+
+
+def cmd_certificates(args, config):
+    client = _client_for(args, config)
+    choices = listener_choices(client)["certificates"]
+    if not choices:
+        print("no certificates -- add one under System > Trust, or use the "
+              "ACME client")
+        return 0
+    for entry in choices:
+        print(f"{entry['id']}  {entry['name']}")
+    return 0
+
+
 def cmd_remove(args, config):
     profile = pick_profile(config, args.profile)
     client = build_client(args, profile)
@@ -2161,6 +2479,44 @@ def build_parser():
     remove.add_argument("-y", "--yes", action="store_true", help="do not ask")
     remove.add_argument("--no-apply", action="store_true")
     remove.set_defaults(func=cmd_remove, dns_target=None)
+
+    listener = sub.add_parser(
+        "listener", help="create a public service of its own on a port")
+    listener.add_argument("name", nargs="?",
+                          help="what the public service is called, e.g. turn-tls")
+    listener.add_argument("-p", "--port", help="the port it listens on")
+    listener.add_argument("-i", "--ip", help="IP or hostname of the server behind it")
+    listener.add_argument("--backend-port",
+                          help="port of that server (default: the public one)")
+    listener.add_argument("--address", default="",
+                          help="address to listen on (default 0.0.0.0)")
+    listener.add_argument("--mode", choices=LISTEN_MODES, default="tcp",
+                          help="tcp ends the TLS here, ssl passes it through, "
+                               "http is the usual web entrance (default: tcp)")
+    listener.add_argument("--certificate",
+                          help="refid of the certificate to answer with "
+                               "(see the `certificates` command)")
+    listener.add_argument("--ssl", action="store_true",
+                          help="speak TLS to the server behind it as well")
+    listener.add_argument("--ssl-verify", action="store_true",
+                          help="verify that server's certificate")
+    listener.add_argument("--host",
+                          help="public name for the AdGuard rewrite, if wanted")
+    listener.add_argument("--dns-target",
+                          help="address the AdGuard rewrite should answer with")
+    listener.add_argument("--no-dns", action="store_true",
+                          help="do not touch AdGuard, even when it is configured")
+    listener.add_argument("--adguard-url", help="AdGuard Home base URL")
+    listener.add_argument("--prefix", help="prefix for generated object names")
+    listener.add_argument("-n", "--dry-run", action="store_true",
+                          help="show what would be created and stop")
+    listener.add_argument("--no-apply", action="store_true",
+                          help="save but do not test/reload HAProxy")
+    listener.set_defaults(func=cmd_listener)
+
+    certs = sub.add_parser("certificates",
+                           help="list the certificates a listener can use")
+    certs.set_defaults(func=cmd_certificates)
 
     listing = sub.add_parser("list", help="show public services and what is behind them")
     listing.set_defaults(func=cmd_list)

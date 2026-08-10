@@ -1,5 +1,54 @@
 # Änderungen
 
+## 2.6.0 — 10. August 2026
+
+**Der HAProxy-Tab sieht aus wie die anderen beiden: die Liste über die ganze
+Breite, die Formulare in eigenen Fenstern. Dazu ein zweites Formular für einen
+eigenen Listener — TLS außen, Klartext innen.**
+
+- **＋ Neuer Host öffnet ein Fenster.** Bisher war das Formular eine Spalte am
+  linken Rand: ein Drittel des Fensters für Felder, die mehr wollen, und die
+  Liste daneben hatte den Rest der Zeit zu schmal zu sein. Jetzt steht die
+  Liste über die ganze Breite, und das Formular bekommt den Platz, den es
+  braucht — genau wie **＋ Neuer Stack** im Portainer-Tab.
+- **Modal ist dabei nichts.** Das Protokoll unten gehört zum Hauptfenster, und
+  eine **Vorschau** will gelesen werden, während das Formular noch steht. Fertig
+  angelegt schließt sich das Fenster; schlägt etwas fehl, bleibt es offen und
+  sagt den Grund in seiner Fußzeile — dort, wo hingesehen wird.
+- **Was eingetragen wurde, gehört dem Fenster**, nicht dem Formular: Zumachen
+  und wieder aufmachen verliert keine Wahl, die schon getroffen war.
+- **＋ TCP-Listener legt einen eigenen Public Service an.** Bis hierher konnte
+  das Programm nur einen Namen in einen Eingang hängen, den es schon gab. Ein
+  TURN-Server, ein IMAP-Server oder eine Datenbank haben aber keinen Namen im
+  Protokoll, nach dem sich sortieren ließe — sie haben einen Port, und oft kein
+  TLS. Der Listener nimmt die Verbindung auf einem eigenen Port an, beendet
+  dort die Verschlüsselung mit einem öffentlichen Zertifikat und spricht nach
+  innen so, wie der Dienst es will: Klartext, selbstsigniert oder gar nicht
+  verschlüsselt. Angelegt werden Real Server, Backend Pool im Modus `tcp` und
+  der Public Service — ohne Condition und ohne Rule, es gibt ja nichts zu
+  prüfen.
+- **Die Zertifikate kommen aus der Firewall selbst.** Eine refid ist nichts,
+  was man raten kann; das Formular liest dieselbe Liste, die auch das
+  HAProxy-Plugin in seinem eigenen Fenster anbietet. Neu auf der Kommandozeile:
+  `certificates` zeigt sie, `listener` legt einen an.
+- **Nachgelesen wird, was ankam.** Das Plugin nimmt die Felder, die es kennt,
+  und übergeht den Rest wortlos — ein Feldname, den eine andere Plugin-Version
+  anders schreibt, kostet also keine Fehlermeldung, sondern einen Listener auf
+  dem falschen Port. Der frisch angelegte wird deshalb sofort wieder gelesen
+  und mit dem verglichen, was geschickt wurde; stimmt etwas nicht, wird alles
+  abgeräumt und der Grund steht im Protokoll. Ein belegter Port wird schon
+  vorher gemeldet, mit dem Namen dessen, der ihn hat.
+- **Public Services ohne Rules stehen jetzt richtig in der Liste.** Wer alles
+  auf seinem Port weiterreicht, hat keine Rule — dort stand bisher „keine
+  Rules", als wäre nichts da. Jetzt steht da, wohin er alles schickt, mit der
+  Marke **Listener** und einem **TLS** in der Kopfzeile, wenn die
+  Verschlüsselung dort endet.
+- **Das Ziel einer DNS-Umschreibung ist eine Auswahlliste geworden.** Darin
+  stehen alle Adressen, auf die dieses AdGuard schon zeigt, die HAProxy-IP
+  zuerst; eine neue tippt man weiterhin einfach ein. Darunter steht, was die
+  gewählte Adresse bedeutet: *ist HAProxy*, *dorthin zeigen schon 3 andere
+  Namen* oder *neue Adresse*.
+
 ## 2.5.0 — 10. August 2026
 
 **Ein dritter Tab: alle DNS-Umschreibungen von AdGuard, zum Ansehen und zum
