@@ -1,5 +1,34 @@
 # Änderungen
 
+## 2.6.1 — 10. August 2026
+
+**Listener lassen sich auch wieder entfernen, und der öffentliche Name setzt
+sich aus Namen und Zertifikat selbst zusammen.**
+
+- **Entfernen steht jetzt in der Kopfzeile jedes Public Service** — aber nur
+  bei denen, an denen keine Rules hängen. Ein Eingang, an dem Hosts hängen,
+  ist der Eingang, an dem diese Hosts antworten; wäre er weg, liefen die Rules
+  weiter und zeigten ins Leere. Dort gibt es den Knopf deshalb nicht, und die
+  Kommandozeile sagt in dem Fall, welche Rules im Weg sind.
+- **Mit weg kommen Backend Pool und Real Server** — soweit sie nicht noch
+  woanders benutzt werden. Zeigt eine Rule oder ein zweiter Public Service auf
+  denselben Pool, bleibt er stehen und das Protokoll sagt, wer ihn noch hat.
+  Der Public Service geht zuerst, damit nichts mehr auf einen Pool zeigt, der
+  gleich verschwindet.
+- **Und der DNS-Eintrag geht mit**, wenn der Listener mit einem angelegt
+  wurde. Wohin er zeigte, steht seit dieser Version in der Beschreibung des
+  Public Service (`managed: turn-tls dns=turn.example.com`): OPNsense weiß
+  nichts von AdGuard, und ein anderes Feld dafür gibt es nicht. Bei einem von
+  Hand angelegten Listener sagt die Rückfrage, dass er nicht von hier stammt.
+- **Der öffentliche Name füllt sich selbst.** Das Zertifikat weiß schon,
+  welche Namen nach außen gelten dürfen — dafür hat man es. Bei einem
+  Wildcard-Zertifikat bleibt die erste Stelle frei, und genau dorthin gehört
+  der Name des Listeners: `turn-tls` + `*.example.com` wird
+  `turn-tls.example.com`. Lautet das Zertifikat auf einen einzigen Namen, ist
+  das die Antwort. Sobald man selbst in das Feld tippt, hört das Zusammensetzen
+  auf — unter dem Feld steht, was gerade gilt.
+- Neu auf der Kommandozeile: `unlisten`.
+
 ## 2.6.0 — 10. August 2026
 
 **Der HAProxy-Tab sieht aus wie die anderen beiden: die Liste über die ganze

@@ -1663,6 +1663,9 @@ class ListenerDialog(FormDialog):
     def build(self, left, right):
         app = self.app
         rows = itertools.count()
+        # a name that is already in there was written by somebody, and the
+        # suggestion has no business overwriting it
+        self.host_touched = bool(app.var_listen_host.get().strip())
 
         ttk.Label(left, text="Außen — was ankommt",
                   style="Group.TLabel").grid(row=next(rows), column=0,
@@ -1693,7 +1696,7 @@ class ListenerDialog(FormDialog):
                                      state="readonly", style="Card.TCombobox",
                                      values=[NO_CERT])
         self.cert_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
-        self.cert_box.bind("<<ComboboxSelected>>", lambda _e: self._mode_changed())
+        self.cert_box.bind("<<ComboboxSelected>>", lambda _e: self._cert_changed())
         self.cert_hint = ttk.Label(left, style="Hint.TLabel", text="",
                                    wraplength=340, justify="left")
         self.cert_hint.grid(row=next(rows), column=0, sticky="w", pady=(0, 12))
@@ -1732,9 +1735,12 @@ class ListenerDialog(FormDialog):
             row=next(rows), column=0, sticky="ew", pady=(4, 12))
         ttk.Label(right, text="Name nach außen", style="Group.TLabel").grid(
             row=next(rows), column=0, sticky="w", pady=(0, 8))
-        self._field(right, rows, "Öffentlicher Name", app.var_listen_host,
-                    "Für den DNS-Eintrag und das Zertifikat, z.B. "
-                    "turn.example.de. Leer = kein DNS-Eintrag.")
+        host_entry, self.host_note = self._field(
+            right, rows, "Öffentlicher Name", app.var_listen_host,
+            "Für den DNS-Eintrag, z.B. turn.example.de.")
+        # Typed once, it is theirs: the suggestion stops the moment somebody
+        # writes their own name in here.
+        host_entry.bind("<KeyRelease>", self._host_typed)
         self.dns_check = ttk.Checkbutton(
             right, text="Passenden DNS-Eintrag in AdGuard anlegen",
             variable=app.var_listen_dns, style="Card.TCheckbutton")
@@ -1744,11 +1750,16 @@ class ListenerDialog(FormDialog):
         self.dns_hint.grid(row=next(rows), column=0, sticky="w", pady=(2, 0))
         self._dns_trace = app.var_listen_host.trace_add(
             "write", lambda *_a: self._paint_dns())
+        self._name_trace = app.var_listen_name.trace_add(
+            "write", lambda *_a: self.suggest_host())
 
     def destroy(self):
         if getattr(self, "_dns_trace", None):
             self.app.var_listen_host.trace_remove("write", self._dns_trace)
             self._dns_trace = None
+        if getattr(self, "_name_trace", None):
+            self.app.var_listen_name.trace_remove("write", self._name_trace)
+            self._name_trace = None
         if self.app.listener_dialog is self:
             self.app.listener_dialog = None
         super().destroy()
@@ -1773,6 +1784,35 @@ class ListenerDialog(FormDialog):
                                         in LISTENER_MODES.items()
                                         if key in offered])
         self._mode_changed()
+        self.suggest_host()
+        self._paint_dns()
+
+    def _host_typed(self, _event=None):
+        self.host_touched = True
+        self._paint_dns()
+
+    def _cert_changed(self):
+        self.suggest_host()
+        self._mode_changed()
+
+    def suggest_host(self):
+        """Put name and certificate together into the name for the outside.
+
+        The certificate already says which names may be used -- that is what
+        it is for. A wildcard leaves the first label open, and the listener's
+        own name is exactly what belongs there; a certificate for one single
+        name is the answer by itself. So the field fills itself, until
+        somebody types in it.
+        """
+        if getattr(self, "host_touched", False):
+            return
+        chosen = self.app.var_listen_cert.get()
+        if chosen == NO_CERT:
+            self.app.var_listen_host.set("")
+            self._paint_dns()
+            return
+        self.app.var_listen_host.set(core.certificate_host(
+            chosen, self.app.var_listen_name.get(), self.app.domains))
         self._paint_dns()
 
     def _mode_id(self):
@@ -1809,6 +1849,10 @@ class ListenerDialog(FormDialog):
 
     def _paint_dns(self):
         host = self.app.var_listen_host.get().strip()
+        self.host_note.configure(
+            text="Für den DNS-Eintrag, z.B. turn.example.de."
+            if getattr(self, "host_touched", False) or not host else
+            "Aus Name und Zertifikat zusammengesetzt — tippen überschreibt das.")
         if not host:
             self.dns_hint.configure(text="Ohne Namen wird kein DNS-Eintrag "
                                          "angelegt.")
@@ -2473,6 +2517,18 @@ class App(tk.Tk):
                 badge.grid(row=0, column=column, padx=(6, 0))
                 Tooltip(badge, "Die TLS-Verbindung endet hier — HAProxy "
                                "antwortet mit einem eigenen Zertifikat")
+                column += 1
+            # Only where nothing hangs in it. A public service with rules is
+            # the entrance those rules answer at: taking it away would leave
+            # them working and pointing nowhere, so it is not offered.
+            header.columnconfigure(column, weight=1)
+            if not service["rules"]:
+                remove = ttk.Button(
+                    header, text="Entfernen", style="Del.TButton",
+                    command=lambda s=service: self._remove_listener(s))
+                remove.grid(row=0, column=column + 1, sticky="e", padx=(8, 6))
+                Tooltip(remove, "Diesen Public Service samt Backend Pool und "
+                                "Real Server löschen")
             row += 1
 
             if service.get("default"):
@@ -3557,6 +3613,39 @@ class App(tk.Tk):
                                          log=LiveLog(report)),
             lambda result: self._step_done(result, False),
             activity=f"entferne {target} …")
+
+    def _remove_listener(self, service):
+        """Take a whole public service away, with what stands behind it."""
+        if self.busy or not self._ready_to_write():
+            return
+        pool = service.get("default") or {}
+        parts = [f"Public Service {service['name']}"
+                 + (f" ({service['bind']})" if service["bind"] else "")]
+        if pool.get("name"):
+            parts.append(f"Backend Pool {pool['name']}")
+        parts += [f"Real Server {server['name']}"
+                  for server in pool.get("servers") or []]
+        adguard = self._active_adguard() if service.get("dns") else None
+        text = (", ".join(parts[:-1]) + " und " + parts[-1]) if len(parts) > 1 \
+            else parts[0]
+        question = (f"{service['name']} entfernen?\n\n{text} werden gelöscht — "
+                    "soweit sie nicht noch anderswo benutzt werden.")
+        if adguard:
+            question += f"\n\nDer DNS-Eintrag {service['dns']} geht mit."
+        if not service.get("managed"):
+            question += ("\n\nDieser Public Service wurde nicht von diesem "
+                         "Programm angelegt.")
+        if not messagebox.askyesno(APP_TITLE, question, icon="warning",
+                                   default=messagebox.NO):
+            return
+        opts = argparse.Namespace(name=service["name"], host="", dry_run=False,
+                                  no_apply=self.var_no_apply.get(), yes=True)
+        client = self.api
+        self._run_async(
+            lambda report: core.run_step(core.deprovision_listener, client,
+                                         opts, adguard, log=LiveLog(report)),
+            lambda result: self._step_done(result, False, clear=False),
+            activity=f"entferne {service['name']} …")
 
     @staticmethod
     def _prefix_of(rule):

@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.6.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.6.0.zip)**
+**[opnsense-haproxy-2.6.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.6.1.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -365,12 +365,42 @@ Das Fenster hat zwei Spalten, und die sind genau die beiden Seiten:
 | --- | --- |
 | **Server-IP / Port** | Der Dienst dahinter. Ohne Port derselbe wie außen. |
 | **TLS zum Server** | Aus, wenn der Dienst Klartext spricht. An, wenn er selbst TLS erwartet — dann optional noch **Zertifikat des Servers prüfen** für den Fall, dass es kein selbstsigniertes ist. |
-| **Öffentlicher Name** | Nur für den DNS-Eintrag, z.B. `turn.example.com`. Leer lassen heißt: kein DNS-Eintrag. |
+| **Öffentlicher Name** | Für den DNS-Eintrag, z.B. `turn.example.com`. **Füllt sich selbst** aus dem Namen und dem Zertifikat — siehe unten. Leer heißt: kein DNS-Eintrag. |
+
+**Der öffentliche Name setzt sich zusammen.** Das Zertifikat weiß ja schon,
+welche Namen nach außen gelten dürfen — dafür hat man es. Ist es ein
+Wildcard-Zertifikat (`*.example.com`), bleibt die erste Stelle frei, und genau
+dorthin gehört der Name des Listeners: `turn-tls` + `*.example.com` ergibt
+`turn-tls.example.com`. Lautet das Zertifikat auf **einen** Namen
+(`turn.example.com`), ist das die Antwort und der Listener-Name hat nichts
+mitzureden. Sobald du selbst in das Feld tippst, hört das Zusammensetzen auf —
+unter dem Feld steht, was gerade gilt.
 
 Angelegt werden drei Dinge: Real Server, Backend Pool im Modus `tcp` und der
 Public Service selbst, der alles an diesen Pool schickt. Keine Condition, keine
 Rule — es gibt ja nichts zu prüfen. Danach steht der Listener in der Liste, mit
 der Marke **Listener** und der Zeile, wohin er alles weiterreicht.
+
+### Wieder loswerden
+
+Rechts in der Kopfzeile jedes Public Service steht **Entfernen** — aber nur bei
+denen, an denen **keine Rules** hängen. Ein Eingang, an dem Hosts hängen, ist
+der Eingang, an dem diese Hosts antworten: Wäre er weg, liefen die Rules weiter
+und zeigten ins Leere. Dort gibt es den Knopf deshalb nicht; erst die Hosts
+entfernen, dann den Listener.
+
+Gelöscht werden Public Service, Backend Pool und Real Server — **soweit sie
+nicht noch woanders benutzt werden**. Zeigt eine Rule oder ein zweiter Public
+Service auf denselben Pool, bleibt der Pool stehen und das Protokoll sagt, wer
+ihn noch hat. Der Public Service geht zuerst, damit nichts mehr auf einen Pool
+zeigt, der gleich verschwindet.
+
+**Der DNS-Eintrag geht mit**, wenn der Listener mit einem angelegt wurde. Wohin
+er zeigte, steht in der Beschreibung des Public Service (`managed: turn-tls
+dns=turn.example.com`) — OPNsense weiß nichts von AdGuard, und ein anderes Feld
+dafür gibt es nicht. Wer den Listener von Hand angelegt hat, bekommt in der
+Rückfrage den Hinweis, dass er nicht von diesem Programm stammt; sein
+DNS-Eintrag bleibt dann unangetastet.
 
 **Nachgelesen wird, was ankam.** Das Plugin nimmt die Felder, die es kennt, und
 übergeht den Rest wortlos — ein Feldname, den eine andere Plugin-Version anders
@@ -944,11 +974,11 @@ Namen zu prüfen:
 * Zertifikate für den Public Service (Let's Encrypt o.ä.) verwaltet das
   Programm nicht — das bleibt Sache des ACME-Clients. Es sucht sie nur aus der
   Liste, die die Firewall selbst anbietet.
-* Einen Public Service legt **＋ TCP-Listener** an, aber er löscht keinen: an
-  einem hängen später womöglich Rules, und das wäre ein Klick zu viel. Weg
-  kommt er in OPNsense.
 * Ein bestehender Listener wird nicht verändert — kein Umstellen von Port,
-  Modus oder Zertifikat. Auch das macht OPNsense selbst.
+  Modus oder Zertifikat. Das macht OPNsense selbst; hier gibt es nur Anlegen
+  und Entfernen.
+* **Entfernt** wird nur ein Public Service ohne Rules. Hängen welche darin,
+  sagt das Programm, welche, und rührt nichts an.
 * Bei Portainer geht es um **Compose-Stacks auf einem einzelnen Docker-Host**.
   Swarm- und Kubernetes-Stacks werden in der Liste als solche gekennzeichnet,
   aber nicht deployt — dort kommen die Ports aus den Services und nicht aus den
@@ -1044,6 +1074,9 @@ Name geht auch):
 
 # erst mal nur anschauen
 ./opnsense_haproxy.py listener db -p 5432 -i 10.0.0.7 --dry-run
+
+# und wieder weg, samt Pool, Server und DNS-Eintrag
+./opnsense_haproxy.py unlisten turn-tls
 ```
 
 Weitere Befehle:
@@ -1055,6 +1088,7 @@ Weitere Befehle:
 ./opnsense_haproxy.py profiles                    # eingerichtete Verbindungen
 ./opnsense_haproxy.py -P Zweitstandort list       # eine bestimmte Verbindung
 ./opnsense_haproxy.py remove app.example.com      # alle vier Objekte wieder weg
+./opnsense_haproxy.py unlisten turn-tls           # Listener samt Pool und Server
 ./opnsense_haproxy.py apply                       # Configtest + Reload
 ./opnsense_haproxy.py status                      # läuft HAProxy?
 ./opnsense_haproxy.py install                     # fester Platz + Starter

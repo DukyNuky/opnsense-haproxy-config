@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -746,6 +746,33 @@ class ListenerNames:
         return f"{self.prefix}be_{self.dotted}"
 
 
+def certificate_host(label, name="", domains=()):
+    """The public name a certificate suggests for a listener called ``name``.
+
+    A certificate is the one place that already knows which name the outside
+    world may use: it is the whole point of having one. A wildcard leaves the
+    first label open, so the listener's own name goes there; a certificate for
+    exactly one name *is* the answer and the listener's name has no say.
+
+    ``domains`` is what the ACME client reports, where a wildcard is known as
+    such rather than guessed from the way the certificate is labelled.
+    """
+    found = re.search(r"\*?[a-z0-9_\-]+(?:\.[a-z0-9_\-]+)+", str(label).lower())
+    if not found:
+        return ""
+    host = found.group(0)
+    base = host[2:] if host.startswith("*.") else host
+    wildcard = host.startswith("*.")
+    for entry in domains or ():
+        if entry.get("domain") == base:
+            wildcard = wildcard or entry.get("wildcard", False)
+            break
+    if not wildcard:
+        return host  # it covers this one name; there is nothing to add to it
+    label = slug(name, allow_dots=False).strip("-_").lower()
+    return f"{label}.{base}" if label else base
+
+
 def listen_bind(address, port):
     """One bind entry, with an IPv6 address in the brackets it needs."""
     address = str(address or "").strip() or "0.0.0.0"
@@ -914,7 +941,11 @@ def provision_listener(client, opts, out=print, adguard=None):
         frontend_uuid = client.add("frontend", {
             "enabled": "1",
             "name": names.frontend,
-            "description": f"managed: {name}",
+            # The DNS name goes into the description because there is nowhere
+            # else to put it: OPNsense knows nothing about AdGuard, and when
+            # this listener is taken away again the rewrite has to go with it.
+            "description": f"managed: {name}"
+                           + (f" dns={host}" if want_dns else ""),
             "bind": bind,
             "mode": mode,
             "defaultBackend": backend_uuid,
@@ -942,6 +973,134 @@ def provision_listener(client, opts, out=print, adguard=None):
         out("\nsomething went wrong -- rolling back", file=sys.stderr)
         rollback(client, created, out, adguard)
         raise
+
+    return apply_changes(client, opts, out)
+
+
+def listener_dns(description):
+    """The DNS name a listener was created with, out of its description."""
+    found = re.search(r"dns=(\S+)", str(description or ""))
+    return found.group(1).lower() if found else ""
+
+
+def _users_of_backend(client, backend_uuid, without_frontend=""):
+    """Who else sends traffic to this pool -- by name, for a sentence."""
+    users = []
+    for row in client.search("frontend"):
+        if row["uuid"] == without_frontend:
+            continue
+        frontend = client.get("frontend", row["uuid"])
+        if selected_value(frontend.get("defaultBackend")) == backend_uuid:
+            users.append(f"public service '{row.get('name')}'")
+    for row in client.search("action"):
+        action = client.get("action", row["uuid"])
+        if selected_value(action.get("use_backend")) == backend_uuid:
+            users.append(f"rule '{row.get('name')}'")
+    return users
+
+
+def _users_of_server(client, server_uuid, without_backend=""):
+    """Which other pools this server is in."""
+    users = []
+    for row in client.search("backend"):
+        if row["uuid"] == without_backend:
+            continue
+        backend = client.get("backend", row["uuid"])
+        if server_uuid in selected_values(backend.get("linkedServers")):
+            users.append(f"backend pool '{row.get('name')}'")
+    return users
+
+
+def deprovision_listener(client, opts, out=print, adguard=None):
+    """Take a public service away again, with the pool and servers behind it.
+
+    Only what nothing else is using: a pool that a rule still points at, or a
+    server that stands in a second pool, is left where it is and said so. A
+    listener with rules hanging in it is not touched at all -- those rules
+    would keep working and answer nowhere, which is worse than refusing.
+    """
+    name = (getattr(opts, "name", "") or "").strip()
+    row = client.find("frontend", name)
+    if row is None:
+        out(f"no public service named '{name}'")
+        return 0
+    frontend = client.get("frontend", row["uuid"])
+    bind = ", ".join(selected_values(frontend.get("bind")))
+
+    linked = selected_values(frontend.get("linkedActions"))
+    if linked:
+        rules = []
+        for uuid in linked[:3]:
+            try:
+                rules.append(client.get("action", uuid).get("name", uuid))
+            except ApiError:
+                rules.append(uuid)
+        more = f" and {len(linked) - 3} more" if len(linked) > 3 else ""
+        raise UsageError(
+            f"'{name}' still carries {len(linked)} rule(s): "
+            + ", ".join(rules) + more
+            + " -- remove those hosts first, or unlink them in OPNsense")
+
+    doomed = [("frontend", name, row["uuid"])]
+    keep = []
+    backend_uuid = selected_value(frontend.get("defaultBackend"))
+    if backend_uuid:
+        try:
+            backend = client.get("backend", backend_uuid)
+        except ApiError:
+            backend = None
+        if backend is not None:
+            users = _users_of_backend(client, backend_uuid, row["uuid"])
+            if users:
+                keep.append(f"backend pool '{backend.get('name')}' "
+                            f"(still used by {users[0]})")
+            else:
+                doomed.append(("backend", backend.get("name", ""), backend_uuid))
+                for server_uuid in selected_values(backend.get("linkedServers")):
+                    try:
+                        server = client.get("server", server_uuid)
+                    except ApiError:
+                        continue
+                    others = _users_of_server(client, server_uuid, backend_uuid)
+                    if others:
+                        keep.append(f"real server '{server.get('name')}' "
+                                    f"(still in {others[0]})")
+                    else:
+                        doomed.append(("server", server.get("name", ""),
+                                       server_uuid))
+
+    host = (getattr(opts, "host", "") or "").strip().lower() \
+        or listener_dns(frontend.get("description"))
+    rewrite = adguard.find_rewrite(host) if (adguard and host) else None
+
+    label = {"frontend": "public service", "backend": "backend pool",
+             "server": "real server"}
+    out(f"public service : {name} on {bind or '?'}")
+    for kind, obj, _ in doomed:
+        out(f"will delete {label[kind]:14s} {obj}")
+    if rewrite is not None:
+        out(f"will delete {'dns rewrite':14s} {host} -> {rewrite.get('answer')}")
+    elif host:
+        out(f"dns rewrite    : {host} -- " + ("not in AdGuard" if adguard
+                                              else "no AdGuard for this "
+                                                   "connection"))
+    for line in keep:
+        out(f"keeping        : {line}")
+    if getattr(opts, "dry_run", False):
+        out("\ndry run -- nothing was changed")
+        return 0
+    if not getattr(opts, "yes", False) and not confirm("delete these objects?"):
+        out("aborted")
+        return 1
+
+    # the listener goes first: nothing may point at a pool that is about to
+    # be deleted, or the plugin refuses the delete and leaves half of it
+    for kind, obj, uuid in doomed:
+        client.delete(kind, uuid)
+        out(f"- deleted {label[kind]} {obj}")
+    if rewrite is not None:
+        adguard.delete_rewrite(host, str(rewrite.get("answer", "")))
+        out(f"- deleted dns rewrite {host}")
 
     return apply_changes(client, opts, out)
 
@@ -1206,6 +1365,8 @@ def inventory(client):
             "tls": str(frontend.get("ssl_enabled", "0")) == "1",
             "default": _read_backend(client, default_uuid) if default_uuid
                        else None,
+            "managed": str(frontend.get("description", "")).startswith("managed:"),
+            "dns": listener_dns(frontend.get("description")),
             # bind arrives as an option map on newer plugin versions and as a
             # plain string on older ones; both end up as "addr:port, addr:port"
             "bind": ", ".join(selected_values(frontend.get("bind"))),
@@ -2270,6 +2431,15 @@ def cmd_listener(args, config):
     return provision_listener(client, args, out=_out, adguard=adguard)
 
 
+def cmd_unlisten(args, config):
+    profile = pick_profile(config, args.profile)
+    client = build_client(args, profile)
+    if not args.name:
+        args.name = ask("name of the public service")
+    return deprovision_listener(client, args, out=_out,
+                                adguard=_adguard_for(args, profile))
+
+
 def cmd_certificates(args, config):
     client = _client_for(args, config)
     choices = listener_choices(client)["certificates"]
@@ -2513,6 +2683,20 @@ def build_parser():
     listener.add_argument("--no-apply", action="store_true",
                           help="save but do not test/reload HAProxy")
     listener.set_defaults(func=cmd_listener)
+
+    unlisten = sub.add_parser(
+        "unlisten", help="delete a public service and the pool behind it")
+    unlisten.add_argument("name", nargs="?", help="the public service to remove")
+    unlisten.add_argument("--host",
+                          help="AdGuard rewrite to remove with it (default: "
+                               "the one it was created with)")
+    unlisten.add_argument("--no-dns", action="store_true",
+                          help="leave the AdGuard rewrite in place")
+    unlisten.add_argument("--adguard-url", help="AdGuard Home base URL")
+    unlisten.add_argument("-n", "--dry-run", action="store_true")
+    unlisten.add_argument("-y", "--yes", action="store_true", help="do not ask")
+    unlisten.add_argument("--no-apply", action="store_true")
+    unlisten.set_defaults(func=cmd_unlisten, dns_target=None)
 
     certs = sub.add_parser("certificates",
                            help="list the certificates a listener can use")
