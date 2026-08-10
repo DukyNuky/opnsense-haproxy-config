@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.4.3"
+VERSION = "2.5.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -331,8 +331,18 @@ class AdGuard:
 
     def rewrite_map(self):
         """Every rewrite as ``{domain: answer}``, for looking many names up."""
-        return {str(entry.get("domain", "")).lower(): str(entry.get("answer", ""))
-                for entry in self.rewrites()}
+        return as_rewrite_map(self.rewrites())
+
+
+def as_rewrite_map(entries):
+    """``{domain: answer}`` for a list that has already been read.
+
+    The listing tab reads the rewrites whole -- domain *and* answer, one row
+    per entry -- and the host list next door wants the same reading as a
+    lookup table. Two calls to AdGuard for one question would be one too many.
+    """
+    return {str(entry.get("domain", "")).lower(): str(entry.get("answer", ""))
+            for entry in entries}
 
 
 def set_rewrite(adguard, host, target):
@@ -1037,7 +1047,7 @@ UPDATE_NEVER = ("config.json", "gui.json", "make_release.py", "make_icon.py")
 # Without these there is no program, so an incomplete download is refused
 # before a single file is replaced.
 ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
-                   "portainer_gui.py", "catalog.py")
+                   "portainer_gui.py", "catalog.py", "adguard_gui.py")
 
 
 def updatable(name):
@@ -1342,6 +1352,63 @@ def on_path(folder):
     wanted = os.path.normcase(os.path.abspath(folder))
     return any(os.path.normcase(os.path.abspath(part)) == wanted
                for part in (os.environ.get("PATH") or "").split(os.pathsep) if part)
+
+
+def same_folder(one, other):
+    """Two paths that mean the same folder, symlinks and all."""
+    if not one or not other:
+        return False
+    try:
+        return os.path.samefile(one, other)
+    except OSError:
+        # one of them does not exist -- then the names have to agree
+        return (os.path.normcase(os.path.abspath(one))
+                == os.path.normcase(os.path.abspath(other)))
+
+
+def starter_targets():
+    """The folders the starters on this machine point at.
+
+    Read rather than remembered: the installation writes nothing about itself
+    anywhere, and a note next to the program would be one more file that an
+    update has to keep in step. The starters are the record -- a symlink says
+    where its script is, and the .desktop file says which one it runs.
+    """
+    found = []
+    for command in LAUNCHERS:
+        link = os.path.join(default_bin_dir() or "", command)
+        if os.path.islink(link):
+            found.append(os.path.dirname(os.path.realpath(link)))
+    for folder in (applications_dir(), desktop_dir()):
+        path = os.path.join(folder or "", DESKTOP_FILE)
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        line = re.search(r"^Exec=(.*)$", text, re.M)
+        if line:
+            script = line.group(1).strip().strip('"')
+            found.append(os.path.dirname(script))
+    return [folder for folder in found if folder]
+
+
+def installed_here(folder=None):
+    """Is this copy the installed one -- the one the starters lead to?
+
+    Asked by the window to decide whether offering to install is worth a
+    button. Installing again from the folder that is already installed only
+    ever writes the starters anew, which is not what the word promises.
+
+    A git working copy is never it: installing from there is the normal way
+    to get an installation, and ``install`` refuses to write into one.
+    """
+    folder = os.path.abspath(folder or install_dir())
+    if os.path.isdir(os.path.join(folder, ".git")):
+        return False
+    if same_folder(folder, default_install_dir()):
+        return True
+    return any(same_folder(folder, target) for target in starter_targets())
 
 
 def install_source(folder=None):

@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.4.3.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.4.3.zip)**
+**[opnsense-haproxy-2.5.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.5.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -236,26 +236,34 @@ Es kopiert sich dorthin, trägt sich mit seinem Symbol ins Startmenü
 die **Taskleiste anheften**. Auf Wunsch legt es auch eine Verknüpfung auf den
 Schreibtisch. Deine Zugangsdaten fasst es dabei nicht an.
 
-Den ursprünglich entpackten Ordner kannst du danach löschen.
+Den ursprünglich entpackten Ordner kannst du danach löschen. Startest du das
+Programm ab jetzt aus dem Menü, fehlt der Knopf **⤓ Installieren** — dort ist
+nichts mehr zu installieren, und zweimal dasselbe anzubieten hilft niemandem.
 
 ---
 
 ## Das Fenster im Überblick
 
-**Oben links** die beiden großen Tabs, **HAProxy** und **Portainer**. Dieser
-Abschnitt beschreibt den ersten; der zweite hat weiter unten seinen eigenen.
-Die Kopfzeile und das Protokoll unten gehören beiden: der Umschalter für die
-Verbindung, die Statusanzeige und **Verbinden** meinen immer den Tab, der
-gerade vorne ist.
+**Oben links** die drei großen Tabs, **HAProxy**, **Portainer** und
+**AdGuard**. Dieser Abschnitt beschreibt den ersten; die anderen beiden haben
+weiter unten ihren eigenen. Die Kopfzeile und das Protokoll unten gehören
+allen: der Umschalter für die Verbindung, die Statusanzeige und **Verbinden**
+meinen immer den Tab, der gerade vorne ist.
 
 **Oben rechts** liegen die Knöpfe: der Umschalter für die Verbindung, das
 Zahnrad ⚙ für die Einstellungen, **Verbinden**, **⇩ Update**, **⤓ Installieren**
 und der Mond/Sonne-Knopf für hell oder dunkel. Was ein Knopf tut, verrät ein
 Hinweis, wenn die Maus einen Moment darauf liegt.
 
+**⤓ Installieren steht nur da, solange es etwas zu installieren gibt.** Läuft
+das Programm aus dem Ordner, auf den die Starter zeigen, ist die Frage schon
+beantwortet — der Knopf ist dann weg. Aus einem entpackten ZIP heraus oder aus
+einer Arbeitskopie ist er da.
+
 Der Umschalter meint immer den Tab, der vorne ist: auf **HAProxy** wählt er die
-OPNsense, auf **Portainer** den Docker-Host. Ganz unten in seiner Liste steht
-**⚙ Einstellungen …** — der zweite Weg dorthin.
+OPNsense, auf **Portainer** den Docker-Host, auf **AdGuard** den DNS-Server.
+Ganz unten in seiner Liste steht **⚙ Einstellungen …** — der zweite Weg
+dorthin.
 
 **Von allein verbindet sich nichts.** Das Fenster geht auf und wartet; erst
 **Verbinden** holt die Daten von der OPNsense. Danach heißt derselbe Knopf
@@ -299,8 +307,8 @@ die OPNsense antwortet. Theme und Fenstergröße merkt es sich.
 
 ## Der zweite Tab: Portainer
 
-Oben sitzen zwei große Tabs. **HAProxy** ist alles, was oben beschrieben ist.
-**Portainer** ist die andere Hälfte: die Docker-Container, die hinter HAProxy
+Oben sitzen drei große Tabs. **HAProxy** ist alles, was oben beschrieben ist.
+**Portainer** ist die zweite Hälfte: die Docker-Container, die hinter HAProxy
 stehen.
 
 Ein Standort hat meist eine OPNsense und einen Portainer, also merkt sich jede
@@ -623,6 +631,57 @@ Kommt eine solche Absage doch von Portainer — weil die Compose-Datei vorher
 nicht zu lesen war oder in der Zwischenzeit ein Container dazukam —, steht
 unter der Fehlermeldung im Protokoll dieselbe Erklärung.
 
+## Der dritte Tab: AdGuard
+
+Der erste Tab sagt zu jedem Host, was AdGuard über ihn weiß — aber nur zu
+denen, für die es schon eine Rule in HAProxy gibt. Ein DNS-Server hält mehr als
+das: die NAS, den Drucker, die Maschine, die auf einem eigenen Port antwortet.
+Namen also, die nie über einen Reverse Proxy gelaufen sind. Der dritte Tab
+zeigt die **ganze Liste** und schreibt auch hinein.
+
+**Verbinden** oben rechts liest die Umschreibungen; von allein passiert auch
+hier nichts. Wer den ersten Tab verbindet, bekommt die Liste gleich mit — sie
+wird ohnehin für die DNS-Markierungen in der Hostliste gelesen.
+
+Eine OPNsense braucht es dafür nicht: wer nur ein AdGuard einträgt, kann diesen
+Tab allein benutzen.
+
+### Was die Liste zeigt
+
+Eine Zeile je Eintrag, **Name** und darunter **→ Ziel**, sortiert nach Domain
+von hinten — `example.de`, `*.example.de` und `app.example.de` stehen also
+beieinander und nicht über die ganze Liste verteilt. Rechts die Markierungen:
+
+| | |
+| --- | --- |
+| **HAProxy** | Das Ziel ist die HAProxy-IP dieser Verbindung. Der Name geht also den Weg über den Reverse Proxy. |
+| **alle darunter** | Ein Eintrag mit `*.` davor. Er gilt für jeden Namen unter dieser Domain — ein eigener Eintrag geht immer vor. |
+
+Das Feld daneben **sucht**, in Name und Ziel zugleich. Die Zeile unter der
+Überschrift zählt mit, wie viele Einträge es sind, wie viele davon auf HAProxy
+zeigen und wie viele gerade zur Suche passen.
+
+### Eine Umschreibung anlegen oder ändern
+
+**＋ Neue Umschreibung** fragt nach zweierlei:
+
+* **Name** — `nas.example.de`, oder `*.example.de` für alles darunter.
+* **Ziel** — eine IP-Adresse oder ein anderer Name. Vorausgefüllt ist die
+  HAProxy-IP, denn das ist der häufigste Fall; überschreiben kostet nichts.
+
+**Ändern** an einer Zeile öffnet dasselbe Fenster mit den Werten darin,
+**Löschen** fragt einmal nach und nimmt den Eintrag heraus. Danach löst der
+Name wieder ganz normal auf.
+
+AdGuard kennt kein „ändern": ein Eintrag wird gelöscht und neu geschrieben.
+Genauso wenig kennt es eindeutige Namen — derselbe Name darf zweimal dastehen,
+etwa mit einer IPv4- und einer IPv6-Adresse. Steht ein Name also schon da,
+fragt das Programm, ob der neue Wert den alten **ersetzen** soll oder ob
+**beide** bleiben. Was passiert, steht danach im Protokoll, Zeile für Zeile.
+
+Alles, was hier geschrieben wird, sieht der erste Tab sofort: die
+DNS-Markierungen in der Hostliste kommen aus derselben Liste.
+
 ## Mehrere Systeme
 
 Seit 2.0 führen **OPNsense, AdGuard und Portainer je eine eigene Liste**. Das
@@ -643,6 +702,9 @@ Portainer sie gewöhnlich benutzt. Das ist die Vorauswahl, mehr nicht:
   auch ein anderes AdGuard oder gar keins, für genau diesen Host.
 * Im Fenster **＋ Neuer Stack** steht ganz oben **Deployen auf** — dort wählst
   du Portainer und Umgebung.
+* Auf dem Tab **AdGuard** wählt der Umschalter oben rechts, wessen Liste zu
+  sehen ist. Das ist dieselbe Wahl wie **DNS-Eintrag in** im Formular: was hier
+  gewählt wird, steht auch dort.
 
 Was du dort wählst, merkt sich das Programm bei der Firewall: beim nächsten
 Start ist wieder das Paar da, das zuletzt zusammen benutzt wurde. Standort A
@@ -816,6 +878,7 @@ normalen Gebrauch ist nichts davon nötig.
 | `haproxy_gui.py` | Fenster (tkinter) |
 | `portainer.py` | Portainer-API: Stacks, Container, Ports, Deploys |
 | `portainer_gui.py` | der zweite Tab |
+| `adguard_gui.py` | der dritte Tab |
 | `catalog.py` | Katalog, Favoriten, Git-Konten, eigene Repos |
 | `catalog.json` | die bekannten Stacks — im Programm über GitHub geholt |
 | `HAProxy-Starter.bat` | Doppelklick-Start für Windows |

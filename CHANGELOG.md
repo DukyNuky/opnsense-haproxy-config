@@ -1,5 +1,40 @@
 # Änderungen
 
+## 2.5.0 — 10. August 2026
+
+**Ein dritter Tab: alle DNS-Umschreibungen von AdGuard, zum Ansehen und zum
+Anlegen. Und der Installieren-Knopf verschwindet, wenn schon installiert ist.**
+
+- **Neuer Tab „AdGuard".** Bisher stand DNS nur am Rand der Hostliste — und
+  auch dort nur zu Namen, für die es schon eine Rule in HAProxy gibt. Ein
+  DNS-Server hält mehr als das: die NAS, den Drucker, die Maschine auf einem
+  eigenen Port. Der dritte Tab zeigt die **ganze** Umschreibungsliste, mit
+  Suchfeld über Name und Ziel, und schreibt auch hinein: **＋ Neue
+  Umschreibung**, **Ändern**, **Löschen**. Bisher war dafür AdGuards eigene
+  Oberfläche nötig.
+- **Sortiert von hinten nach vorn**, also nach Domain: `example.de`,
+  `*.example.de` und `app.example.de` stehen beieinander statt über die ganze
+  Liste verteilt. Ein Eintrag, dessen Ziel die HAProxy-IP ist, trägt die
+  Marke **HAProxy**; einer mit `*.` davor die Marke **alle darunter**.
+- **AdGuard kennt kein „ändern" und keine eindeutigen Namen.** Derselbe Name
+  darf zweimal dastehen, mit einer IPv4- und einer IPv6-Adresse. Steht ein
+  Name schon da, wird deshalb gefragt, ob der neue Wert den alten **ersetzen**
+  soll oder ob **beide** bleiben — statt still das eine oder das andere zu
+  tun. Gelöscht wird immer mit Name *und* Ziel, damit die zweite Adresse eines
+  Namens nicht nebenbei mit verschwindet.
+- **Beide Tabs sehen dieselbe Liste.** Was hier geschrieben wird, steht sofort
+  als DNS-Markierung an den Hosts im ersten Tab, und umgekehrt — gelesen wird
+  sie dabei nur einmal.
+- **Der Umschalter oben rechts wählt auf diesem Tab das AdGuard**, wie er auf
+  den anderen beiden die OPNsense und den Portainer wählt. Es ist dieselbe
+  Wahl wie **DNS-Eintrag in** im Formular; wer nur ein AdGuard eingerichtet
+  hat und gar keine Firewall, kann den Tab allein benutzen.
+- **⤓ Installieren ist weg, wenn nichts mehr zu installieren ist.** Läuft das
+  Programm aus dem Ordner, auf den Startmenü-Eintrag und Terminal-Befehle
+  zeigen, war der Knopf eine Einladung zu einer Arbeit, die schon getan ist —
+  gedrückt hätte er nur dieselben Starter noch einmal geschrieben. Aus einem
+  entpackten ZIP oder einer git-Arbeitskopie heraus ist er unverändert da.
+
 ## 2.4.3 — 9. August 2026
 
 **Vor dem Deploy wird nach beiden Verbindungen gefragt — und wenn kein

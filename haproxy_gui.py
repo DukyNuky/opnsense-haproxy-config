@@ -82,7 +82,8 @@ TOKEN_LOGIN = "Zugriffstoken"
 USER_LOGIN = "Benutzer und Passwort"
 # what the picker in the header is for -- it changes with the tab in front
 SWITCHER_TIP = {"opnsense": "Welche OPNsense gemeint ist",
-                "portainer": "Auf welchem Portainer gearbeitet wird"}
+                "portainer": "Auf welchem Portainer gearbeitet wird",
+                "adguard": "Welches AdGuard gezeigt wird"}
 
 THEMES = {
     "light": {
@@ -332,25 +333,26 @@ class ScrollFrame(ttk.Frame):
 
 
 class MissingTab(ttk.Frame):
-    """Stands in for the Portainer tab when its files did not come along.
+    """Stands in for a tab whose files did not come along.
 
-    An update run by a version that predates the Portainer half copies only
+    An update run by a version that predates a half of the program copies only
     the files it knows, which leaves this program without them. Rather than
-    refusing to start, the second tab says so and points at the download.
+    refusing to start, the tab says so and points at the download.
     """
 
     connected = False
     configured = False
 
-    def __init__(self, parent, app):
+    def __init__(self, parent, app, part="Portainer"):
         super().__init__(parent, style="TFrame")
         self.app = app
+        self.part = part
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         card = ttk.Frame(self, style="Card.TFrame", padding=30)
         card.grid(row=0, column=0, sticky="nsew")
         card.columnconfigure(0, weight=1)
-        ttk.Label(card, text="Der Portainer-Teil fehlt", style="H2.TLabel",
+        ttk.Label(card, text=f"Der {part}-Teil fehlt", style="H2.TLabel",
                   anchor="center").grid(row=0, column=0, sticky="ew")
         ttk.Label(card, style="Hint.TLabel", anchor="center", justify="center",
                   wraplength=460,
@@ -392,9 +394,12 @@ class MissingTab(ttk.Frame):
         return (self.deploy_button,)
 
     def status_text(self):
-        return "Portainer-Teil fehlt", False
+        return f"{self.part}-Teil fehlt", False
 
     def use_profile(self, _profile):
+        pass
+
+    def take(self, _entries, _error=""):
         pass
 
     def render(self):
@@ -405,8 +410,8 @@ class MissingTab(ttk.Frame):
 
     def reload(self):
         self.app.write_log(
-            "Portainer", [{"text": "portainer.py und portainer_gui.py fehlen in "
-                                   "diesem Ordner.", "level": "error"}], False)
+            self.part, [{"text": f"Die Dateien für den {self.part}-Teil fehlen "
+                                 "in diesem Ordner.", "level": "error"}], False)
 
 
 # --------------------------------------------------------------------------
@@ -1545,6 +1550,7 @@ class App(tk.Tk):
         self._paint_update_button()
         self._render_inventory()
         self.portainer.apply_theme()
+        self.dns.apply_theme()
         self._paint_tabs()
         self.paint_connection()
 
@@ -1564,15 +1570,15 @@ class App(tk.Tk):
         self._build_log()
 
     def _build_tabs(self):
-        """The two halves of the program, one behind each tab.
+        """The three parts of the program, one behind each tab.
 
         The strip is built by hand rather than from a ttk.Notebook: clam draws
         the tab that is not chosen taller than the one that is, which reads as
         a mistake, and no amount of styling talks it out of that.
 
-        portainer_gui is imported here rather than at the top of the file: it
-        borrows the widgets defined above, and a window is only ever built
-        after this module has finished loading, so the two can point at each
+        The other two are imported here rather than at the top of the file:
+        they borrow the widgets defined above, and a window is only ever built
+        after this module has finished loading, so they can point at each
         other without an import running in circles.
         """
         try:
@@ -1582,6 +1588,10 @@ class App(tk.Tk):
             # that version knew about, so this half can be missing on a fresh
             # 1.4.0. The window still opens; the tab says what to do about it.
             portainer_gui = None
+        try:
+            import adguard_gui
+        except ImportError:
+            adguard_gui = None  # same story, for anything before 2.5.0
 
         strip = ttk.Frame(self, style="Head.TFrame")
         strip.grid(row=1, column=0, sticky="nsew", padx=18)
@@ -1607,10 +1617,16 @@ class App(tk.Tk):
                           if portainer_gui else MissingTab(pages, self))
         self.portainer.grid(row=0, column=0, sticky="nsew")
 
-        self.pages = {"haproxy": proxy, "portainer": self.portainer}
+        self.dns = (adguard_gui.AdGuardTab(pages, self) if adguard_gui
+                    else MissingTab(pages, self, "AdGuard"))
+        self.dns.grid(row=0, column=0, sticky="nsew")
+
+        self.pages = {"haproxy": proxy, "portainer": self.portainer,
+                      "adguard": self.dns}
         self.tab_buttons = {}
         for column, (name, label) in enumerate((("haproxy", "HAProxy"),
-                                                ("portainer", "Portainer"))):
+                                                ("portainer", "Portainer"),
+                                                ("adguard", "AdGuard"))):
             button = ttk.Button(bar, text=label, style="Tab.TButton",
                                 command=lambda n=name: self.show_tab(n))
             button.grid(row=0, column=column, padx=(0, 6))
@@ -1678,10 +1694,11 @@ class App(tk.Tk):
                                         style="Tool.TButton",
                                         command=self._check_update)
         self.update_button.grid(row=0, column=3, padx=(0, 6))
-        install_button = ttk.Button(actions, text="⤓ Installieren",
-                                    style="Tool.TButton",
-                                    command=self._open_install)
-        install_button.grid(row=0, column=4, padx=(0, 6))
+        self.install_button = ttk.Button(actions, text="⤓ Installieren",
+                                         style="Tool.TButton",
+                                         command=self._open_install)
+        self.install_button.grid(row=0, column=4, padx=(0, 6))
+        self._paint_install_button()
         # Without a width of their own, ttk hands every button the same
         # eleven-character minimum -- which leaves the two symbols swimming in
         # a button four times their size.
@@ -1697,8 +1714,8 @@ class App(tk.Tk):
                                       "neu einlesen"),
                 (self.update_button, "Auf GitHub nach einer neueren Version "
                                      "sehen"),
-                (install_button, "Programm an einen festen Platz legen und "
-                                 "Starter anlegen"),
+                (self.install_button, "Programm an einen festen Platz legen und "
+                                      "Starter anlegen"),
                 (self.theme_button, "Hell / Dunkel"),
                 (settings_button, "Einstellungen: OPNsense, AdGuard und "
                                   "Portainer")):
@@ -2108,14 +2125,15 @@ class App(tk.Tk):
                 report(f"trage {host} → {target} in AdGuard ein …")
                 outcome = core.set_rewrite(adguard, host, target)
             return {"outcome": outcome, "host": host, "target": target,
-                    "rewrites": adguard.rewrite_map()}
+                    "entries": adguard.rewrites()}
 
         self._run_async(work, self._dns_done, activity="AdGuard …")
 
     def _dns_done(self, result):
         self._set_busy(False)
-        self.rewrites = result["rewrites"]
+        self.rewrites = core.as_rewrite_map(result["entries"])
         self.rewrites_error = ""
+        self.dns.take(result["entries"])  # the DNS tab shows the same list
         host, target = result["host"], result["target"]
         said = {
             "added": (f"+ DNS-Eintrag {host} → {target}", "info"),
@@ -2218,7 +2236,8 @@ class App(tk.Tk):
         self.busy = busy
         state = "disabled" if busy else "normal"
         for button in (self.submit_button, self.preview_button,
-                       self.connect_button, *self.portainer.busy_buttons()):
+                       self.connect_button, *self.portainer.busy_buttons(),
+                       *self.dns.busy_buttons()):
             button.configure(state=state)
         self.configure(cursor="watch" if busy else "")
         if busy:
@@ -2447,12 +2466,14 @@ class App(tk.Tk):
         """The picker in the header belongs to whichever half is in front.
 
         On the HAProxy tab it chooses the firewall, on the Portainer tab the
-        Docker host -- so it always names the thing that is being looked at.
-        It used to switch the firewall on both, which on the second tab changed
-        something that was nowhere on the screen. The way to the settings is at
-        the end of either list.
+        Docker host, on the AdGuard tab the DNS server -- so it always names
+        the thing that is being looked at. It used to switch the firewall on
+        both, which on the second tab changed something that was nowhere on
+        the screen. The way to the settings is at the end of every list.
         """
-        kind = "portainer" if self.active_tab() == "portainer" else "opnsense"
+        kind = self.active_tab()
+        if kind not in ("portainer", "adguard"):
+            kind = "opnsense"
         names = [e.get("name", "?") for e in self.systems.get(kind, [])]
         self.profile_box.configure(values=names + [EDIT_PROFILE],
                                    state="readonly")
@@ -2536,7 +2557,9 @@ class App(tk.Tk):
         """A different AdGuard for what is about to be created.
 
         The choice is remembered on the OPNsense entry, so the next start comes
-        up with the pair that was last used together.
+        up with the pair that was last used together. Where there is no
+        firewall to remember it -- somebody who set up only an AdGuard -- the
+        selection itself is written down, which is kept in the same file.
         """
         chosen = self.var_dns_target.get()
         self.active["adguard"] = "" if chosen == NO_DNS else chosen
@@ -2546,7 +2569,7 @@ class App(tk.Tk):
                 entry["adguard"] = self.active["adguard"]
             else:
                 entry.pop("adguard", None)
-            self._write_settings()
+        self._write_settings()
         self.profile = core.merged_profile(self.systems, entry,
                                            adguard=self.active["adguard"],
                                            portainer=self.active["portainer"])
@@ -2567,21 +2590,22 @@ class App(tk.Tk):
         self.services, self.domains = [], []
         self._fill_switcher()
         self._fill_dns_choices()
-        # both halves belong to the same window, so the Portainer tab follows
+        # all three parts belong to the same window, so the other two follow
         # what was just chosen -- without reaching out yet
         self.portainer.use_profile(self.profile)
+        # before the firewall's own client, which may not exist at all: a
+        # place with AdGuard but no OPNsense still has a DNS list to show
+        self._build_adguard()
         try:
             self.api = core.build_client(self.args, self.profile)
         except core.UsageError:
             self.api = None
             self._set_status(None, "keine Zugangsdaten")
-            self._refresh_fqdn()
             self.paint_connection()
             self._render_inventory()
             if first_run:
                 self.open_settings()
             return
-        self._build_adguard()
         if not connect:
             self._set_status(None, "nicht verbunden", idle=True)
             self.paint_connection()
@@ -2593,6 +2617,9 @@ class App(tk.Tk):
         """The connect button: it works on whichever tab is in front."""
         if self.active_tab() == "portainer":
             self.portainer.reload()
+            return
+        if self.active_tab() == "adguard":
+            self.dns.reload()
             return
         if not self.api:
             self.open_settings()
@@ -2606,6 +2633,11 @@ class App(tk.Tk):
             style = "OkPill.TLabel" if ok else "IdlePill.TLabel"
             connected = self.portainer.connected
             self.subtitle.configure(text="Docker-Stacks über Portainer")
+        elif self.active_tab() == "adguard":
+            text, ok = self.dns.status_text()
+            style = "OkPill.TLabel" if ok else "IdlePill.TLabel"
+            connected = self.dns.connected
+            self.subtitle.configure(text="DNS-Umschreibungen in AdGuard Home")
         else:
             text, style = self.haproxy_pill
             connected = self.connected
@@ -2624,6 +2656,9 @@ class App(tk.Tk):
             return
         if self.active_tab() == "portainer":
             self.switch_portainer(choice)
+            return
+        if self.active_tab() == "adguard":
+            self.switch_adguard(choice)
             return
         self._switch_profile(choice)
 
@@ -2658,6 +2693,22 @@ class App(tk.Tk):
         self.portainer.use_profile(self.profile)
         self._fill_switcher()
         self.portainer.reload()
+
+    def switch_adguard(self, name):
+        """Show another AdGuard, and let the form's picker follow along.
+
+        Both pickers choose the same thing, so the header goes through the
+        form: one place decides what the choice costs -- the note on the
+        firewall, the client, and the DNS marks in the host list.
+        """
+        if (not name or name == self.active.get("adguard")
+                or not core.find_system(self.systems, "adguard", name)):
+            self._fill_switcher()  # the picker may be showing something else
+            return
+        self.var_dns_target.set(name)
+        self._dns_target_changed()
+        self._fill_switcher()
+        self.dns.reload()
 
     def connect_and_deploy(self, opnsense, portainer, preset):
         """Take up the chosen pair, then carry on to the deploy form.
@@ -2702,6 +2753,21 @@ class App(tk.Tk):
             self.adguard = None  # without a target there is nothing to write
             self.adguard_problem = "AdGuard: keine HAProxy-IP eingetragen (⚙)"
         self._refresh_fqdn()
+        # The third tab keeps a client of its own: reading and editing the
+        # rewrite list works without a HAProxy address, which is the one thing
+        # this half insists on.
+        self.dns.use_profile(self.profile)
+
+    def dns_reloaded(self, entries, error=""):
+        """A fresh reading of AdGuard's rewrites, from wherever it came.
+
+        The host list marks every name with what AdGuard says about it, so a
+        rewrite written on the third tab shows up on the first one right away
+        -- without a second round trip for the same answer.
+        """
+        self.rewrites = core.as_rewrite_map(entries)
+        self.rewrites_error = error
+        self._render_inventory()
 
     def open_settings(self, parent=None):
         """The one place where systems are added, changed and removed.
@@ -2717,8 +2783,25 @@ class App(tk.Tk):
         self.args.insecure = False
         self._use_active()
 
+    def _paint_install_button(self):
+        """Offer to install only while there is something left to install.
+
+        Started from the folder the starters lead to, the answer is already
+        given: installing again would do nothing but write those same starters
+        once more, under a word that promises more than that. A copy run from
+        wherever it was unpacked keeps the button.
+        """
+        if core.installed_here():
+            self.install_button.grid_remove()
+        else:
+            self.install_button.grid()
+
     def _open_install(self):
-        InstallDialog(self, self.colors)
+        dialog = InstallDialog(self, self.colors)
+        self.wait_window(dialog)
+        # installing into the folder this copy runs from makes it the
+        # installed one, so the button goes without waiting for a restart
+        self._paint_install_button()
 
     def remember_system(self, kind, previous, entry):
         """Add or replace one system, and keep the links pointing at it.
@@ -2799,17 +2882,17 @@ class App(tk.Tk):
                 domains = core.base_domains(client)
             except core.ApiError:
                 domains = []  # the ACME plugin is optional
-            rewrites, rewrites_error = {}, ""
+            entries, rewrites_error = None, ""
             if adguard:
                 report("lese DNS-Einträge aus AdGuard …")
                 try:
-                    rewrites = adguard.rewrite_map()
+                    entries = adguard.rewrites()
                 except core.ApiError as exc:
                     # AdGuard being away must not cost us the whole inventory
                     rewrites_error = str(exc)
             return {"status": status, "services": services,
                     "healthchecks": healthchecks, "domains": domains,
-                    "rewrites": rewrites, "rewrites_error": rewrites_error}
+                    "entries": entries, "rewrites_error": rewrites_error}
 
         self._run_async(work, self._state_loaded,
                         on_error=self._connect_failed,
@@ -2829,8 +2912,12 @@ class App(tk.Tk):
         self.connected = True
         self.services = state["services"]
         self.healthchecks = state["healthchecks"]
-        self.rewrites = state["rewrites"]
+        self.rewrites = core.as_rewrite_map(state["entries"] or [])
         self.rewrites_error = state["rewrites_error"]
+        if state["entries"] is not None:
+            # read on the way past, so the third tab is filled in without a
+            # connect of its own
+            self.dns.take(state["entries"])
         self._set_status(state["status"])
         self.paint_connection()
 
