@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.6.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.6.1.zip)**
+**[opnsense-haproxy-2.7.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.7.1.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -598,9 +598,14 @@ Nötig für *Meine Repos* und für private Repositories. Unter ⚙ im Abschnitt
 **Git-Konto** auf **＋ Hinzufügen**:
 
 * **Name** — wie du es nennen willst, z.B. `GitHub privat`.
-* **Adresse** — `https://github.com`, `https://gitlab.com` oder die deines
-  eigenen GitLab.
-* **Benutzer** — dein Anmeldename dort.
+* **Anbieter** — **GitHub**, **GitLab** oder **Eigener Server**. Die beiden
+  ersten tragen die Adresse selbst ein; zu tippen ist sie nur beim eigenen
+  Server.
+* **Adresse** — kommt vom Anbieter. Beim eigenen Server nur dessen Adresse,
+  ohne Benutzer und ohne Repository dahinter: `https://git.example.de`.
+* **Benutzer** — dein Anmeldename dort. Darunter steht, was Adresse und Name
+  zusammen ergeben (`https://github.com/deinname`) — die Seite, von der die
+  Liste der Repositories kommt.
 * **Token** — lesen genügt. Bei einem GitHub *Fine-grained token*:
   **Repository access → Only select repositories** und **Permissions →
   Repository permissions → Contents: Read-only**. Bei GitLab die Scopes

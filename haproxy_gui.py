@@ -474,10 +474,18 @@ SYSTEM_FIELDS = {
                    "https://portainer.example.de:9443")),
     "git": (("Name", "name", False, "z.B. GitHub privat"),
             ("Adresse", "url", False,
-             "https://github.com oder https://gitlab.com"),
+             "Bei einem eigenen Server nur dessen Adresse, ohne Benutzer und "
+             "Repository — z.B. https://git.example.de"),
             ("Benutzer", "username", False, "dein Anmeldename dort"),
             ("Token", "token", True, "")),
 }
+# The two big ones write their own address, so nobody has to know that only
+# the machine belongs in that field: a profile page pasted in there points at
+# the right host but at the wrong thing, and a GitLab of one's own would then
+# be looked up under a path that holds no API.
+GIT_HOSTS = (("GitHub", "https://github.com"),
+             ("GitLab", "https://gitlab.com"),
+             ("Eigener Server", ""))
 # Where the fields that ask for a key or a token are handed one out. The two
 # paths are appended to the address in the form above them, so the link leads
 # to the machine being set up and not to a manual about somebody else's.
@@ -553,17 +561,23 @@ class SystemDialog(tk.Toplevel):
                                                        sticky="w", pady=(3, 12))
 
         self.vars = {}
+        self.fields = {}
         for label, name, secret, hint in SYSTEM_FIELDS[kind]:
             self.vars[name] = tk.StringVar(value=str(entry.get(name, "")))
+            if kind == "git" and name == "url":
+                self._build_git_host(body, rows, entry)
             ttk.Label(body, text=label, style="FieldLabel.TLabel").grid(
                 row=next(rows), column=0, sticky="w", pady=(8, 3))
-            ttk.Entry(body, textvariable=self.vars[name], width=46,
-                      style="Card.TEntry", show="•" if secret else "").grid(
-                row=next(rows), column=0, sticky="ew")
+            self.fields[name] = ttk.Entry(
+                body, textvariable=self.vars[name], width=46,
+                style="Card.TEntry", show="•" if secret else "")
+            self.fields[name].grid(row=next(rows), column=0, sticky="ew")
             if hint:
                 ttk.Label(body, text=hint, style="Hint.TLabel").grid(
                     row=next(rows), column=0, sticky="w", pady=(2, 0))
             self._field_help(body, rows, name)
+        if kind == "git":
+            self._git_host_chosen()
 
         if kind == "portainer":
             self._build_portainer(body, rows, entry)
@@ -602,6 +616,16 @@ class SystemDialog(tk.Toplevel):
         API key yet needs the way there at the moment they run out of things to
         type, not three fields further down.
         """
+        if self.kind == "git" and field == "username":
+            # what the two fields above add up to: the page whose repositories
+            # this account is going to list, spelled out while it is typed
+            self.git_account = ttk.Label(body, style="Hint.TLabel",
+                                         wraplength=420, justify="left", text="")
+            self.git_account.grid(row=next(rows), column=0, sticky="w",
+                                  pady=(2, 0))
+            self.vars["username"].trace_add(
+                "write", lambda *_a: self._git_account_hint())
+            return
         if self.kind == "git" and field == "token":
             self._git_help(body, rows)
             return
@@ -641,8 +665,62 @@ class SystemDialog(tk.Toplevel):
                    tip="Öffnet die Seite für neue Token auf dem Host von "
                        "oben").grid(row=next(rows), column=0, sticky="w",
                                     pady=(4, 0))
-        self.vars["url"].trace_add("write", lambda *_a: self._git_rights())
+        self.vars["url"].trace_add("write", lambda *_a: self._git_url_changed())
         self._git_rights()
+
+    def _build_git_host(self, body, rows, entry):
+        """Which Git host the account is on -- picked instead of typed.
+
+        Only the machine belongs in the address underneath, and for GitHub and
+        for GitLab it is the same machine for everybody. Typing it invites the
+        two mistakes that look like a working account until something is
+        deployed: a profile page pasted in, and a bare name that reads like an
+        address but is one only by luck. So the two write their own address,
+        and typing stays for the server somebody runs themselves.
+        """
+        known = {catalog.host_of(url): label for label, url in GIT_HOSTS if url}
+        host = catalog.host_of(entry.get("url", ""))
+        self.git_host = tk.StringVar(
+            value=known.get(host) or (GIT_HOSTS[-1][0] if host
+                                      else GIT_HOSTS[0][0]))
+        ttk.Label(body, text="Anbieter", style="FieldLabel.TLabel").grid(
+            row=next(rows), column=0, sticky="w", pady=(8, 3))
+        choices = ttk.Frame(body, style="Card.TFrame")
+        choices.grid(row=next(rows), column=0, sticky="w", pady=(0, 2))
+        for column, (label, _url) in enumerate(GIT_HOSTS):
+            ttk.Radiobutton(choices, text=label, value=label,
+                            variable=self.git_host,
+                            style="Card.TRadiobutton").grid(row=0, column=column,
+                                                            padx=(0, 16))
+        self.git_host.trace_add("write", lambda *_a: self._git_host_chosen())
+
+    def _git_host_chosen(self):
+        """Write the chosen host into the address, or hand the field over.
+
+        The address stays visible either way rather than disappearing with the
+        choice: it is what a deploy matches a repository against later, so it
+        is worth seeing, and an own server needs it writable.
+        """
+        chosen = dict(GIT_HOSTS).get(self.git_host.get(), "")
+        if chosen:
+            self.vars["url"].set(chosen)
+        self.fields["url"].configure(state="readonly" if chosen else "normal")
+        self._git_account_hint()
+
+    def _git_url_changed(self):
+        self._git_rights()
+        self._git_account_hint()
+
+    def _git_account_hint(self):
+        """Address and user name, put together the way they are meant."""
+        address = catalog.base_url(self.vars["url"].get())
+        user = self.vars["username"].get().strip()
+        if address and user:
+            text = (f"Ergibt {address}/{user} — von dort holt das Programm die "
+                    "Liste der Repositories.")
+        else:
+            text = "Nur der Anmeldename, nicht die Adresse des Profils."
+        self.git_account.configure(text=text)
 
     def _git_rights(self):
         rights = catalog.token_page(self.vars["url"].get())[1]
@@ -775,6 +853,9 @@ class SystemDialog(tk.Toplevel):
             required += [("API-Key", "key"), ("API-Secret", "secret")]
         if self.kind == "git":
             required += [("Benutzer", "username"), ("Token", "token")]
+            # ``github.com`` is what people call the place; the program needs
+            # an address, and putting the scheme there is nobody's job
+            values["url"] = catalog.base_url(values["url"])
         missing = [label for label, name in required if not values.get(name)]
         if missing:
             messagebox.showwarning("Unvollständig",
@@ -2053,7 +2134,11 @@ class App(tk.Tk):
         style.map("Card.TEntry",
                   bordercolor=[("focus", c["accent"])],
                   lightcolor=[("focus", c["accent"])],
-                  darkcolor=[("focus", c["accent"])])
+                  darkcolor=[("focus", c["accent"])],
+                  # a field that something else fills in stays readable, and
+                  # says by its colour that typing in it leads nowhere
+                  fieldbackground=[("readonly", c["surface2"])],
+                  foreground=[("readonly", c["muted"])])
 
         style.configure("Card.TCombobox", fieldbackground=c["surface2"],
                         background=c["surface2"], foreground=c["text"],
@@ -2126,6 +2211,13 @@ class App(tk.Tk):
                         foreground=c["text"], font=self.font_base,
                         indicatorcolor=c["surface2"], focuscolor=c["surface"])
         style.map("Card.TCheckbutton",
+                  background=[("active", c["surface"])],
+                  indicatorcolor=[("selected", c["accent"])])
+
+        style.configure("Card.TRadiobutton", background=c["surface"],
+                        foreground=c["text"], font=self.font_base,
+                        indicatorcolor=c["surface2"], focuscolor=c["surface"])
+        style.map("Card.TRadiobutton",
                   background=[("active", c["surface"])],
                   indicatorcolor=[("selected", c["accent"])])
 

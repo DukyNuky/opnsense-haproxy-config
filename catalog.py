@@ -62,6 +62,23 @@ def is_github(url):
     return host_of(url) in GITHUB_HOSTS
 
 
+def base_url(url):
+    """The address of a Git host, as an address rather than as a name.
+
+    A machine typed without ``https://`` in front of it is what somebody means
+    every time -- ``github.com`` is the name of the place, not half an address
+    -- so the scheme is put there rather than demanded, and a trailing slash is
+    taken off. The path is left alone: a GitLab of one's own may well sit in a
+    folder, and the API lives under that folder and not at the root.
+    """
+    text = str(url or "").strip().rstrip("/")
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "https://" + text
+    return text
+
+
 def token_page(url):
     """Where to make a token for this host, and what it needs to be allowed.
 

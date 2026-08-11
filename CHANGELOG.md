@@ -1,5 +1,23 @@
 # Änderungen
 
+## 2.7.1 — 11. August 2026
+
+**Die Adresse eines Git-Kontos wird ausgewählt statt getippt.**
+
+- **Über der Adresse steht jetzt der Anbieter: GitHub, GitLab oder eigener
+  Server.** Die beiden ersten schreiben ihre Adresse selbst ins Feld, das
+  dabei sichtbar bleibt — ausgegraut, weil es nichts mehr zu tippen gibt. Zu
+  tippen ist nur noch die Adresse eines Servers, den man selbst betreibt, und
+  dort steht daneben, dass wirklich nur der Server gemeint ist.
+- **Unter dem Benutzernamen steht, was beides zusammen ergibt** —
+  `https://github.com/deinname`, die Seite, von der die Liste der Repositories
+  kommt. Das Feld darüber ist der Rechner und nicht das Profil; wer eine
+  Profiladresse hineinkopiert hat, sieht es jetzt an dieser Zeile.
+- **Eine Adresse ohne `https://` wird beim Speichern zu einer.** `github.com`
+  ist der Name des Ortes, keine halbe Adresse — das Schema davorzusetzen war
+  nie Aufgabe dessen, der das Formular ausfüllt. Der Pfad bleibt stehen, ein
+  eigenes GitLab darf in einem Unterordner liegen.
+
 ## 2.7.0 — 11. August 2026
 
 **Ein Deploy meldet sich an zwei Stellen an, und das Programm kümmert sich
