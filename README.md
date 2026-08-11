@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.7.1.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.7.1.zip)**
+**[opnsense-haproxy-2.7.2.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.7.2.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -606,12 +606,18 @@ Nötig für *Meine Repos* und für private Repositories. Unter ⚙ im Abschnitt
 * **Benutzer** — dein Anmeldename dort. Darunter steht, was Adresse und Name
   zusammen ergeben (`https://github.com/deinname`) — die Seite, von der die
   Liste der Repositories kommt.
-* **Token** — lesen genügt. Bei einem GitHub *Fine-grained token*:
-  **Repository access → Only select repositories** und **Permissions →
-  Repository permissions → Contents: Read-only**. Bei GitLab die Scopes
-  `read_api` (für die Liste) und `read_repository` (fürs Klonen). Unter dem
-  Feld steht ein Link, der die Seite für neue Token auf genau diesem Host
-  öffnet.
+* **Token** — lesen genügt. Bei GitHub ein **klassischer** Token mit den
+  Scopes `repo` (Liste und Klonen) und `read:packages` (private Images von
+  ghcr.io); der Link unter dem Feld öffnet die Seite mit beiden schon
+  angehakt. Bei GitLab die Scopes `read_api`, `read_repository` und
+  `read_registry`.
+
+  Warum bei GitHub der klassische und nicht der engere *Fine-grained token*:
+  ein Deploy meldet sich zweimal an, und `ghcr.io` nimmt Fine-grained Tokens
+  **nicht** an — egal welche Rechte sie haben. Ein Fine-grained Token mit
+  **Contents: Read-only** listet und klont tadellos und scheitert dann am
+  Image mit `denied`. Wer keine privaten Images zieht, ist mit ihm trotzdem
+  besser dran; der zweite Link unter dem Feld führt dorthin.
 
 Der Token steht danach in der Konfigurationsdatei, die mit Rechten 600 im
 eigenen Benutzerordner liegt. Beim Deployen geht er an Portainer, das ihn beim
@@ -796,6 +802,14 @@ Host**, sonst greift Docker beim Deploy womöglich zum falschen Token.
 Der Token braucht dafür ein Recht mehr als fürs Klonen: bei GitHub-Packages
 `read:packages`, bei GitLab `read_registry`. Und der Pfad bei `ghcr.io` ist
 immer kleingeschrieben, auch wenn das Repository Großbuchstaben hat.
+
+**Bei `ghcr.io` muss es ein klassischer Token sein.** Ein *Fine-grained token*
+— erkennbar am Anfang `github_pat_…` — wird dort abgewiesen, gleich welche
+Rechte du ihm gibst. Er klont das Repository anstandslos und scheitert dann
+beim Image mit `denied`, was nach einem fehlenden Recht aussieht und keines
+ist. Die Rückfrage sagt es dir, wenn im Formular so einer steht. Der
+klassische Token muss außerdem dem Account gehören, dem das Package gehört —
+bei einem fremden Repository also dem anderen.
 
 Öffentliche Images auf Docker Hub (`postgres:16-alpine`) werden dabei
 übergangen — sie brauchen keine Anmeldung, und eine Rückfrage bei jedem von

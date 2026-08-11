@@ -1,5 +1,29 @@
 # Änderungen
 
+## 2.7.2 — 11. August 2026
+
+**Ein Token für beide Anmeldungen — und eine Warnung, wenn es der falsche
+Sorte ist.**
+
+- **Das Git-Konto empfiehlt jetzt einen klassischen Token.** GitHub hat zwei
+  Sorten, und die engere ist überall die bessere bis auf eine Stelle: `ghcr.io`
+  weist Fine-grained Tokens (`github_pat_…`) grundsätzlich ab, gleich welche
+  Rechte sie haben. Sie klonen also anstandslos und scheitern zwei Schritte
+  später am Image. Ein klassischer Token mit `repo` und `read:packages` macht
+  alle drei Aufgaben: Liste, Klonen, Pull. Der Link unter dem Feld öffnet die
+  Seite mit beiden Scopes schon angehakt; daneben steht ein zweiter für den
+  Fine-grained Token, für alle ohne private Images.
+- **Die Rückfrage vor dem Deploy erkennt die falsche Sorte.** Steht im
+  Formular ein `github_pat_…` und soll er als Login für `ghcr.io` hinterlegt
+  werden, sagt die Rückfrage vorher, dass das nicht funktionieren wird — und
+  dass der klassische Token dem Account gehören muss, dem das Package gehört.
+- **`denied` gilt endlich als das, was es ist.** Das Muster, an dem das
+  Programm einen abgewiesenen Image-Pull von einem abgewiesenen Klonen
+  unterscheidet, kannte `unauthorized`, aber nicht Dockers `error from
+  registry: denied`. Genau bei dieser Meldung blieb die Erklärung deshalb aus,
+  die sagt, dass das Repository in Ordnung war. Sie kommt jetzt, und sie nennt
+  die Token-Sorte als erste der vier Ursachen.
+
 ## 2.7.1 — 11. August 2026
 
 **Die Adresse eines Git-Kontos wird ausgewählt statt getippt.**

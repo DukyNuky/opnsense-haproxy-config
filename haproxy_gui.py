@@ -659,12 +659,22 @@ class SystemDialog(tk.Toplevel):
         self.git_hint = ttk.Label(body, style="Hint.TLabel", wraplength=420,
                                   justify="left", text="")
         self.git_hint.grid(row=next(rows), column=0, sticky="w", pady=(6, 0))
-        link_label(body, self.colors, "Token anlegen",
+        links = ttk.Frame(body, style="Card.TFrame")
+        links.grid(row=next(rows), column=0, sticky="w", pady=(4, 0))
+        link_label(links, self.colors, "Token anlegen",
                    lambda: catalog.token_page(self.vars["url"].get())[0],
                    style="CardLink.TLabel",
-                   tip="Öffnet die Seite für neue Token auf dem Host von "
-                       "oben").grid(row=next(rows), column=0, sticky="w",
-                                    pady=(4, 0))
+                   tip="Öffnet die Seite für neue Token auf dem Host von oben "
+                       "— bei GitHub mit den nötigen Scopes schon "
+                       "angehakt").grid(row=0, column=0)
+        self.git_narrow = link_label(links, self.colors,
+                                     "oder Fine-grained Token",
+                                     catalog.GITHUB_FINE_GRAINED,
+                                     style="CardLink.TLabel",
+                                     tip="Engere Rechte: Contents Read-only. "
+                                         "Reicht für alles außer privaten "
+                                         "Images aus ghcr.io")
+        self.git_narrow.grid(row=0, column=1, padx=(14, 0))
         self.vars["url"].trace_add("write", lambda *_a: self._git_url_changed())
         self._git_rights()
 
@@ -723,13 +733,30 @@ class SystemDialog(tk.Toplevel):
         self.git_account.configure(text=text)
 
     def _git_rights(self):
-        rights = catalog.token_page(self.vars["url"].get())[1]
+        """What the token has to be allowed, said for the host in the form.
+
+        On GitHub that means the classic kind, and it is worth a sentence why:
+        the tighter token is the better one everywhere except at the registry,
+        and the registry is where the mistake only shows up -- two steps and
+        one form later, in a message about a right rather than about a kind.
+        """
+        address = self.vars["url"].get()
+        rights = catalog.token_page(address)[1]
+        text = (f"Lesen genügt. {rights}." if rights else
+                "Lesen genügt — der Token wird nur zum Auflisten der "
+                "Repositories und zum Klonen durch Portainer benutzt.")
+        if catalog.is_github(address):
+            text += (" Klassisch und nicht fine-grained, weil ghcr.io "
+                     "Fine-grained Tokens nicht annimmt: ein privates Image "
+                     "scheitert damit später mit „denied“. Wer keine privaten "
+                     "Images zieht, ist mit einem Fine-grained Token "
+                     "(Contents: Read-only) enger dran.")
         self.git_hint.configure(
-            text=(f"Lesen genügt. {rights}." if rights else
-                  "Lesen genügt — der Token wird nur zum Auflisten der "
-                  "Repositories und zum Klonen durch Portainer benutzt.")
+            text=text
             + " Der Token steht in der Konfigurationsdatei dieses Programms, "
               "sie liegt mit Rechten 600 im eigenen Benutzerordner.")
+        self.git_narrow.grid() if catalog.is_github(address) \
+            else self.git_narrow.grid_remove()
 
     def _build_portainer(self, body, rows, entry):
         """Token or user and password -- only one of the two is ever kept."""

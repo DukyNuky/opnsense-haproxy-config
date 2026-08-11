@@ -36,15 +36,28 @@ GITHUB_HOSTS = ("github.com", "www.github.com")
 GITHUB_API = "https://api.github.com"
 
 # Where a token for one of these is handed out, and what it has to be allowed
-# to do. Reading the repository is the whole job: Portainer clones it, nothing
-# is ever written back.
+# to do. Reading is the whole job: Portainer clones the repository and pulls
+# the image, nothing is ever written back.
+#
+# For GitHub this is the classic page and not the fine-grained one, which is
+# the newer and the tighter kind of token. The reason is the second login in a
+# deploy: ghcr.io, where a private image comes from, turns fine-grained tokens
+# away whatever they are allowed to do. One classic token does the listing,
+# the cloning and the pull; a fine-grained one does the first two and then
+# fails at the third with a message that reads like a missing right. The
+# scopes are put into the link, so the page opens with them already ticked.
 TOKEN_PAGES = {
-    "github.com": ("https://github.com/settings/personal-access-tokens/new",
-                   "Fine-grained token: Repository access → Only select "
-                   "repositories, Permissions → Contents: Read-only"),
+    "github.com": ("https://github.com/settings/tokens/new"
+                   "?scopes=repo,read:packages&description=opnsense-haproxy",
+                   "Klassischer Token mit den Scopes repo (Liste und Klonen) "
+                   "und read:packages (private Images von ghcr.io)"),
     "gitlab.com": ("https://gitlab.com/-/user_settings/personal_access_tokens",
-                   "Scope: read_api und read_repository"),
+                   "Scopes: read_api, read_repository und read_registry"),
 }
+
+# The other kind, for somebody who would rather keep the rights narrow and has
+# no private image to pull.
+GITHUB_FINE_GRAINED = "https://github.com/settings/personal-access-tokens/new"
 
 
 def host_of(url):

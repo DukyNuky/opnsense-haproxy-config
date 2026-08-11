@@ -762,11 +762,12 @@ class PortainerTab(ttk.Frame):
             if not unknown:
                 return True
             return messagebox.askyesno(
-                "Image aus einem Registry", self._registry_text(hosts, False),
+                "Image aus einem Registry",
+                self._registry_text(hosts, False, ""),
                 default=messagebox.YES, parent=parent)
         answer = messagebox.askyesnocancel(
-            "Image aus einem Registry", self._registry_text(hosts, True),
-            parent=parent)
+            "Image aus einem Registry",
+            self._registry_text(hosts, True, opts.password), parent=parent)
         if answer is None:
             return False
         if answer:
@@ -774,7 +775,7 @@ class PortainerTab(ttk.Frame):
         return True
 
     @staticmethod
-    def _registry_text(hosts, offer):
+    def _registry_text(hosts, offer, token):
         """What the images need, and what saying yes would do about it."""
         lines = ["Diese Images holt der Stack fertig von einem Registry:", ""]
         for entry in hosts:
@@ -792,6 +793,18 @@ class PortainerTab(ttk.Frame):
                           "ließe. Ist das Image privat, scheitert der Pull.",
                       "", "Trotzdem deployen?"]
             return "\n".join(lines)
+        # The token that just cloned the repository may be the wrong kind for
+        # the pull, and nothing about the message that follows would say so.
+        refused = [entry["host"] for entry in hosts
+                   if pcore.github_refuses_token(entry["host"], token)]
+        if refused:
+            lines += ["", "Achtung: Im Formular steht ein Fine-grained Token "
+                          "(github_pat_…). " + " und ".join(sorted(set(refused)))
+                      + " nimmt den nicht an, gleich welche Rechte er hat — "
+                        "dort geht nur ein klassischer Token mit dem Scope "
+                        "read:packages, und zwar von dem Account, dem das "
+                        "Package gehört. Hinterlegen lässt er sich trotzdem, "
+                        "der Pull scheitert dann mit „denied“."]
         replaces = [entry for entry in hosts if entry["id"]]
         lines += ["", "Ja: Benutzer und Token als Registry hinterlegen, für "
                       + ", ".join(entry["host"] for entry in hosts) + "."]
@@ -929,12 +942,14 @@ class PortainerTab(ttk.Frame):
         return ("= Das Repository war in Ordnung — geklont hat Portainer es, "
                 "abgewiesen wurde erst das Image. Für den Pull nimmt Portainer "
                 "nicht die Zugangsdaten des Stacks, sondern seine Registry-"
-                "Liste. Drei Dinge sind zu prüfen: Ist unter Registries ein "
-                "Eintrag für den Host des Images? Darf der Token dort lesen "
-                "(bei GitHub-Packages: read:packages)? Und stimmt der Image-"
-                "Name genau — bei ghcr.io alles klein? Wird das Image aus dem "
-                "Repository selbst gebaut (build: im Compose-File), braucht "
-                "es davon nichts.")
+                "Liste. Vier Dinge sind zu prüfen: Ist unter Registries ein "
+                "Eintrag für den Host des Images? Ist es dort ein klassischer "
+                "Token — ghcr.io weist Fine-grained Tokens (github_pat_…) ab, "
+                "gleich welche Rechte sie haben? Darf der Token lesen (bei "
+                "GitHub-Packages: read:packages, bei GitLab: read_registry)? "
+                "Und stimmt der Image-Name genau — bei ghcr.io alles klein? "
+                "Wird das Image aus dem Repository selbst gebaut (build: im "
+                "Compose-File), braucht es davon nichts.")
 
     @staticmethod
     def _conflict_hint(message):
@@ -1377,15 +1392,17 @@ class DeployDialog(tk.Toplevel):
                       show="•" if secret else "").grid(row=next(rows), column=0,
                                                        sticky="ew")
         ttk.Label(outer, style="Hint.TLabel", wraplength=360, justify="left",
-                  text="Lesen genügt. Bei einem GitHub Fine-grained token: "
-                       "Repository access → Only select repositories → dieses "
-                       "eine, dann Permissions → Repository permissions → "
-                       "Contents auf Read-only. Bei GitLab: Scope "
-                       "read_repository.\n\nHolt das Compose-File ein fertiges "
-                       "Image aus einem privaten Registry, statt es mit build: "
-                       "selbst zu bauen, braucht der Token dort zusätzlich "
-                       "Leserecht (GitHub: read:packages, GitLab: "
-                       "read_registry). Das Programm fragt vor dem Deploy "
+                  text="Lesen genügt. Bei GitHub ein klassischer Token mit dem "
+                       "Scope repo, bei GitLab die Scopes read_api und "
+                       "read_repository. Ein GitHub Fine-grained token mit "
+                       "Contents: Read-only tut es hier auch — aber nur "
+                       "hier.\n\nHolt das Compose-File ein fertiges Image aus "
+                       "einem privaten Registry, statt es mit build: selbst zu "
+                       "bauen, ist das eine zweite Anmeldung: GitHub braucht "
+                       "dafür read:packages, GitLab read_registry. Und ghcr.io "
+                       "nimmt ausschließlich klassische Token — ein "
+                       "Fine-grained wird dort abgewiesen, gleich welche "
+                       "Rechte er hat. Das Programm fragt vor dem Deploy "
                        "nach.").grid(row=next(rows), column=0,
                                      sticky="w", pady=(6, 0))
         links = ttk.Frame(outer, style="Card.TFrame")

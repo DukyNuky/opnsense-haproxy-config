@@ -42,6 +42,22 @@ SWARM_STACK, COMPOSE_STACK, KUBERNETES_STACK = 1, 2, 3
 DOCKER_HUB_HOSTS = ("docker.io", "index.docker.io", "registry-1.docker.io",
                     "registry.hub.docker.com")
 
+# GitHub's own registry, and the mark of the token it will not take. GitHub
+# hands out two kinds: a fine-grained one, which begins like this and is the
+# better token for everything else, and a classic one. The container registry
+# accepts only the classic kind, no matter what the fine-grained one is
+# allowed to do -- and it says no in the same words it uses for a missing
+# right, which is what makes the mistake so hard to see from the message.
+GITHUB_REGISTRY_HOSTS = ("ghcr.io", "docker.pkg.github.com")
+FINE_GRAINED_MARK = "github_pat_"
+
+
+def github_refuses_token(host, token):
+    """Whether that token cannot work at that registry, prefix aside."""
+    return (str(host or "").lower() in GITHUB_REGISTRY_HOSTS
+            and str(token or "").startswith(FINE_GRAINED_MARK))
+
+
 # Portainer's own number for a registry that is nothing but a host with a
 # login. The other kinds it knows (GitLab, ECR, Quay and their like) only add
 # fields for their own conveniences; the plain one reaches every registry that
@@ -382,7 +398,7 @@ def conflict_in(message):
 # What the daemon says when the image, not the repository, was refused. The
 # two are easy to mix up: both end in a deploy that failed over a login.
 REGISTRY_DENIED = re.compile(
-    r"from registry:\s*unauthorized|pull access denied|"
+    r"from registry:\s*(unauthorized|denied)|pull access denied|"
     r"unauthorized:\s*authentication required|no basic auth credentials|"
     r"denied:\s*requested access to the resource is denied", re.I)
 
