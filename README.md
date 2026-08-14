@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.7.2.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.7.2.zip)**
+**[opnsense-haproxy-2.8.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.8.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -667,6 +667,41 @@ Darunter links die Angaben zum Repository, rechts das Seltenere:
   einträgt, bekommt den Stack bei jedem Push neu ausgerollt.
 * **danach den Weg über HAProxy anbieten** — sobald die Container laufen, wird
   für den ersten veröffentlichten Port gleich das Fenster von oben geöffnet.
+
+### Wenn ein neuer Stack nicht hochkommt
+
+Portainer legt den Stack zuerst an und startet die Container danach. Geht dabei
+etwas schief — der häufigste Fall: ein Container wird nicht *healthy*, und
+alles, was per `depends_on` auf ihn wartet, startet Docker deshalb gar nicht
+erst —, dann bleibt sonst ein halber Stack stehen: ein Eintrag, der nie lief,
+und die Container, die es bis dahin geschafft hatten.
+
+**Das räumt das Programm auf.** Scheitert das Anlegen eines *neuen* Stacks,
+wird zurückgenommen, was dabei entstanden ist: der Stack, seine Container und
+das Netzwerk, das Compose für ihn gemacht hat. Danach sagt ein Fenster, woran
+es lag und was weg ist. Der Docker-Host steht wieder so da wie vorher, und ein
+zweiter Versuch fängt bei null an, statt an einem Namen zu scheitern, den die
+Leiche des ersten noch belegt.
+
+Ein paar Grenzen, die dabei gelten:
+
+* **Nur bei neuen Stacks.** *Neu deployen* fasst einen laufenden Stack an; dort
+  wird nichts entfernt, wenn es schiefgeht.
+* **Nur was dieser Versuch angelegt hat.** Welche Container es vorher schon
+  gab, wird vor dem Deploy festgehalten. Ein fremder Container, der zufällig
+  dasselbe Compose-Projekt im Label trägt, bleibt stehen.
+* **Benannte Volumes bleiben.** Weg sind nur die namenlosen, die zu einem
+  Container gehören — dasselbe, was `docker compose down` täte. Daten von einem
+  früheren Anlauf überleben also.
+* **Vorher wird das Log gelesen.** Mit dem Container verschwindet auch das,
+  was er zu sagen hatte, und bei einem Healthcheck, der nie grün wurde, steht
+  genau dort der Grund. Die letzten Zeilen landen deshalb im Protokoll unten,
+  bevor aufgeräumt wird.
+* **Antwortet Portainer gar nicht**, wird nichts angefasst. Eine abgerissene
+  Verbindung heißt nicht, dass der Deploy gescheitert ist — er kann noch
+  laufen. Dann steht im Protokoll, dass nachzusehen ist. (Für das Warten hat
+  das Programm 15 Minuten Geduld; ein Healthcheck mit mehreren Anläufen
+  braucht schnell mehr als eine Minute.)
 
 ### Die Variablen aus dem Repository holen
 

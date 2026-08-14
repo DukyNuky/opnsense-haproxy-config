@@ -15,6 +15,7 @@ import json
 import posixpath
 import re
 import ssl
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +25,13 @@ import opnsense_haproxy as core
 
 DEFAULT_COMPOSE_FILE = "docker-compose.yml"
 DEFAULT_INTERVAL = "5m"
+
+# Creating a stack is the one call that has real work behind it: Portainer
+# clones the repository, pulls the images and waits for `compose up` -- and a
+# service that waits for another one to become healthy waits again. The usual
+# half minute would cut that off in the middle, which is the worst moment to
+# stop listening: the answer never arrives, and the stack is created anyway.
+DEPLOY_TIMEOUT = 900
 
 # Where an environment file tends to sit, most telling name first. Every miss
 # costs Portainer a fresh clone of the repository, so the list is short and the
@@ -84,6 +92,19 @@ class PortainerError(core.ApiError):
         self.status = status
 
 
+class DeployFailed(PortainerError):
+    """A stack that did not come up, and what was taken away afterwards.
+
+    ``cleanup`` is what :func:`rollback_deploy` reports, so the window can say
+    what is gone as well as what went wrong -- the two halves of the same
+    message.
+    """
+
+    def __init__(self, message, cleanup=None, status=0):
+        super().__init__(message, status)
+        self.cleanup = cleanup or {}
+
+
 class Portainer:
     """The handful of Portainer calls this program makes.
 
@@ -122,20 +143,25 @@ class Portainer:
         self._jwt = token
         return token
 
-    def call(self, path, payload=None, method=None):
-        """Call an API endpoint; ``path`` starts after ``/api/``."""
+    def call(self, path, payload=None, method=None, timeout=None):
+        """Call an API endpoint; ``path`` starts after ``/api/``.
+
+        ``timeout`` is for the few calls that are allowed to take their time --
+        creating a stack waits for the whole ``compose up``.
+        """
         if not self.api_key and not self._jwt:
             self.login()
         try:
-            return self._send(path, payload, method)
+            return self._send(path, payload, method, timeout=timeout)
         except PortainerError as exc:
             # A token that has run out is the one error worth a second try.
             if exc.status != 401 or self.api_key:
                 raise
             self.login()
-            return self._send(path, payload, method)
+            return self._send(path, payload, method, timeout=timeout)
 
-    def _send(self, path, payload=None, method=None, authenticated=True):
+    def _send(self, path, payload=None, method=None, authenticated=True,
+              timeout=None):
         url = f"{self.base}/api/{path}"
         headers = {"Accept": "application/json"}
         if authenticated:
@@ -152,7 +178,7 @@ class Portainer:
         req = urllib.request.Request(url, data=data, headers=headers,
                                      method=method)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout,
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout,
                                         context=self._ctx) as resp:
                 body = resp.read().decode(errors="replace")
         except urllib.error.HTTPError as exc:
@@ -175,6 +201,36 @@ class Portainer:
         except json.JSONDecodeError:
             raise PortainerError(
                 f"non-JSON reply from {path}: {body[:200]}") from None
+
+    def _fetch(self, path):
+        """A GET whose answer is not JSON -- a container's log, notably.
+
+        Docker hands that one out as a byte stream, so it goes past ``_send``
+        and its json.loads. The login is the same, and so is the token that
+        may have run out in the meantime.
+        """
+        if not self.api_key and not self._jwt:
+            self.login()
+        headers = {"Accept": "*/*"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        else:
+            headers["Authorization"] = f"Bearer {self._jwt}"
+        req = urllib.request.Request(f"{self.base}/api/{path}", headers=headers,
+                                     method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout,
+                                        context=self._ctx) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            where = path.split("?", 1)[0]
+            raise PortainerError(
+                f"Portainer {exc.code} on {where}: "
+                f"{_message_of(exc.read().decode(errors='replace'))}",
+                exc.code) from None
+        except urllib.error.URLError as exc:
+            raise PortainerError(
+                f"cannot reach Portainer at {self.base}: {exc.reason}") from None
 
     # -- reading -----------------------------------------------------------
 
@@ -205,6 +261,25 @@ class Portainer:
         reply = self.call(f"endpoints/{endpoint_id}/docker/containers/json"
                           f"?all=1")
         return reply if isinstance(reply, list) else []
+
+    def networks(self, endpoint_id):
+        """The docker networks on that environment, with their labels.
+
+        A compose file makes one per stack and nothing removes it by itself,
+        so a deploy that has to be taken back has to look here too.
+        """
+        reply = self.call(f"endpoints/{endpoint_id}/docker/networks")
+        return reply if isinstance(reply, list) else []
+
+    def container_logs(self, endpoint_id, container_id, tail=40):
+        """The last lines a container wrote, stdout and stderr together.
+
+        Raw bytes: without a terminal Docker frames every chunk, which
+        ``docker_log_text`` unpicks.
+        """
+        return self._fetch(
+            f"endpoints/{endpoint_id}/docker/containers/{container_id}/logs"
+            f"?stdout=1&stderr=1&tail={int(tail)}")
 
     def registries(self):
         """The registries Portainer keeps a login for.
@@ -295,13 +370,14 @@ class Portainer:
         try:
             return self.call(
                 f"stacks/create/standalone/repository?endpointId={endpoint_id}",
-                body, method="POST")
+                body, method="POST", timeout=DEPLOY_TIMEOUT)
         except PortainerError as exc:
             if exc.status not in (400, 404, 405):
                 raise
             return self.call(
                 f"stacks?type={COMPOSE_STACK}&method=repository"
-                f"&endpointId={endpoint_id}", body, method="POST")
+                f"&endpointId={endpoint_id}", body, method="POST",
+                timeout=DEPLOY_TIMEOUT)
 
     def redeploy(self, stack, pull_image=True, prune=False, env=None,
                  username="", password=""):
@@ -341,6 +417,22 @@ class Portainer:
         }
         return self.call(f"stacks/{stack_id}?endpointId={endpoint_id}", body,
                          method="PUT")
+
+    def remove_container(self, endpoint_id, container_id):
+        """Take one container away, running or not.
+
+        ``v=true`` is what ``docker compose down`` does with the volumes: the
+        nameless ones this container was given go with it, a named one stays --
+        that is somebody's data.
+        """
+        return self.call(f"endpoints/{endpoint_id}/docker/containers/"
+                         f"{container_id}?force=true&v=true", method="DELETE")
+
+    def remove_network(self, endpoint_id, network_id):
+        """Take one docker network away -- the one a stack made for itself."""
+        return self.call(
+            f"endpoints/{endpoint_id}/docker/networks/{network_id}",
+            method="DELETE")
 
     def delete_stack(self, stack_id, endpoint_id, external=False):
         """Take the stack down and remove it: containers, networks, the lot.
@@ -411,6 +503,61 @@ def registry_refused(message):
     else is missing.
     """
     return bool(REGISTRY_DENIED.search(str(message or "")))
+
+
+# What compose says when it waited for one service before starting the next.
+# Both wordings name the container, which is the one thing worth having: it is
+# what a message should point at and what a log should be read from.
+UNHEALTHY = re.compile(
+    r'container\s+"?(?P<name>[^"\s,]+)"?\s+is unhealthy', re.I)
+EXITED_EARLY = re.compile(
+    r'container\s+"?(?P<name>[^"\s,]+)"?\s+exited\s*\((?P<code>\d+)\)', re.I)
+
+
+def start_failure_in(message):
+    """Which container kept the stack from coming up, out of the error text.
+
+    ``depends_on`` with a condition makes compose wait, and when the wait ends
+    badly it gives up on the whole stack -- the containers it had already
+    started keep running. Returns ``{"container", "kind", "code"}`` or None.
+    """
+    text = str(message or "")
+    found = UNHEALTHY.search(text)
+    if found:
+        return {"container": found.group("name").lstrip("/"),
+                "kind": "unhealthy", "code": None}
+    found = EXITED_EARLY.search(text)
+    if found:
+        return {"container": found.group("name").lstrip("/"),
+                "kind": "exited", "code": int(found.group("code"))}
+    return None
+
+
+def docker_log_text(raw, limit=40):
+    """A container's log as plain lines, however Docker framed it.
+
+    Without a terminal the daemon puts eight bytes in front of every chunk:
+    one for the stream it came from, three zeros, four for the length. With
+    one, the bytes are the text itself. The header is what tells them apart,
+    and a stream that stops making sense halfway is kept as far as it went --
+    this is being read to show somebody, not to parse.
+    """
+    text = raw if isinstance(raw, str) else _unframe(raw or b"")
+    lines = [line.rstrip() for line in text.replace("\r\n", "\n").split("\n")]
+    return [line for line in lines if line.strip()][-limit:]
+
+
+def _unframe(raw):
+    chunks, pos = [], 0
+    while pos + 8 <= len(raw):
+        if raw[pos] not in (0, 1, 2) or raw[pos + 1:pos + 4] != b"\x00\x00\x00":
+            if not chunks:
+                return raw.decode("utf-8", "replace")  # a terminal: plain text
+            break
+        size = int.from_bytes(raw[pos + 4:pos + 8], "big")
+        chunks.append(raw[pos + 8:pos + 8 + size])
+        pos += 8 + size
+    return b"".join(chunks).decode("utf-8", "replace")
 
 
 def _message_of(raw):
@@ -1230,6 +1377,120 @@ def ensure_registry(client, host, username, password, registry_id=0, name="",
         return False
 
 
+def last_words(client, endpoint_id, name, blame=None, keep=(), out=print):
+    """Read the log of the container that failed, while there still is one.
+
+    Removing a container removes its log with it, and for a health check that
+    never went green that log is the whole answer -- the error only says the
+    check failed, never why. So it is read out first and written into the same
+    report the failure is being told in.
+
+    ``blame`` is what :func:`start_failure_in` found; without it every
+    container of the stack that is not running gets a look.
+    """
+    kept = {str(entry) for entry in keep}
+    try:
+        containers = [entry for entry in client.containers(endpoint_id)
+                      if stack_of(entry) == name
+                      and str(entry.get("Id")) not in kept]
+    except core.ApiError:
+        return
+    wanted = (blame or {}).get("container", "")
+    if wanted:
+        containers = [entry for entry in containers
+                      if container_name(entry) == wanted] or containers
+    else:
+        containers = [entry for entry in containers
+                      if str(entry.get("State", "")) != "running"] or containers
+    for entry in containers[:2]:
+        label = container_name(entry)
+        try:
+            lines = docker_log_text(
+                client.container_logs(endpoint_id, entry.get("Id")), limit=20)
+        except core.ApiError as exc:
+            out(f"= {label} kept its log to itself: {exc}")
+            continue
+        if not lines:
+            out(f"= {label} wrote nothing at all")
+            continue
+        out(f"= what {label} said last:")
+        for line in lines:
+            out(f"    {line}")
+
+
+def rollback_deploy(client, endpoint_id, name, keep=(), out=print):
+    """Take away what a failed deploy left standing.
+
+    Portainer creates the stack first and starts the containers afterwards, so
+    a compose file that comes up badly leaves both behind: a stack that never
+    ran, and the containers that did start before compose gave up. Deleting the
+    stack takes its containers with it; whatever is still there afterwards is
+    found by the compose project label, and the network the stack made for
+    itself goes last -- Docker refuses it while anything is still attached.
+
+    ``keep`` are the container ids that were there before the deploy: a
+    container carrying the label but not the moment belongs to somebody else,
+    and nothing here may touch it. Named volumes stay, the same way
+    ``docker compose down`` leaves them.
+
+    Undoing must not hide what went wrong, so a removal that fails is a line
+    in the log rather than an exception. Returns what went and what would not.
+    """
+    gone = {"stack": "", "containers": [], "networks": [], "failed": []}
+    kept = {str(entry) for entry in keep}
+
+    def failed(what, exc):
+        gone["failed"].append(f"{what}: {exc}")
+        out(f"! could not remove {what}: {exc}", file=sys.stderr)
+
+    try:
+        mine = [stack for stack in client.stacks()
+                if str(stack.get("Name", "")) == name
+                and str(stack.get("EndpointId")) == str(endpoint_id)]
+    except core.ApiError as exc:
+        mine = []
+        failed(f"stack {name}", exc)
+    for stack in mine:
+        try:
+            client.delete_stack(stack.get("Id"), endpoint_id)
+            gone["stack"] = name
+            out(f"- stack {name} removed again", file=sys.stderr)
+        except core.ApiError as exc:
+            failed(f"stack {name}", exc)
+
+    try:
+        left = [entry for entry in client.containers(endpoint_id)
+                if stack_of(entry) == name and str(entry.get("Id")) not in kept]
+    except core.ApiError as exc:
+        left = []
+        failed(f"the containers of {name}", exc)
+    for entry in left:
+        label = container_name(entry)
+        try:
+            client.remove_container(endpoint_id, entry.get("Id"))
+            gone["containers"].append(label)
+            out(f"- container {label} removed", file=sys.stderr)
+        except core.ApiError as exc:
+            failed(f"container {label}", exc)
+
+    try:
+        nets = [net for net in client.networks(endpoint_id)
+                if str((net.get("Labels") or {}).get(
+                    "com.docker.compose.project", "")) == name]
+    except core.ApiError as exc:
+        nets = []
+        failed(f"the networks of {name}", exc)
+    for net in nets:
+        label = str(net.get("Name") or net.get("Id", ""))
+        try:
+            client.remove_network(endpoint_id, net.get("Id"))
+            gone["networks"].append(label)
+            out(f"- network {label} removed", file=sys.stderr)
+        except core.ApiError as exc:
+            failed(f"network {label}", exc)
+    return gone
+
+
 def deploy(client, opts, out=print):
     """Create a stack from a repository and say what happened while doing it.
 
@@ -1271,15 +1532,51 @@ def deploy(client, opts, out=print):
         else:
             out(f"auto update on webhook {auto.get('Webhook')}")
 
-    reply = client.deploy_repository(
-        opts.endpoint_id, name, opts.repository,
-        reference=getattr(opts, "reference", ""),
-        compose_file=getattr(opts, "compose_file", ""),
-        env=variables,
-        username=getattr(opts, "username", ""),
-        password=getattr(opts, "password", ""),
-        auto_update=auto,
-        skip_tls_verify=bool(getattr(opts, "skip_tls_verify", False)))
+    # Who was already there, so that undoing this can tell the containers it
+    # started apart from the ones it found. Not knowing is no reason to stop:
+    # the list is only needed if something goes wrong, and an empty one merely
+    # means the label has to speak for itself.
+    try:
+        before = [str(entry.get("Id")) for entry in
+                  client.containers(opts.endpoint_id)]
+    except core.ApiError:
+        before = []
+
+    try:
+        reply = client.deploy_repository(
+            opts.endpoint_id, name, opts.repository,
+            reference=getattr(opts, "reference", ""),
+            compose_file=getattr(opts, "compose_file", ""),
+            env=variables,
+            username=getattr(opts, "username", ""),
+            password=getattr(opts, "password", ""),
+            auto_update=auto,
+            skip_tls_verify=bool(getattr(opts, "skip_tls_verify", False)))
+    except core.ApiError as exc:
+        out(f"! {exc}", file=sys.stderr)
+        # An answer is what makes this a failure. Without one -- a timeout, a
+        # connection that broke -- Portainer may well be pulling images this
+        # very moment, and tearing down a deploy that is still running would be
+        # the one truly destructive thing this program could do.
+        if not getattr(exc, "status", 0):
+            out(f"= no answer from Portainer, so what became of {name} is not "
+                f"known here -- nothing was taken away. Reload in a minute and "
+                f"look before trying again.", file=sys.stderr)
+            raise
+        # This is a stack being made, not one being changed: nothing here was
+        # running a minute ago, so there is nothing to preserve and no reason
+        # to leave half of it standing.
+        out(f"{name} did not come up -- taking back what was created",
+            file=sys.stderr)
+        blame = start_failure_in(str(exc))
+        last_words(client, opts.endpoint_id, name, blame=blame, keep=before,
+                   out=out)
+        gone = rollback_deploy(client, opts.endpoint_id, name, keep=before,
+                               out=out)
+        gone["blame"] = blame
+        gone["name"] = name
+        raise DeployFailed(str(exc), cleanup=gone,
+                           status=getattr(exc, "status", 0)) from None
     stack_id = reply.get("Id")
     out(f"+ stack {name} created (id {stack_id})")
     return {"id": stack_id, "name": name, "stack": reply}
@@ -1394,16 +1691,18 @@ def remove_stack(client, stack, out=print):
 def run_step(operation, client, *args, log=None, **kwargs):
     """Run one step and collect its log, the way the OPNsense side does.
 
-    Returns ``{"ok", "log", "error", "result"}`` so a window can show the same
-    thing whether the step worked or not.
+    Returns ``{"ok", "log", "error", "result", "cleanup"}`` so a window can
+    show the same thing whether the step worked or not. ``cleanup`` is set
+    when the step undid itself -- see :class:`DeployFailed`.
     """
     recorder = log or core.LogRecorder()
     try:
         result = operation(client, *args, out=recorder, **kwargs)
     except (core.ApiError, core.UsageError) as exc:
         return {"ok": False, "log": recorder.lines, "error": str(exc),
-                "result": None}
-    return {"ok": True, "log": recorder.lines, "error": "", "result": result}
+                "result": None, "cleanup": getattr(exc, "cleanup", None)}
+    return {"ok": True, "log": recorder.lines, "error": "", "result": result,
+            "cleanup": None}
 
 
 # --------------------------------------------------------------------------

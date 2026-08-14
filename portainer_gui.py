@@ -906,6 +906,7 @@ class PortainerTab(ttk.Frame):
         if result.get("error"):
             lines.append({"text": result["error"], "level": "error"})
             hint = (self._registry_hint(result["error"])
+                    or self._health_hint(result["error"])
                     or self._conflict_hint(result["error"]))
             if hint:
                 lines.append({"text": hint, "level": "info"})
@@ -919,6 +920,7 @@ class PortainerTab(ttk.Frame):
                     self.client, created["Webhook"]), "level": "info"})
         self.app.write_log(title, lines, result["ok"])
         if not result["ok"]:
+            self._rolled_back(result)
             return
         name = result["result"]["name"]
         # Only after the containers are up does Docker know their ports, so
@@ -928,6 +930,99 @@ class PortainerTab(ttk.Frame):
             self.dialog.destroy()
         self.dialog = None
         self.after(1200, self.reload)
+
+    def _rolled_back(self, result):
+        """Say in one box what the log says in twenty lines.
+
+        A new stack that does not come up is taken away again by the deploy
+        itself, containers and all. That is the thing to be told: the form is
+        still open for a second try, and it should be clear that the second
+        try starts on an empty host rather than beside the remains of the
+        first.
+        """
+        cleanup = result.get("cleanup")
+        if not cleanup:
+            return
+        parent = self.dialog if (self.dialog is not None
+                                 and self.dialog.winfo_exists()) else self
+        messagebox.showerror("Deploy fehlgeschlagen",
+                             self._rollback_text(cleanup, result["error"]),
+                             parent=parent)
+        if cleanup.get("stack") or cleanup.get("containers"):
+            self.reload()
+
+    @staticmethod
+    def _rollback_text(cleanup, error):
+        """Why it failed, and what is gone again because of it."""
+        name = cleanup.get("name") or "Der Stack"
+        blame = cleanup.get("blame") or {}
+        lines = [f"„{name}“ ist nicht hochgekommen.", ""]
+        if blame.get("kind") == "unhealthy":
+            lines.append(f"Der Container {blame['container']} ist zwar "
+                         f"gestartet, sein Healthcheck aber nie grün geworden. "
+                         f"Was per depends_on auf ihn wartet, hat Docker "
+                         f"deshalb gar nicht erst angefasst.")
+        elif blame.get("kind") == "exited":
+            lines.append(f"Der Container {blame['container']} hat sich sofort "
+                         f"wieder beendet (Exit-Code {blame['code']}), und was "
+                         f"per depends_on auf ihn wartet, kam damit auch nicht "
+                         f"hoch.")
+        else:
+            lines.append(error)
+        gone = []
+        if cleanup.get("stack"):
+            gone.append("der Stack")
+        containers = cleanup.get("containers") or []
+        if containers:
+            gone.append(f"{len(containers)} Container"
+                        + (f" ({', '.join(containers[:4])}"
+                           + (" …)" if len(containers) > 4 else ")")))
+        networks = cleanup.get("networks") or []
+        if networks:
+            gone.append(f"{len(networks)} Netzwerk"
+                        + ("e" if len(networks) > 1 else ""))
+        lines.append("")
+        if gone:
+            lines.append("Wieder entfernt: " + ", ".join(gone) + ". Auf dem "
+                         "Docker-Host bleibt nichts von diesem Versuch liegen; "
+                         "benannte Volumes wurden nicht angerührt.")
+        elif not cleanup.get("failed"):
+            lines.append("Angelegt war noch nichts, das wieder wegzuräumen "
+                         "wäre.")
+        if cleanup.get("failed"):
+            lines += ["", "Das hier ließ sich nicht entfernen und muss von "
+                          "Hand weg:"]
+            lines += [f"    {entry}" for entry in cleanup["failed"]]
+        report = "Im Bericht unten steht der ganze Verlauf"
+        if blame.get("container"):
+            report += f", samt der letzten Log-Zeilen von {blame['container']}"
+        lines += ["", report + ". Ein zweiter Versuch fängt also bei null an."]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _health_hint(message):
+        """Compose's "is unhealthy", said in the words of the compose file.
+
+        The stack was refused as a whole, but the trouble is one container and
+        one healthcheck -- and that is where somebody has to look.
+        """
+        blame = pcore.start_failure_in(message)
+        if not blame:
+            return ""
+        if blame["kind"] == "unhealthy":
+            return (f"= Der Container {blame['container']} lief, wurde aber "
+                    f"nicht gesund: sein Healthcheck ist nie durchgekommen, und "
+                    f"was per depends_on darauf wartet, startet Docker dann "
+                    f"nicht. Meist ist es eines von dreien — der Dienst braucht "
+                    f"länger, als start_period ihm gibt; der Test greift ins "
+                    f"Leere, weil das Image gar kein curl oder wget hat; oder "
+                    f"er fragt den falschen Port oder Pfad ab. Der Port im "
+                    f"Healthcheck ist der im Container, nicht der auf dem Host.")
+        return (f"= Der Container {blame['container']} hat sich gleich wieder "
+                f"beendet (Exit-Code {blame['code']}), und was per depends_on "
+                f"auf ihn wartet, kam damit auch nicht hoch. Fehlt ihm eine "
+                f"Variable oder ein Verzeichnis, steht das in seinen letzten "
+                f"Log-Zeilen weiter oben.")
 
     @staticmethod
     def _registry_hint(message):

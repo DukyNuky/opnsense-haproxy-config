@@ -1,5 +1,43 @@
 # Änderungen
 
+## 2.8.0 — 14. August 2026
+
+**Ein neuer Stack, der nicht hochkommt, räumt hinter sich auf.**
+
+- **Scheitert das Anlegen eines neuen Stacks, wird zurückgenommen, was dabei
+  entstanden ist** — der Stack, seine Container und das Netzwerk, das Compose
+  für ihn gemacht hat. Portainer legt den Stack nämlich zuerst an und startet
+  die Container danach; ging dabei etwas schief, blieb bisher ein halber Stack
+  stehen: ein Eintrag, der nie lief, und die Container, die es bis dahin
+  geschafft hatten. Der zweite Versuch scheiterte dann gern an einem
+  Container-Namen, den die Leiche des ersten noch belegte. Nur bei **neuen**
+  Stacks — *Neu deployen* fasst einen laufenden Stack an und lässt ihn stehen.
+- **Angefasst wird nur, was dieser Versuch angelegt hat.** Welche Container es
+  vorher schon gab, wird vor dem Deploy festgehalten; ein fremder Container,
+  der zufällig dasselbe Compose-Projekt im Label trägt, bleibt unberührt.
+  Benannte Volumes bleiben ebenfalls — weg sind nur die namenlosen, dasselbe,
+  was `docker compose down` täte.
+- **Ein Fenster sagt, woran es lag und was weg ist.** Der häufigste Fall hat
+  jetzt seine eigene Erklärung: ein Container, der nicht *healthy* wird, hält
+  über `depends_on` den ganzen Stack auf. Dazu die drei üblichen Ursachen —
+  der Dienst braucht länger, als `start_period` ihm gibt; der Test greift ins
+  Leere, weil das Image gar kein `curl` oder `wget` hat; oder er fragt den
+  falschen Port ab. Ein Container, der sich sofort wieder beendet, wird mit
+  seinem Exit-Code genannt.
+- **Vorher wird das Log des schuldigen Containers gelesen.** Mit dem Container
+  verschwindet auch das, was er zu sagen hatte, und bei einem Healthcheck, der
+  nie grün wurde, steht genau dort der Grund. Die letzten Zeilen landen deshalb
+  im Protokoll, bevor aufgeräumt wird.
+- **Beim Anlegen eines Stacks wartet das Programm jetzt 15 Minuten statt einer
+  halben.** Portainer klont, zieht die Images und wartet auf `compose up` — ein
+  Healthcheck mit mehreren Anläufen braucht schnell mehr als eine Minute. Die
+  bisherige Frist schnitt mitten hinein, im denkbar schlechtesten Moment: die
+  Antwort kam nie an, der Stack entstand trotzdem.
+- **Antwortet Portainer gar nicht, wird nichts entfernt.** Eine abgerissene
+  Verbindung heißt nicht, dass der Deploy gescheitert ist — er kann noch
+  laufen. Dann steht im Protokoll, dass nachzusehen ist, statt dass ein Deploy
+  mitten im Lauf abgeräumt wird.
+
 ## 2.7.2 — 11. August 2026
 
 **Ein Token für beide Anmeldungen — und eine Warnung, wenn es der falsche
