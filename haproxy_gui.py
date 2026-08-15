@@ -2991,7 +2991,10 @@ class App(tk.Tk):
         not a credential, and writing the config would rewrite the profiles.
         """
         chosen = dict(self.prefs.get("portainer_endpoint") or {})
-        chosen[self.active.get("portainer", "")] = endpoint_id
+        name = self.active.get("portainer", "")
+        if chosen.get(name) == endpoint_id:
+            return  # already written down; every reading says it again
+        chosen[name] = endpoint_id
         self.prefs["portainer_endpoint"] = chosen
         save_prefs(self.prefs)
 
@@ -3324,7 +3327,10 @@ class App(tk.Tk):
             portainer=name)
         self.portainer.use_profile(self.profile)
         self._fill_switcher()
-        self.portainer.reload()
+        # a Portainer that was read a moment ago comes back with what it said
+        # then; only one nobody has looked at yet is asked now
+        if not self.portainer.connected:
+            self.portainer.reload()
 
     def switch_adguard(self, name):
         """Show another AdGuard, and let the form's picker follow along.
@@ -3351,7 +3357,13 @@ class App(tk.Tk):
         it. Then Portainer, which is what a deploy actually needs. The form and
         the reading of the repository come last, from ``_loaded`` over there,
         once there is an environment to send the stack to.
+
+        Unless the pair asked for is the pair in hand, which is the usual
+        answer: then nothing is taken up at all. Being asked where a stack
+        should go must not cost a round of logins to the two machines that are
+        already logged into.
         """
+        in_hand = self._pair_in_hand(opnsense, portainer)
         if portainer and core.find_system(self.systems, "portainer", portainer):
             self.active["portainer"] = portainer
         if opnsense and core.find_system(self.systems, "opnsense", opnsense):
@@ -3362,17 +3374,39 @@ class App(tk.Tk):
         self._write_settings()
 
         self.portainer.pending_deploy = preset
+        if in_hand:
+            self.portainer.start_pending_deploy()
+            return
         self._use_active(connect=bool(opnsense))
         self._fill_switcher()
+        if self.busy:
+            return  # the firewall is being read; the hand-over follows it
         # Nothing was started when there is no firewall to reach, or none was
         # chosen -- then the Portainer half goes now rather than waiting for a
         # hand-over that will never come.
-        if not self.busy:
-            self.portainer.reload()
+        self._hand_over_to_portainer()
+
+    def _pair_in_hand(self, opnsense, portainer):
+        """Whether what was just chosen is what is connected right now.
+
+        The firewall only counts where one was chosen: „ohne OPNsense“ is an
+        answer about this deploy, not a reason to drop a connection.
+        """
+        if not self.portainer.connected:
+            return False
+        if portainer and portainer != self.active.get("portainer"):
+            return False
+        if not opnsense:
+            return True
+        return self.connected and opnsense == self.active.get("opnsense")
 
     def _hand_over_to_portainer(self):
         """After the firewall: connect Portainer, if a deploy is waiting."""
-        if self.portainer.pending_deploy is None or self.portainer.connected:
+        if self.portainer.pending_deploy is None:
+            return
+        if self.portainer.connected:
+            # the reading of this one is still in hand -- straight to the form
+            self.portainer.start_pending_deploy()
             return
         self.portainer.reload()
 
@@ -3413,6 +3447,9 @@ class App(tk.Tk):
         self.wait_window(dialog)
         self._fill_switcher()
         self.args.insecure = False
+        # an address or a token may be a different one now, so what was read
+        # from the old ones says nothing any more
+        self.portainer.forget_cache()
         self._use_active()
 
     def _paint_install_button(self):

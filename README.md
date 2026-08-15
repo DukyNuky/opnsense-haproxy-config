@@ -82,7 +82,7 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.8.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.8.0.zip)**
+**[opnsense-haproxy-2.9.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.9.0.zip)**
 herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
@@ -274,6 +274,14 @@ dorthin.
 **Neu laden**. Beim Wechsel der Firewall und nach dem Schließen der
 Einstellungen wird automatisch gelesen — das ist ja schon die Ansage, dass es
 losgehen soll.
+
+Beim Wechsel zwischen zwei **Portainern** wird dagegen nicht jedes Mal neu
+gelesen: Was einer vor höchstens fünf Minuten gesagt hat, steht sofort wieder
+da — ohne Anmeldung und ohne Wartezeit. **Neu laden** fragt trotzdem jederzeit
+frisch nach, und nach jedem Deploy, jedem *Neu deployen* und jedem Löschen tut
+das Programm es von allein. Nach dem Schließen der Einstellungen gilt nichts
+Gemerktes mehr — dort kann eine Adresse oder ein Token ein anderer geworden
+sein.
 
 **Der Tab selbst** zeigt über die ganze Breite die bestehenden Hosts, sortiert
 nach Public Service. Über der Liste stehen die zwei Knöpfe, mit denen etwas
@@ -569,28 +577,36 @@ Repository passt. Favoriten stehen in derselben Datei wie die Systeme.
 **Meine Repos** listet auf, was der Token eines Git-Kontos sehen darf, private
 wie öffentliche. Deployst du eines davon, geht das Formular auf mit Repository,
 Pfad **und den Zugangsdaten dieses Kontos in den sichtbaren Feldern** — nichts
-wird heimlich mitgeschickt, und du kannst es vor dem Deployen noch ändern.
+wird heimlich mitgeschickt, und du kannst es vor dem Deployen noch ändern. Die
+Liste wird nach dem ersten Lesen eine Viertelstunde lang behalten, auch über
+das Schließen des Fensters hinweg; ↻ liest sofort neu.
 
-Vor einem Deploy wird geprüft, ob **beides** verbunden ist — Portainer für den
-Stack, OPNsense für den Weg über HAProxy gleich danach. Fehlt eines, kommt
-*Wohin deployen?*; wer dort *— keiner —* als OPNsense wählt, wird in dieser
-Sitzung nicht wieder gefragt.
+**Vor jedem Deploy aus dem Katalog kommt *Wohin deployen?*** — der
+**Portainer**, auf den der Stack geht, und die **OPNsense** für den Weg über
+HAProxy gleich danach. Denn aus einer Liste heraus steht nirgends, für welchen
+von zwei Docker-Hosts ein Stack gedacht ist; wer nur einen hat, drückt Enter,
+denn vorgewählt ist, was zuletzt benutzt wurde. Die OPNsense darf dabei
+*— keiner —* bleiben; deployt wird trotzdem, der Weg über HAProxy lässt sich
+später nachholen, und in dieser Sitzung wird nicht wieder danach gefragt.
+
+**Ist beides schon verbunden, wird nichts neu aufgebaut.** Der Knopf heißt dann
+**Weiter** und das Formular geht ohne eine einzige Anmeldung auf. Steht dort
+etwas anderes als das, was gerade in Gebrauch ist, heißt er **Verbinden** — dann
+verbindet das Programm der Reihe nach und macht von allein weiter, wo du
+geklickt hast.
 
 Der Katalog lässt sich auch ohne Verbindung durchsehen — für *Meine Repos*
-genügt der Token, Portainer wird dafür nicht gebraucht. Erst zum **Deployen**
-muss verbunden sein, und wenn es das nicht ist, fragt **Wohin deployen?** in
-einem Zug nach beidem: dem **Portainer**, auf den der Stack geht, und der
-**OPNsense** für den Weg über HAProxy danach. Die OPNsense darf dabei
-*— keiner —* bleiben; deployt wird trotzdem, der Weg über HAProxy lässt sich
-später nachholen. Danach verbindet das Programm beides der Reihe nach und macht
-von allein weiter, wo du geklickt hast.
+genügt der Token, Portainer wird dafür nicht gebraucht. Gebraucht wird er erst
+zum **Deployen**.
 
 In allen drei Listen ist **Deployen** dasselbe: das Fenster *Neuer Stack* geht
-auf, vorausgefüllt — und weil aus einer Liste heraus niemand wissen kann, was
-so ein Stack braucht, wird die **Compose-Datei gleich gelesen** und ihre
-Variablen stehen im Feld, bevor du danach suchen musst. Es ist derselbe
-Vorgang wie der Knopf *aus dem Repository*, nur ungefragt. Name, Variablen und alles Übrige bleiben deine Sache — der
-Katalog spart das Abtippen, nicht das Nachdenken.
+auf, vorausgefüllt, und der Katalog geht zu — seine Arbeit ist getan, sobald
+der Eintrag im Formular steht, und zwei Fenster übereinander sind eines zu
+viel. Weil aus einer Liste heraus niemand wissen kann, was so ein Stack
+braucht, wird die **Compose-Datei gleich gelesen** und ihre Variablen stehen im
+Feld, bevor du danach suchen musst. Es ist derselbe Vorgang wie der Knopf *aus
+dem Repository*, nur ungefragt. Name, Variablen und alles Übrige bleiben deine
+Sache — der Katalog spart das Abtippen, nicht das Nachdenken.
 
 ### Ein Git-Konto einrichten
 

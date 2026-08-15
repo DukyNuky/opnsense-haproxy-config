@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 

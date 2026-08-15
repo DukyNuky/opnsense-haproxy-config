@@ -1,5 +1,36 @@
 # Änderungen
 
+## 2.9.0 — 16. August 2026
+
+**Der Katalog fragt, wohin — und macht danach den Weg frei.**
+
+- **Vor jedem Deploy aus dem Katalog wird gefragt, wohin er geht.** *Wohin
+  deployen?* kam bisher nur, wenn etwas nicht verbunden war; sonst landete der
+  Stack stillschweigend auf dem Portainer, der gerade ausgewählt war. Aus einer
+  Liste heraus steht aber nirgends, für welchen von zwei Docker-Hosts ein Stack
+  gedacht ist. Jetzt kommt die Frage immer, und zwar vor dem Formular, nicht
+  nach dem Ausfüllen: **Portainer** und **OPNsense**, beides vorgewählt mit dem,
+  was zuletzt benutzt wurde — ein Druck auf Enter, wer nur eines von jedem hat.
+- **Ist das Gewählte schon verbunden, wird nichts neu aufgebaut.** Der Knopf
+  heißt dann **Weiter** statt **Verbinden**, und das Formular geht ohne eine
+  einzige Anmeldung auf. Vorher hieß jede Antwort auf diese Frage: beide
+  Systeme noch einmal von vorn.
+- **Der Katalog geht zu, sobald das Formular offen ist.** Er blieb hinter dem
+  neuen Fenster stehen, obwohl seine Arbeit getan war — der Eintrag stand ja im
+  Formular.
+- **Ein Portainer, der gerade gelesen wurde, wird nicht gleich wieder
+  gelesen.** Beim Umschalten zwischen zwei Portainern stand bisher jedes Mal
+  eine neue Runde Anmeldung, Umgebungen, Stacks und Container an — für eine
+  Antwort, die eben erst gegeben worden war. Sie hält jetzt fünf Minuten.
+  **Neu laden** fragt trotzdem jederzeit frisch nach, und nach jedem Deploy,
+  jedem *Neu deployen* und jedem Löschen tut das Programm es von allein. Nach
+  dem Schließen der Einstellungen gilt nichts Gemerktes mehr — dort kann eine
+  Adresse oder ein Token ein anderer geworden sein.
+- **Auch *Meine Repos* wird behalten**, eine Viertelstunde lang und über das
+  Schließen des Katalogs hinweg. Sonst hätte das zugehende Fenster jedes
+  Öffnen mit einer neuen Abfrage des ganzen Git-Kontos bezahlt. ↻ liest
+  weiterhin sofort neu.
+
 ## 2.8.0 — 14. August 2026
 
 **Ein neuer Stack, der nicht hochkommt, räumt hinter sich auf.**

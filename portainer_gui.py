@@ -48,6 +48,17 @@ OWN = "Meine Repos"
 # host wants root, and 80 and 443 belong to whatever is already listening.
 FIRST_FREE_PORT = 8000
 
+# How long a reading of a Portainer stays good enough to show without asking
+# again. Switching between two of them, or coming back from the catalog, then
+# costs nothing; "Neu laden" is what asks for a fresh one, and every deploy
+# and every deletion reads again by itself.
+STATE_MAX_AGE = 5 * 60
+
+# The same for the list of repositories an account can see. It is a page of
+# GitHub or GitLab per call, and it changes when somebody creates a repository
+# -- not between two clicks in the catalog.
+REPOS_MAX_AGE = 15 * 60
+
 
 class PortainerTab(ttk.Frame):
     """Stacks, containers and their published ports -- and the way to HAProxy."""
@@ -60,7 +71,14 @@ class PortainerTab(ttk.Frame):
         self.problem = ""
         self.connected = False
         self.state = None
+        self.name = ""  # which Portainer the client in hand belongs to
         self.endpoint_id = None
+        # the last reading per Portainer, so switching back to one that was
+        # just looked at does not mean asking it everything again
+        self.cache = {}
+        # and the same for the repositories of a Git account, which the
+        # catalog window used to lose every time it was closed
+        self.repos = {}
         self.last_deploy = None
         self.link_after_deploy = True
         self.dialog = None
@@ -143,16 +161,49 @@ class PortainerTab(ttk.Frame):
         """Take up the Portainer part of the connection that was just chosen."""
         self.connected = False
         self.state = None
+        self.name = (profile.get("portainer") or {}).get("name", "")
         self.client, self.settings = pcore.client_from_config(
             profile, insecure=getattr(self.app.args, "insecure", False))
         self.problem = self.settings.get("error", "")
         # remembered under the Portainer's own name: with two Docker hosts on
         # one firewall, the environment of the one is no answer for the other
-        remembered = (self.app.prefs.get("portainer_endpoint") or {}).get(
-            (profile.get("portainer") or {}).get("name", ""))
+        remembered = (self.app.prefs.get("portainer_endpoint") or {}).get(self.name)
         self.endpoint_id = self.settings.get("endpoint_id") or remembered
         self.endpoint_box.grid_remove()
+        kept = self._kept_state()
+        if kept is not None:
+            self._show(kept)
+            return
         self.render()
+
+    def _kept_state(self):
+        """The last reading of this Portainer, while it is still worth showing.
+
+        Every switch used to be a fresh round of calls for an answer that had
+        just been given: stacks, containers and ports of a machine nobody had
+        touched in the meantime. The reading is kept per Portainer instead, and
+        asking again is what the connect button is for -- as is every deploy,
+        every redeploy and every deletion, which read again by themselves.
+        """
+        if not self.client or not self.name:
+            return None
+        kept = self.cache.get(self.name)
+        if not kept or time.time() - kept["read"] > STATE_MAX_AGE:
+            return None
+        state = kept["state"]
+        if self.endpoint_id is not None and state["endpoint"]["id"] != self.endpoint_id:
+            return None  # it was read for another environment of this one
+        return state
+
+    def forget_cache(self):
+        """Drop what was read: the systems it was read from may be different.
+
+        Called when the settings were edited. An address, a token or a whole
+        Portainer can have changed there, and a reading from before that says
+        nothing about what is there now.
+        """
+        self.cache.clear()
+        self.repos.clear()
 
     @property
     def configured(self):
@@ -200,12 +251,25 @@ class PortainerTab(ttk.Frame):
 
     def _failed(self, _error):
         self.connected = False
+        # what we knew about this one is no answer any more: whatever went
+        # wrong, the next look should be a real one
+        self.cache.pop(self.name, None)
         self.pending_deploy = None  # whatever it was waiting for cannot happen
         self.app.paint_connection()
         self.render()
 
     def _loaded(self, state):
         self.app.set_busy(False)
+        if self.name:
+            self.cache[self.name] = {"read": time.time(), "state": state}
+        self._show(state)
+        self.start_pending_deploy()
+        if self.last_deploy:
+            self._offer_link(self.last_deploy)
+            self.last_deploy = None
+
+    def _show(self, state):
+        """Put a reading of Portainer on the screen -- a fresh one or a kept."""
         self.connected = True
         self.state = state
         self.endpoint_id = state["endpoint"]["id"]
@@ -218,12 +282,6 @@ class PortainerTab(ttk.Frame):
         if self.dialog is not None and self.dialog.winfo_exists():
             self.dialog.refresh_target()
         self.render()
-        if self.pending_deploy is not None:
-            preset, self.pending_deploy = self.pending_deploy, None
-            self.open_deploy(preset, parent=self.catalog)
-        if self.last_deploy:
-            self._offer_link(self.last_deploy)
-            self.last_deploy = None
 
     def _endpoint_changed(self):
         self.choose_endpoint(self.var_endpoint.get())
@@ -466,21 +524,45 @@ class PortainerTab(ttk.Frame):
             return
         self.catalog = CatalogDialog(self.app, self)
 
+    def close_catalog(self):
+        """The collection has done its job once the form for one entry is up.
+
+        It was a window in front of a window in front of the list, and the one
+        underneath was no longer the thing being worked on -- the entry it was
+        picked from is in the form, and the form is where the deploy is now.
+        """
+        if self.catalog is not None and self.catalog.winfo_exists():
+            self.catalog.destroy()
+        self.catalog = None
+
     def deploy_entry(self, entry, parent=None):
         """Open the deploy form with one entry of the collection filled in.
 
         The credentials come from the Git account that matches the host of the
         repository, so an own repository needs no more than a click -- and they
         are filled into the visible fields rather than sent along quietly.
+
+        Where the stack goes is asked first, every time: the catalog is a list
+        of things to install, not of things to install *here*, and with two
+        Portainers the one that happens to be selected is a coin toss. It is
+        one dialog, before anything is filled in, and it comes up with what was
+        used last time already chosen.
         """
         username, token = cat.credentials_for(self.app.systems,
                                               entry.get("repository", ""))
         preset = dict(entry)
         preset["username"], preset["password"] = username, token
         preset["read_env"] = True
-        self.open_deploy(preset, parent=parent)
+        self.open_deploy(preset, parent=parent, ask=True)
 
-    def open_deploy(self, preset=None, parent=None):
+    def start_pending_deploy(self):
+        """Open the form for the entry that was waiting for a connection."""
+        if self.pending_deploy is None:
+            return
+        preset, self.pending_deploy = self.pending_deploy, None
+        self.open_deploy(preset, parent=self.catalog)
+
+    def open_deploy(self, preset=None, parent=None, ask=False):
         """The form for a new stack, in a window of its own.
 
         It used to be a column squeezed against the left edge of the tab, where
@@ -492,6 +574,9 @@ class PortainerTab(ttk.Frame):
         Anything asked back has to appear in front of *that* window: a modal
         box belonging to the main window opens behind the one being looked at,
         holds the input, and looks for all the world like a freeze.
+
+        ``ask`` is set where the pair has to be settled first even though
+        something is connected already -- a deploy from the catalog.
         """
         asked = parent if parent is not None else self.app
         if self.dialog is not None and self.dialog.winfo_exists():
@@ -499,8 +584,10 @@ class PortainerTab(ttk.Frame):
                 self.dialog.fill_in(preset)
             self.dialog.lift()
             self.dialog.focus_set()
+            self.close_catalog()
             return
-        if not self.connected or not (self.app.connected or self.skip_opnsense):
+        if ask or not self.connected or not (self.app.connected
+                                             or self.skip_opnsense):
             # Both halves are asked about, not just the one the deploy itself
             # needs: the way over HAProxy is offered the moment the stack runs,
             # and a firewall that is not connected turns that offer into a
@@ -508,6 +595,7 @@ class PortainerTab(ttk.Frame):
             self._ask_target(preset, asked)
             return
         self.dialog = DeployDialog(self.app, self)
+        self.close_catalog()
         if preset:
             self.dialog.fill_in(preset)
             self._read_preset_env(preset)
@@ -1928,23 +2016,38 @@ class CatalogDialog(tk.Toplevel):
             self.render()
 
     def _load_own(self, force=False):
+        """The repositories of the chosen account -- read once, then kept.
+
+        The list is kept on the tab rather than here: this window is closed
+        every time a deploy starts from it, and reading a whole Git account
+        again because somebody opened the catalog a second time is exactly the
+        wait that is not worth anything. ↻ is what asks again.
+        """
         account = self._account()
         if not account:
             self.own, self.own_from = [], ""
             self.render()
             return
-        if not force and self.own_from == account.get("name"):
+        name = account.get("name", "")
+        if not force and self.own_from == name:
+            self.render()
+            return
+        kept = self.tab.repos.get(name)
+        if not force and kept and time.time() - kept["read"] <= REPOS_MAX_AGE:
+            self.own, self.own_from = list(kept["entries"]), name
             self.render()
             return
         self.app.run_async(lambda _report: cat.own_repos(account),
                            self._own_loaded, on_error=self._failed,
-                           activity=f"lese die Repositories von "
-                                    f"{account.get('name', '')} …")
+                           activity=f"lese die Repositories von {name} …")
 
     def _own_loaded(self, entries):
         self.app.set_busy(False)
         self.own = entries
         self.own_from = self._account().get("name", "")
+        if self.own_from:
+            self.tab.repos[self.own_from] = {"read": time.time(),
+                                             "entries": entries}
         if self.winfo_exists():
             self.render()
 
@@ -2095,6 +2198,12 @@ class TargetDialog(tk.Toplevel):
     own repositories from a token. Rather than sending them to the header for
     one thing and to the settings for another, both are chosen here, and the
     program takes it from there.
+
+    It is asked before every deploy from the catalog, connected or not: a stack
+    picked from a list says nothing about which of two Docker hosts it is meant
+    for, and the answer is worth more than a dialog costs. What is already in
+    use is preselected and needs one press of Return -- and where it is also
+    already connected, nothing is built up again.
     """
 
     def __init__(self, parent, app, portainer_ready=False, opnsense_ready=False):
@@ -2102,6 +2211,11 @@ class TargetDialog(tk.Toplevel):
         self.app = app
         self.colors = colors = app.colors
         self.result = None
+        # which of the two, as they stand, need nothing done to them
+        self.live = {"portainer": app.active.get("portainer", "") if portainer_ready
+                     else "",
+                     "opnsense": app.active.get("opnsense", "") if opnsense_ready
+                     else ""}
         self.title("Wohin deployen?")
         self.transient(parent)
         self.configure(bg=colors["bg"])
@@ -2163,14 +2277,28 @@ class TargetDialog(tk.Toplevel):
         buttons.grid(row=0, column=1, sticky="e")
         ttk.Button(buttons, text="Abbrechen", style="Ghost.TButton",
                    command=self.destroy).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(buttons, text="Verbinden", style="Accent.TButton",
-                   command=self._go).grid(row=0, column=1)
+        # The word on it is the whole difference between the two ways out of
+        # here: what is connected already goes straight on to the form.
+        self.go_button = ttk.Button(buttons, text="Weiter",
+                                    style="Accent.TButton", command=self._go)
+        self.go_button.grid(row=0, column=1)
+        for var in (self.var_portainer, self.var_opnsense):
+            var.trace_add("write", lambda *_a: self._paint_go())
+        self._paint_go()
 
         self.bind("<Return>", lambda _e: self._go())
         self.bind("<Escape>", lambda _e: self.destroy())
         self.update_idletasks()
         _centre(self, parent)
         self.grab_set()
+
+    def _paint_go(self):
+        """Say whether pressing it costs a connection or opens the form."""
+        firewall = self.var_opnsense.get()
+        fresh = (self.var_portainer.get() != self.live["portainer"]
+                 or (firewall != ui.NO_LINK
+                     and firewall != self.live["opnsense"]))
+        self.go_button.configure(text="Verbinden" if fresh else "Weiter")
 
     def _settings(self):
         """The way out for what is not in the lists yet -- in front of this."""
