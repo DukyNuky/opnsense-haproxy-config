@@ -516,6 +516,15 @@ class PortainerTab(ttk.Frame):
                 buttons.extend(window.busy_buttons())
         return tuple(buttons)
 
+    def _dialog_busy(self, text):
+        """Show the same activity in the deploy dialog, which sits in front."""
+        if self.dialog is not None and self.dialog.winfo_exists():
+            self.dialog.show_busy(text)
+
+    def _dialog_idle(self):
+        if self.dialog is not None and self.dialog.winfo_exists():
+            self.dialog.hide_busy()
+
     def open_catalog(self):
         """The collection to deploy from, in a window of its own."""
         if self.catalog is not None and self.catalog.winfo_exists():
@@ -671,6 +680,7 @@ class PortainerTab(ttk.Frame):
             skip_tls_verify=values["skip_tls_verify"],
         )
         client = self.client
+        self._dialog_busy("lese das Repository …")
         self.app.run_async(
             lambda report: pcore.run_step(pcore.discover_env, client, opts,
                                           log=ui.LiveLog(report)),
@@ -678,6 +688,7 @@ class PortainerTab(ttk.Frame):
 
     def _env_found(self, result):
         self.app.set_busy(False)
+        self._dialog_idle()
         lines = list(result["log"])
         if result.get("error"):
             lines.append({"text": result["error"], "level": "error"})
@@ -793,6 +804,7 @@ class PortainerTab(ttk.Frame):
         self.pending = opts
         client = self.client
         state = self.state
+        self._dialog_busy(f"prüfe {name} …")
         self.app.run_async(
             lambda report: pcore.run_step(pcore.check_deploy, client, opts,
                                           state, log=ui.LiveLog(report)),
@@ -801,6 +813,7 @@ class PortainerTab(ttk.Frame):
     def _checked(self, result):
         """What the environment already has, before anything is created."""
         self.app.set_busy(False)
+        self._dialog_idle()
         opts, self.pending = self.pending, None
         if opts is None:
             return
@@ -975,6 +988,7 @@ class PortainerTab(ttk.Frame):
 
     def _start_deploy(self, opts):
         client = self.client
+        self._dialog_busy(f"deploye {opts.name} …")
         self.app.run_async(
             lambda report: pcore.run_step(pcore.deploy, client, opts,
                                           log=ui.LiveLog(report)),
@@ -990,6 +1004,7 @@ class PortainerTab(ttk.Frame):
 
     def _deployed(self, result):
         self.app.set_busy(False)
+        self._dialog_idle()
         lines = list(result["log"])
         if result.get("error"):
             lines.append({"text": result["error"], "level": "error"})
@@ -1423,11 +1438,30 @@ class DeployDialog(tk.Toplevel):
                                         command=self._go)
         self.deploy_button.grid(row=0, column=2)
 
+        # The tab's own busy strip lives in the main window, which this
+        # dialog sits on top of for the whole deploy -- so it never gets
+        # seen. This one shows the same activity where the dialog actually
+        # is looked at.
+        self.busy_label = ttk.Label(footer, style="Hint.TLabel", text="")
+        self.busy_label.grid(row=1, column=0, columnspan=3, sticky="w",
+                             pady=(8, 0))
+        self.busy_label.grid_remove()
+        self.busy_bar = ttk.Progressbar(footer, mode="indeterminate",
+                                        style="Bar.Horizontal.TProgressbar")
+        self.busy_bar.grid(row=2, column=0, columnspan=3, sticky="ew",
+                           pady=(4, 0))
+        self.busy_bar.grid_remove()
+
         self.apply_theme(colors)
         self.refresh_target()
         self.bind("<Escape>", lambda _e: self.destroy())
         self.update_idletasks()
         ui._fit_dialog(self, app, self.scroll, self.footer, floor=820)
+        # Without this, the main window keeps taking clicks while this form
+        # is open -- a reload or a tab switch behind an open deploy reads as
+        # things happening on their own, since the window in front never
+        # hints that anything is running.
+        self.grab_set()
 
     # -- the three blocks --------------------------------------------------
 
@@ -1727,6 +1761,17 @@ class DeployDialog(tk.Toplevel):
 
     def busy_buttons(self):
         return self.deploy_button, self.env_button
+
+    def show_busy(self, text=""):
+        self.busy_label.configure(text=text or "einen Moment …")
+        self.busy_label.grid()
+        self.busy_bar.grid()
+        self.busy_bar.start(12)
+
+    def hide_busy(self):
+        self.busy_bar.stop()
+        self.busy_bar.grid_remove()
+        self.busy_label.grid_remove()
 
     def env_value(self):
         return self.env_text.get("1.0", "end")

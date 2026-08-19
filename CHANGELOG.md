@@ -1,5 +1,25 @@
 # Änderungen
 
+## 2.9.1 — 19. August 2026
+
+**Der Ladebalken läuft jetzt da, wo man gerade hinschaut.**
+
+- **Der Fortschritt eines Deploys steckte im Hauptfenster fest, hinter dem
+  offenen Formular.** Wer einen Stack anlegte, sah die ganze Zeit über nur das
+  Formular selbst — Ladebalken und Statustext liefen im Fenster dahinter, das
+  gerade niemand ansieht. Das Deploy-Fenster hat jetzt seinen eigenen
+  Ladebalken, für das Lesen des Repositories genauso wie für das Deployen
+  selbst.
+- **Das Deploy-Fenster ließ das Hauptfenster dahinter bedienbar.** Ein Klick
+  daneben konnte währenddessen einen Tab wechseln oder einen Reload anstoßen —
+  was wie unerklärliche Aktivität im Hintergrund wirkte. Es sperrt das
+  Hauptfenster jetzt, solange es offen ist.
+- **Eine harmlose, uneindeutige Antwort von OPNsenses Konfigurationstest
+  erschien als roter Fehler**, obwohl HAProxy trotzdem ganz normal neu
+  geladen wurde — manche Versionen des Plugins bestätigen einen gültigen Test
+  schlicht nicht. Die Meldung steht jetzt nicht mehr rot da und sagt dazu, was
+  tatsächlich passiert ist.
+
 ## 2.9.0 — 16. August 2026
 
 **Der Katalog fragt, wohin — und macht danach den Weg frei.**

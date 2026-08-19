@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.9.0"
+VERSION = "2.9.1"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -1150,10 +1150,16 @@ def apply_changes(client, opts, out):
     if not valid:
         # Nothing came back at all on some plugin versions. That is not a
         # refusal -- a refusal is loud -- but it is no confirmation either, and
-        # saying "configuration is valid" here would be inventing one.
-        out("warning: the configuration test said nothing" if not report.strip()
-            else f"warning: unexpected config test output: {report.strip()[:200]}",
-            file=sys.stderr)
+        # saying "configuration is valid" here would be inventing one. Still,
+        # it is not a failure: nothing below this depends on `valid`, and the
+        # reload happens either way -- so this stays off stderr. A line there
+        # is shown in red as an error, and that has been mistaken for a failed
+        # deploy more than once even though the stack and the rule were both
+        # created just fine.
+        out("note: the configuration test did not confirm success -- some "
+            "OPNsense HAProxy plugin versions answer with nothing on a valid "
+            "config; reloading anyway" if not report.strip()
+            else f"note: unexpected config test output: {report.strip()[:200]}")
     for line in report.splitlines():
         if "[warning]" in line.lower():
             out(f"  {line.strip()}")
