@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.10.0"
+VERSION = "2.11.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -1508,20 +1508,77 @@ UPDATE_SUFFIXES = (".py", ".json", ".md", ".bat", ".png", ".ico")
 UPDATE_NEVER = ("config.json", "gui.json", "channel.json",
                 "make_release.py", "make_icon.py")
 # Without these there is no program, so an incomplete download is refused
-# before a single file is replaced.
-ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
-                   "portainer_gui.py", "catalog.py", "adguard_gui.py")
+# before a single file is replaced. Deliberately only the two entry points:
+# they are what the starters, the desktop file and HAProxy-Starter.bat point
+# at, so they are the two names that can never be renamed. Any longer list
+# would one day refuse a download for having rearranged itself -- and the
+# refusal would be pronounced by the *installed* version, which cannot know
+# what the new one is called. That is the same trap as 1.4.0 and 2.3.0, seen
+# from the other side.
+ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py")
+# How deep the program's own tree may go. Not a limit anyone should meet; a
+# path out of an archive simply does not get to be unbounded.
+MAX_DEPTH = 4
+# Folders that lie inside an installation without belonging to it. Skipped
+# when the folder is read, so a backup is never mistaken for the program and
+# swept into the next one.
+NOT_OURS = ("__pycache__",)
+# A leading underscore is a name, a leading dot is a hidden entry: only the
+# second is refused. Without the underscore there is no __init__.py, and
+# without that the program cannot be a package at all.
+NAME_OK = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
+# Every file the program has ever laid down, back to 1.0. Consulted only for a
+# folder that carries no record of its own -- one last written by a version
+# from before that record existed. Removing a name we know we wrote is safe in
+# a way that sweeping a folder is not: a folder may well hold things that were
+# never ours, and a program that unpacked into someone's Downloads has no
+# business tidying it.
+LEGACY_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
+                "portainer_gui.py", "adguard_gui.py", "catalog.py",
+                "catalog.json", "HAProxy-Starter.bat", "icon.png", "icon.ico",
+                "README.md", "CHANGELOG.md", "config.example.json")
 
 
 def updatable(name):
-    """Whether a file of this name belongs to the program itself.
+    """Whether a file at this path belongs to the program itself.
 
-    Also the answer to the usual zip question: a name with a path in it, or a
-    hidden dotfile, is not one of ours and is never used to build a path.
+    Also the answer to the usual zip question. A name may carry folders now --
+    the program is allowed to grow a tree -- so every element is checked in
+    turn instead of forbidding the slash outright: no absolute path, no drive
+    letter, no "..", no hidden entry, nothing that could lead out of the
+    folder being written into.
     """
-    return (bool(name) and name == os.path.basename(name)
-            and not name.startswith(".") and name not in UPDATE_NEVER
-            and name.endswith(UPDATE_SUFFIXES))
+    if not name or ":" in name:
+        return False
+    parts = name.replace("\\", "/").split("/")
+    if not 1 <= len(parts) <= MAX_DEPTH:
+        return False
+    if not all(NAME_OK.match(part) for part in parts):
+        return False  # rules out "", ".", ".." and every hidden name at once
+    if any(part in NOT_OURS for part in parts[:-1]):
+        return False
+    leaf = parts[-1]
+    return leaf not in UPDATE_NEVER and leaf.endswith(UPDATE_SUFFIXES)
+
+
+def program_files(folder):
+    """Every file below ``folder`` that belongs to the program, by that rule.
+
+    Paths come back relative and with forward slashes, the way they read in
+    an archive, so one spelling serves the download and the folder alike.
+    """
+    found = []
+    for root, folders, names in os.walk(folder):
+        folders[:] = [name for name in folders
+                      if NAME_OK.match(name) and name not in NOT_OURS
+                      and not name.startswith("backup-")]
+        for name in names:
+            inner = os.path.relpath(os.path.join(root, name),
+                                    folder).replace(os.sep, "/")
+            if updatable(inner):
+                found.append(inner)
+    return sorted(found)
+
 
 # The whole project is well under a megabyte; anything beyond this is either a
 # mistake or something we should not be unpacking.
@@ -1530,7 +1587,8 @@ MAX_DOWNLOAD = 20 * 1024 * 1024
 
 def default_channel_state():
     return {"channel": "stable",
-            "installed": {"channel": "stable", "ref": "", "version": VERSION}}
+            "installed": {"channel": "stable", "ref": "", "version": VERSION,
+                          "files": []}}
 
 
 def channel_state(folder=None):
@@ -1559,6 +1617,14 @@ def channel_state(folder=None):
         state["installed"]["channel"] = installed["channel"]
     state["installed"]["ref"] = str(installed.get("ref") or "")
     state["installed"]["version"] = str(installed.get("version") or VERSION)
+    # what the last update wrote, so the next one knows what to take away.
+    # Filtered through the same rule as everything else: this file sits in a
+    # folder the user can edit, and a name in it must never turn into a path
+    # that is then deleted.
+    listed = installed.get("files")
+    state["installed"]["files"] = sorted(
+        name for name in (listed if isinstance(listed, list) else [])
+        if isinstance(name, str) and updatable(name))
     return state
 
 
@@ -1755,9 +1821,12 @@ def update_blocked(folder=None):
         return "git"
     if not os.access(folder, os.W_OK):
         return "readonly"
-    for name in os.listdir(folder):
+    for name in program_files(folder):
         path = os.path.join(folder, name)
-        if updatable(name) and os.path.isfile(path) and not os.access(path, os.W_OK):
+        # the folder a file sits in has to take a new file beside it, which is
+        # how the replacement is written
+        if not os.access(path, os.W_OK) or not os.access(os.path.dirname(path),
+                                                         os.W_OK):
             return "readonly"
     return ""
 
@@ -1803,10 +1872,13 @@ def unpack_release(blob):
         with zipfile.ZipFile(io.BytesIO(blob)) as archive:
             for entry in archive.infolist():
                 parts = entry.filename.split("/")
-                if entry.is_dir() or len(parts) != 2:
-                    continue  # only the top level of the repository
-                if updatable(parts[1]):
-                    files[parts[1]] = archive.read(entry)
+                if entry.is_dir() or len(parts) < 2:
+                    continue  # the wrapper folder itself has nothing in it
+                inner = "/".join(parts[1:])
+                if updatable(inner):
+                    # read() checks the entry's CRC, so a truncated or
+                    # tampered archive dies here rather than on disk
+                    files[inner] = archive.read(entry)
     except (zipfile.BadZipFile, OSError) as exc:
         raise ApiError(f"the downloaded archive is unreadable: {exc}") from None
     return files
@@ -1830,7 +1902,9 @@ def install_update(release, folder=None, report=None, timeout=60):
     """Replace the program files with the downloaded release.
 
     The previous files are copied into a backup folder first, so an update
-    that turns out badly can be undone by copying them back by hand.
+    that turns out badly can be undone by copying them back by hand. That
+    copy holds the folder as it was, the files that go away included -- which
+    is the whole reason removing them is safe to do at all.
     """
     folder = folder or install_dir()
     blocked = update_blocked(folder)
@@ -1844,18 +1918,38 @@ def install_update(release, folder=None, report=None, timeout=60):
     files = unpack_release(_download(release["zip"], timeout, report))
     verify_download(files)
 
+    # What the new version does not bring is not part of it any more. Without
+    # this, a version that moves a module into a folder leaves the old one
+    # lying at the top, where an import finds it first and quietly runs code
+    # from the version before -- the 1.4.0 mistake with the pieces the other
+    # way round.
+    #
+    # The candidates come from what was written *into this folder*, never from
+    # reading the folder itself. Everything here is ours by record; a walk
+    # would only tell us what matches a suffix, and a copy that was unpacked
+    # next to someone's own files would have them swept up on the first
+    # update.
+    record = channel_state(folder)
+    known = record["installed"]["files"] or LEGACY_FILES
+    stale = [name for name in known
+             if name not in files and updatable(name)
+             and os.path.isfile(os.path.join(folder, name.replace("/", os.sep)))]
+
     backup = os.path.join(folder, f"backup-{release.get('current') or VERSION}")
     say("keeping a copy of the current version …")
-    os.makedirs(backup, exist_ok=True)
-    for name in files:
-        current = os.path.join(folder, name)
-        if os.path.exists(current):
-            shutil.copy2(current, os.path.join(backup, name))
+    for name in sorted(set(files) | set(stale)):
+        current = os.path.join(folder, name.replace("/", os.sep))
+        if not os.path.exists(current):
+            continue
+        kept = os.path.join(backup, name.replace("/", os.sep))
+        os.makedirs(os.path.dirname(kept), exist_ok=True)
+        shutil.copy2(current, kept)
 
     say("writing the new version …")
     written = []
     for name, data in sorted(files.items()):
-        target = os.path.join(folder, name)
+        target = os.path.join(folder, name.replace("/", os.sep))
+        os.makedirs(os.path.dirname(target), exist_ok=True)
         mode = os.stat(target).st_mode if os.path.exists(target) else None
         temporary = f"{target}.new"
         with open(temporary, "wb") as handle:
@@ -1865,16 +1959,47 @@ def install_update(release, folder=None, report=None, timeout=60):
         os.replace(temporary, target)  # atomic: no half written script survives
         written.append(name)
 
+    removed = []
+    for name in stale:
+        try:
+            os.remove(os.path.join(folder, name.replace("/", os.sep)))
+            removed.append(name)
+        except OSError:
+            pass  # it is in the backup either way; a leftover file breaks nothing
+    if removed:
+        say(f"removed {len(removed)} file(s) the new version no longer has")
+        _prune_empty(folder, removed)
+
     # written last, so a run that fails halfway leaves behind no note claiming
     # a version that is not there
-    record = channel_state(folder)
     record["channel"] = release.get("channel") or record["channel"]
     record["installed"] = {"channel": record["channel"],
                            "ref": release.get("ref") or "",
-                           "version": release["version"]}
+                           "version": release["version"],
+                           "files": sorted(written)}
     write_channel_state(record, folder)
-    return {"files": written, "backup": backup, "version": release["version"],
-            "channel": record["channel"]}
+    return {"files": written, "removed": removed, "backup": backup,
+            "version": release["version"], "channel": record["channel"]}
+
+
+def _prune_empty(folder, removed):
+    """Drop folders the removal emptied, so no husk of the old layout stays.
+
+    Only folders that held one of the files just taken away, deepest first,
+    and only through ``rmdir`` -- which refuses the moment anything is still
+    in there. Nothing else in the folder is any of this function's business.
+    """
+    candidates = set()
+    for name in removed:
+        parts = name.split("/")[:-1]
+        while parts:
+            candidates.add("/".join(parts))
+            parts.pop()
+    for inner in sorted(candidates, key=lambda p: p.count("/"), reverse=True):
+        try:
+            os.rmdir(os.path.join(folder, inner.replace("/", os.sep)))
+        except OSError:
+            pass  # still holds something, or was never there
 
 
 # --------------------------------------------------------------------------
@@ -2042,11 +2167,10 @@ def copy_program(source, target, report=None):
     # goes by: the icons come along because the desktop starter points at
     # icon.png, and a file added in some later version comes along by itself.
     copied = []
-    for name in sorted(os.listdir(source)):
-        origin = os.path.join(source, name)
-        if not updatable(name) or not os.path.isfile(origin):
-            continue
-        shutil.copy2(origin, os.path.join(target, name))
+    for name in program_files(source):
+        destination = os.path.join(target, name.replace("/", os.sep))
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.copy2(os.path.join(source, name), destination)
         copied.append(name)
     # Not one of the program's files -- an update must never take it from a
     # download -- but the copy has to know which line it is: without it a
@@ -2175,7 +2299,13 @@ def install(target=None, bin_dir=None, commands=True, menu=True, desktop=False,
     if same:
         say("the program is already there -- only the starters are written")
     else:
-        copy_program(source, target, report)
+        copied = copy_program(source, target, report)
+        # the new folder gets a record of what was put in it, so its first
+        # update knows what it may take away again
+        record = channel_state(target)
+        record["installed"]["files"] = sorted(copied)
+        record["installed"]["version"] = VERSION
+        write_channel_state(record, target)
 
     result = {"target": target, "same": same, "commands": [], "menu": "",
               "desktop": "", "bin": bin_dir or "", "path_hint": False}

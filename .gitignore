@@ -7,3 +7,6 @@ __pycache__/
 
 # which line this working copy follows -- an installation detail, not code
 channel.json
+
+# the packages hang on the GitHub release, not in the repository
+releases/

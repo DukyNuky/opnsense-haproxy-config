@@ -1293,10 +1293,15 @@ class UpdateDialog(tk.Toplevel):
         self.app.channel = result.get("channel", self.app.channel)
         self.app.var_beta.set(self.app.channel == "beta")
         self.app._paint_update_button()
+        gone = len(result.get("removed") or ())
+        # said rather than passed over: a file disappearing from the folder is
+        # the kind of thing someone notices later and wonders about
+        tidied = (f" {gone} Datei(en), die es dort nicht mehr gibt, wurden "
+                  "entfernt — auch sie liegen dort." if gone else "")
         self._say(f"Version {result['version']} ist installiert. "
                   "Sie wird nach einem Neustart des Programms verwendet.\n"
                   f"Die vorherige Fassung liegt in "
-                  f"{os.path.basename(result['backup'])}.")
+                  f"{os.path.basename(result['backup'])}.{tidied}")
         self.later.configure(state="normal", text="Später neu starten")
         self.action.configure(state="normal", text="Jetzt neu starten",
                               command=self._restart)

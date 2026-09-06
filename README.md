@@ -82,8 +82,9 @@ weniger getestet als Windows und Linux.
 
 ## Schritt 2: Programm herunterladen
 
-**[opnsense-haproxy-2.9.0.zip](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest/download/opnsense-haproxy-2.9.0.zip)**
-herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
+Auf der
+**[Seite der neuesten Version](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest)**
+das ZIP unter *Assets* herunterladen und **entpacken** — in einen Ordner deiner Wahl, zum Beispiel
 `Dokumente\opnsense-haproxy`. Nicht direkt im ZIP starten, sonst findet das
 Programm seine eigenen Dateien nicht.
 
@@ -961,8 +962,8 @@ geändert hat. Nach der Installation ist ein Neustart nötig, den der Dialog
 gleich anbietet.
 
 Ersetzt werden nur die Programmdateien selbst — alles, was aus dem Archiv wie
-eine davon aussieht (`.py`, `.json`, `.md`, `.bat`, die Symbole), außer
-`config.json` und `gui.json`. **Zugangsdaten und Einstellungen bleiben
+eine davon aussieht (`.py`, `.json`, `.md`, `.bat`, die Symbole, auch in
+Unterordnern), außer `config.json`, `gui.json` und `channel.json`. **Zugangsdaten und Einstellungen bleiben
 unangetastet**, und die alten Dateien landen vorher in einem Ordner
 `backup-<version>/` daneben. Heruntergeladener Code wird vor dem Schreiben
 geprüft; ist das Archiv unvollständig oder beschädigt, wird nichts angefasst.
@@ -973,6 +974,20 @@ der Fassung ausgeführt, die gerade installiert ist, und eine Liste in ihr kann
 eine Datei, die es damals noch nicht gab, nicht kennen. Genau daran sind 1.4.0
 (`portainer.py`) und 2.3.0 (`catalog.py`) gescheitert — beide Male ließ das
 Update eine Datei zurück, die die neue Fassung braucht.
+
+Die Regel gilt seit 2.11.0 auch für Unterordner: `ui/status.py` kommt genauso
+an wie `haproxy_gui.py`, bis vier Ebenen tief. Ein Name mit `..`, ein
+absoluter Pfad oder eine versteckte Datei wird dabei nie zu einem Pfad — jedes
+Element wird einzeln geprüft, bevor irgendetwas geschrieben wird.
+
+**Was die neue Fassung nicht mitbringt, wird entfernt.** Sonst bliebe beim
+Umzug eines Moduls in einen Ordner das alte oben liegen, wo ein `import` es
+zuerst findet und stillschweigend Code von vorgestern ausführt — derselbe
+Fehler wie 1.4.0, nur andersherum. Entfernt wird ausschließlich, was das
+Programm nachweislich selbst dorthin geschrieben hat: `channel.json` führt
+darüber Buch. Der Ordner wird dafür *nicht* durchsucht — läge das Programm
+neben eigenen Dateien, würde eine Suche nach Endungen sie mitnehmen. Und alles
+Entfernte liegt vorher im `backup-`-Ordner.
 
 Fehlt trotzdem einmal etwas, ist nichts verloren: der Portainer-Tab sagt dann,
 welche Datei es ist, und der Update-Knopf daneben holt sie nach. Startet das
@@ -1353,6 +1368,8 @@ angelegt wird trotzdem, denn das Zertifikat kann auch von woanders kommen.
 ## Ein Paket bauen
 
 `./make_release.py` liest die Versionsnummer aus `opnsense_haproxy.py` und legt
-`releases/opnsense-haproxy-<version>.zip` an. Das Symbol zeichnet
+`releases/opnsense-haproxy-<version>.zip` an. Der Ordner ist bewusst nicht
+eingecheckt: das Paket hängt am GitHub-Release, und im Repository wäre es ein
+zweites Mal dasselbe — bei jedem Update mit heruntergeladen. Das Symbol zeichnet
 `./make_icon.py` neu — reine Standardbibliothek, jede Form als Abstand
 beschrieben, daraus fallen `icon.png` und `icon.ico` heraus.

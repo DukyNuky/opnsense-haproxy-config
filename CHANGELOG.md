@@ -1,5 +1,42 @@
 # Änderungen
 
+## 2.11.0 — 6. September 2026
+
+**Das Update kann jetzt Ordner — Vorarbeit für den Umbau.**
+
+- **Ein Update überträgt auch Dateien in Unterordnern.** Bisher nahm es
+  ausschließlich die oberste Ebene des Archivs; alles in einem Ordner fiel
+  stillschweigend heraus. Damit wäre jede Umstrukturierung des Programms an
+  den bereits installierten Fassungen gescheitert — ein Update führt immer die
+  *alte* Fassung aus, nicht die neue. Jetzt kommen `ui/status.py` und
+  `haproxy_gui.py` gleichermaßen an, bis vier Ebenen tief.
+- **Ein Name aus dem Archiv wird weiterhin nie zu einem Pfad.** Statt den
+  Schrägstrich schlicht zu verbieten, wird jedes Element einzeln geprüft:
+  kein `..`, kein absoluter Pfad, kein Laufwerksbuchstabe, nichts Verstecktes.
+  Ein `__init__.py` darf sein, ein `.git/config` nicht.
+- **Was die neue Fassung nicht mitbringt, wird entfernt.** Zieht ein Modul in
+  einen Ordner um, bliebe das alte sonst oben liegen, wo ein `import` es
+  zuerst findet und Code von vorgestern ausführt. Entfernt wird ausschließlich,
+  was das Programm nachweislich selbst dorthin geschrieben hat — `channel.json`
+  führt darüber Buch, und für ältere Ordner ohne dieses Buch dient die Liste
+  aller je ausgelieferten Dateien. Der Ordner selbst wird *nicht* durchsucht:
+  läge das Programm neben eigenen Dateien, nähme eine Suche nach Endungen sie
+  mit. Alles Entfernte liegt vorher im `backup-`-Ordner.
+- **Die Vollständigkeitsprüfung nennt nur noch die beiden Einstiegspunkte.**
+  Sie zählte bisher sechs Module namentlich auf — und wäre damit von der
+  installierten Fassung aus zur Sperre geworden, sobald eines davon einen
+  anderen Namen bekommt. `opnsense_haproxy.py` und `haproxy_gui.py` sind die
+  einzigen Namen, die sich nie ändern dürfen: Starter, Desktop-Eintrag und
+  `HAProxy-Starter.bat` zeigen darauf.
+- **Der Ordner `releases/` liegt nicht mehr im Repository.** Jedes Paket hängt
+  ohnehin am jeweiligen GitHub-Release. Im Repository war es ein zweites Mal
+  dasselbe — und wurde bei jedem Beta-Update mit heruntergeladen: 3,4 MB statt
+  250 KB, bei jedem Commit aufs Neue.
+- **Der Download-Link im README zeigte ins Leere.** Er nannte einen
+  Dateinamen mit fester Versionsnummer unter `/releases/latest/download/` und
+  ging damit bei jeder neuen Version kaputt. Jetzt führt er auf die Seite der
+  neuesten Version.
+
 ## 2.10.0 — 6. September 2026
 
 **Ein Haken für die Beta — und einer wieder heraus.**
