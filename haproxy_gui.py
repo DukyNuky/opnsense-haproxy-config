@@ -2262,9 +2262,9 @@ class App(tk.Tk):
         self.shelf = app_sources.Sources() if app_sources else NoShelf()
         # tabs that want to hear when a system answered
         self.source_listeners = []
-        # the cover laid over the window while the systems are being read, and
-        # the only progress bar in the program. Built on first use.
-        self.curtain = None
+        # the small window that shows how far the reading has come -- the one
+        # progress bar in the program. Built on first use.
+        self.progress_window = None
 
         self.update_release = None
         self.update_checking = False
@@ -2298,7 +2298,7 @@ class App(tk.Tk):
         self._pump_job = self.after(60, self._pump)
         self.after(100, self._connect)
         self.after(1500, self._update_on_start)
-        self.after(400, lambda: self.refresh_sources(quiet=True))
+        self.after(400, self.refresh_sources)
 
     def _set_icon(self):
         """Give the window and the task bar the program's own icon."""
@@ -2565,8 +2565,8 @@ class App(tk.Tk):
         self.dns.apply_theme()
         self.status.apply_theme()
         self.settings_tab.apply_theme()
-        if self.curtain is not None:
-            self.curtain.apply_theme()
+        if self.progress_window is not None:
+            self.progress_window.apply_theme()
         for dialog in (self.host_dialog, self.listener_dialog):
             if dialog is not None and dialog.winfo_exists():
                 dialog.apply_theme(c)
@@ -3365,37 +3365,42 @@ class App(tk.Tk):
         the window's own queue, because a widget touched from another thread
         is a crash waiting for the wrong moment.
 
-        ``quiet`` leaves the window usable. The reading that happens by itself
-        shortly after the start is quiet: covering the window before anybody
-        has touched it, possibly for as long as the slowest host takes to time
-        out, would be the program getting in its own way.
+        ``quiet`` asks without the progress window. Used for a re-read of one
+        system straight after a dialog wrote something: the log already says
+        it happened, and a window flashing up there reads as a complaint.
         """
         def announce(source):
             self.results.put(("done",
                               lambda _payload, s=source: self._source_changed(s),
                               None, None, None))
 
+        # Shown before the asking starts. The other way round, a round that
+        # finishes before the window is up would leave it standing with
+        # nothing left to report.
+        if not quiet:
+            self._progress().show()
         here = self.shelf.refresh(kinds=kinds, notify=announce)
-        if here is not None and not quiet:
-            self._cover().show("Systeme werden gelesen")
+        if here is None and not quiet:
+            self._progress().hide()   # nothing was taken on after all
         self._paint_round()
         return here
 
-    def _cover(self):
-        if self.curtain is None:
-            from app.ui.busy import Curtain
-            self.curtain = Curtain(self)
-        return self.curtain
+    def _progress(self):
+        if self.progress_window is None:
+            from app.ui.busy import Progress
+            self.progress_window = Progress(self)
+        return self.progress_window
 
     def _paint_round(self):
-        """Move the cover along, and take it away when the round is done."""
+        """Move the bar along, and take the window away when the round ends."""
+        window = self.progress_window
+        if window is None or not window.showing:
+            return
         here = self.shelf.round
-        if self.curtain is None or not self.curtain.showing:
-            return
         if here is None or not here.active:
-            self.curtain.hide()
+            window.hide()
             return
-        self.curtain.step(here.done, here.total, here.running)
+        window.step(here.done, here.total, here.running)
 
     def _source_changed(self, source):
         self._paint_round()

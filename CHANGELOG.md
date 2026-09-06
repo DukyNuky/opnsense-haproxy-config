@@ -44,17 +44,17 @@ damit im Fenster unmissverständlich steht, was läuft.
 - **Die ganze Zeile öffnet die Kette**, nicht nur der Knopf am Ende.
 - **Gelesen wird nur auf Knopfdruck**, je Seite oder alles auf einmal, und über
   allem steht, wie alt der Stand ist.
-- **Ein Fortschrittsbalken, auf einer Fläche über dem Fenster.** Beim Lesen
-  mehrerer Systeme gibt es eine richtige Zahl — wie viele geantwortet haben —,
-  und der Balken zeigt genau die, mit den Namen derer, auf die noch gewartet
-  wird. Er liegt über dem Fenster, weil das die Sache ist, die dabei zählt:
-  gerade geht hier nichts. (Echtes Weichzeichnen kann tkinter nicht; die
-  Fläche deckt ab, statt zu verwischen.) Ein Knopf **Im Hintergrund
-  weiterlesen** nimmt sie weg — ein Programm, das sich selbst aussperren kann,
-  wenn ein Host nie antwortet, wäre schlimmer als eines, das langsam liest.
-  Das automatische Lesen kurz nach dem Start deckt nichts ab: das Fenster vor
-  der ersten Berührung zuzuhängen, womöglich so lange wie der langsamste Host
-  zum Aufgeben braucht, hieße sich selbst im Weg zu stehen.
+- **Ein Fortschrittsfenster über dem Fenster.** Beim Lesen mehrerer Systeme
+  gibt es eine richtige Zahl — wie viele geantwortet haben —, und der Balken
+  zeigt genau die, mit den Namen derer, auf die noch gewartet wird. Es nimmt
+  die Klicks an, damit „gerade geht hier nichts" wahr ist und nicht nur so
+  aussieht. Genau ein Balken im ganzen Programm: zwei in zwei Ecken sagten
+  dasselbe zweimal, und keiner von beiden sagte das.
+  Ein Knopf **Im Hintergrund weiterlesen** nimmt es weg, das Schließkreuz
+  ebenso — ein Programm, das sich selbst aussperren kann, wenn ein Host weder
+  antwortet noch aufgibt, wäre schlimmer als eines, das langsam liest. Das
+  Lesen kurz nach dem Start zeigt es mit an: ohne war beim Start überhaupt
+  nichts zu sehen.
 - **„Alles vorhanden" neben einem Fragezeichen gibt es nicht mehr.** Die
   Zusammenfassung einer Zeile zählte nur, was *fehlt*, während das Zeichen
   davor auch das mitzählte, was *unbekannt* ist — die Zeile widersprach damit
