@@ -1521,8 +1521,10 @@ ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py")
 MAX_DEPTH = 4
 # Folders that lie inside an installation without belonging to it. Skipped
 # when the folder is read, so a backup is never mistaken for the program and
-# swept into the next one.
-NOT_OURS = ("__pycache__",)
+# swept into the next one. "tests" is in here for a different reason: the
+# checks belong to whoever works on the program, not to whoever runs it, and
+# an update has no business carrying them into someone's installation.
+NOT_OURS = ("__pycache__", "tests")
 # A leading underscore is a name, a leading dot is a hidden entry: only the
 # second is refused. Without the underscore there is no __init__.py, and
 # without that the program cannot be a package at all.
