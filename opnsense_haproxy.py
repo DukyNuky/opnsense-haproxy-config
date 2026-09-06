@@ -467,6 +467,17 @@ class Names:
         return f"{self.prefix}rule_{self.plain}"
 
 
+def prefix_of(rule_name):
+    """The name prefix a rule was created with, read back off the rule.
+
+    Removing goes by name, so it has to be spelled the way it was spelled
+    when it was made: with the same prefix, or nothing is found and the
+    entry looks as if it had already been taken away.
+    """
+    marker = str(rule_name or "").find("rule_")
+    return rule_name[:marker] if marker > 0 else ""
+
+
 def parse_target(raw):
     """Accept ``host``, ``https://host`` or ``https://host/path`` alike."""
     text = raw.strip()

@@ -69,6 +69,11 @@ class Chain:
     path: str = ""
     kind: str = "host"       # host | listener
     stations: list = field(default_factory=list)
+    #: what it takes to address this entry again from outside: the names the
+    #: objects carry on the firewall and the prefix they were made with.
+    #: Removing goes by name, and reading a name back out of a sentence
+    #: written for a person to read is how a program deletes the wrong thing.
+    data: dict = field(default_factory=dict)
 
     @property
     def state(self):
@@ -383,7 +388,11 @@ def host_chain(host, path, service, rule, readings, answers, ports,
     stations.append(behind_station(servers, ports, docker_on,
                                    docker_read))
     return Chain(name=host, where=where, path=path, kind="host",
-                 stations=stations)
+                 stations=stations,
+                 data={"target": f"{host}{path}",
+                       "prefix": core.prefix_of(rule.get("name", "")),
+                       "service": service["name"], "rule": rule.get("name", ""),
+                       "host": host})
 
 
 def listener_chain(service, readings, answers, ports, expected, dns_on,
@@ -426,7 +435,9 @@ def listener_chain(service, readings, answers, ports, expected, dns_on,
     stations.append(behind_station(servers, ports, docker_on,
                                    docker_read))
     return Chain(name=host or service["name"], where=where, kind="listener",
-                 stations=stations)
+                 stations=stations,
+                 data={"service": service["name"], "host": host,
+                       "managed": bool(service.get("managed"))})
 
 
 # --------------------------------------------------------------------------

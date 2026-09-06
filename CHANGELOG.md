@@ -71,6 +71,26 @@ damit im Fenster unmissverständlich steht, was läuft.
   Bei jeder Meldung die Seite neu aufzubauen zieht sie demjenigen unter den
   Augen weg, der sie gerade liest. Der Kopf mit dem Fortschritt folgt jeder
   Antwort; die Seite selbst wartet, bis die Antworten aufhören.
+- **Einträge lassen sich vom Status-Tab aus überall entfernen.** In der
+  aufgeklappten Kette steht unten „Diesen Eintrag überall entfernen". Gelöscht
+  wird nicht sofort: erst wird die OPNsense **gefragt, was sie löschen würde**,
+  und genau diese Liste steht im Fenster — Regel, Bedingung, Backend-Pool,
+  Real Server, dazu jeder DNS-Eintrag. Was noch anderweitig benutzt wird,
+  bleibt stehen und sagt das auch, denn die Antwort kommt von der Firewall und
+  nicht aus einer Vermutung dieses Programms.
+  - **Der Name geht aus jedem AdGuard raus, der ihn hat**, nicht nur aus dem
+    einen, der bei der Firewall eingetragen ist. Ein Name, der auf einem
+    Server weg ist und auf dem anderen steht, ist schlimmer als einer, der
+    einfach noch da ist: welchen Server man gefragt hat, sieht man nicht.
+    AdGuards, die gerade nicht antworten, werden benannt — dort kann der Name
+    stehen bleiben, und das gehört gesagt statt verschwiegen.
+  - **Der Container bleibt und das Zertifikat auch.** Der Container ist der
+    Dienst selbst; dass er nicht mehr über den Proxy erreichbar ist, heißt
+    nicht, dass er weg soll. Beides steht im Fenster, weil „überall" ein
+    Versprechen ist und das seine Grenzen sind.
+  - Scheitert die OPNsense-Seite, wird **der DNS-Eintrag nicht angefasst** —
+    solange die Regel steht, würde das Wegnehmen des Namens kaputt machen,
+    was gerade funktioniert.
 - **Docker-Hosts antworteten grundsätzlich nicht.** Welche Docker-Umgebung
   gelesen werden soll, merkt sich das Programm je Verwaltung unter deren Namen
   — mit zwei Docker-Hosts ist die Umgebung des einen keine Antwort für den

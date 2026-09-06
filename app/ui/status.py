@@ -369,7 +369,24 @@ class StatusTab(ttk.Frame):
                 ttk.Label(holder, text="│", style="Chain.TLabel").grid(
                     row=row, column=0, sticky="w", padx=(18, 0))
                 row += 1
+        # At the foot of the chain, where somebody has just read what this
+        # entry is made of -- and not on the row, which is one click away from
+        # merely opening it.
+        ttk.Button(holder, text="Diesen Eintrag überall entfernen",
+                   style="Del.TButton",
+                   command=lambda c=chain: self._forget(c)).grid(
+            row=row, column=0, sticky="w", pady=(12, 0))
         return holder
+
+    def _forget(self, chain):
+        """Take this entry out of every system it stands in.
+
+        Nothing is deleted here: the dialog first asks the firewall what it
+        would delete and shows that, because a list this program made up
+        about what it thinks is there is not something anyone can confirm.
+        """
+        from app.ui import remove
+        remove.ask(self.app, chain)
 
     def _station(self, parent, station, chain):
         frame = tk.Frame(parent, bg=self.app.colors["surface2"], padx=12,

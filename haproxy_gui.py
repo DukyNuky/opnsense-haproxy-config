@@ -2546,6 +2546,18 @@ class App(tk.Tk):
                   background=[("active", c["danger_soft"])],
                   foreground=[("active", c["danger"])])
 
+        # For the one action that cannot be taken back. It must not look like
+        # "Speichern": a person reaching for the accent-coloured button out of
+        # habit is exactly the accident this colour is here to prevent.
+        style.configure("Danger.TButton", background=c["danger"],
+                        foreground=c["accent_text"], borderwidth=0,
+                        focuscolor=c["danger"], padding=(16, 9),
+                        font=self.font_base)
+        style.map("Danger.TButton",
+                  background=[("active", c["danger"]),
+                              ("disabled", c["border"])],
+                  foreground=[("disabled", c["muted"])])
+
         style.configure("Card.TCheckbutton", background=c["surface"],
                         foreground=c["text"], font=self.font_base,
                         indicatorcolor=c["surface2"], focuscolor=c["surface"])
@@ -4306,8 +4318,7 @@ class App(tk.Tk):
     @staticmethod
     def _prefix_of(rule):
         """Rules created with a name prefix must be removed with the same one."""
-        marker = rule["name"].find("rule_")
-        return rule["name"][:marker] if marker > 0 else ""
+        return core.prefix_of(rule["name"])
 
     def _step_done(self, result, dry_run, clear=True, form="host"):
         self._set_busy(False)
