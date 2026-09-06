@@ -76,7 +76,19 @@ class Chain:
 
     @property
     def gaps(self):
+        """What is definitely not right."""
         return [s for s in self.stations if s.state in (MISSING, WARN)]
+
+    @property
+    def unclear(self):
+        """What nobody could tell us -- not a gap, but not "all there" either.
+
+        Kept apart from ``gaps`` because the two mean different things to
+        somebody deciding what to do next, and kept at all because a line that
+        says "alles vorhanden" beside a question mark is a line that
+        contradicts itself.
+        """
+        return [s for s in self.stations if s.state == UNKNOWN]
 
     def station(self, key):
         return next((s for s in self.stations if s.key == key), None)
@@ -230,7 +242,7 @@ def _noted(servers):
     return ""
 
 
-def behind_station(servers, ports, configured):
+def behind_station(servers, ports, configured, read=True):
     """Was läuft an der Adresse -- und wenn nichts, ist das ein Problem?
 
     The note on the server settles the last question, and it is the only thing
@@ -256,6 +268,18 @@ def behind_station(servers, ports, configured):
                        hint="Was hinter der Adresse läuft, kann von hier aus "
                             "niemand sehen — das ist in Ordnung, wenn es kein "
                             "Container ist.", tab="portainer", data=place)
+    if configured and not read:
+        # Saying "no Docker host publishes this port" when not one of them
+        # answered would be quoting evidence nobody collected. Every chain in
+        # the program would carry that sentence, and every one of them would
+        # be wrong for the same reason.
+        return Station("container", TITLE_BEHIND, UNKNOWN,
+                       detail="Kein Docker-Host hat geantwortet",
+                       hint="Solange keiner erreichbar ist, lässt sich nicht "
+                            "sagen, ob dort ein Container läuft. Was fest "
+                            "steht, kann vermerkt werden.",
+                       tab="portainer", fix="behind",
+                       fix_label="Vermerken, was dort läuft", data=place)
     hits, misses = [], []
     for server in servers:
         address = str(server.get("address", "")).strip()
@@ -314,7 +338,7 @@ def _server_detail(servers):
 
 
 def host_chain(host, path, service, rule, readings, answers, ports,
-               expected, dns_on, docker_on, where):
+               expected, dns_on, docker_on, where, docker_read=True):
     """The full chain of one host name that a rule points at."""
     backend = rule.get("backend")
     servers = _servers_of(backend)
@@ -350,13 +374,14 @@ def host_chain(host, path, service, rule, readings, answers, ports,
                                      "Im Pool steht keine Maschine, an die "
                                      "weitergereicht werden könnte.",
                                 tab="haproxy"))
-    stations.append(behind_station(servers, ports, docker_on))
+    stations.append(behind_station(servers, ports, docker_on,
+                                   docker_read))
     return Chain(name=host, where=where, path=path, kind="host",
                  stations=stations)
 
 
 def listener_chain(service, readings, answers, ports, expected, dns_on,
-                   docker_on, where):
+                   docker_on, where, docker_read=True):
     """A public service that is its own port, with no host name to match on."""
     host = service.get("dns") or ""
     backend = service.get("default")
@@ -392,7 +417,8 @@ def listener_chain(service, readings, answers, ports, expected, dns_on,
                                  "damit.", tab="haproxy"))
     stations.append(Station("server", "Server", OK if servers else MISSING,
                             detail=_server_detail(servers), tab="haproxy"))
-    stations.append(behind_station(servers, ports, docker_on))
+    stations.append(behind_station(servers, ports, docker_on,
+                                   docker_read))
     return Chain(name=host or service["name"], where=where, kind="listener",
                  stations=stations)
 
@@ -406,7 +432,7 @@ def _firewall_address(source):
     return str((source.settings or {}).get("haproxy_ip", "")).strip()
 
 
-def chains_for(source, answers, ports, dns_on, docker_on):
+def chains_for(source, answers, ports, dns_on, docker_on, docker_read=True):
     """Every chain one firewall's reading gives rise to."""
     reading = source.data or {}
     readings = {"domains": reading.get("domains") or [],
@@ -418,14 +444,15 @@ def chains_for(source, answers, ports, dns_on, docker_on):
         for rule in rules:
             found.append(host_chain(rule["host"], rule.get("path") or "",
                                     service, rule, readings, answers, ports,
-                                    expected, dns_on, docker_on, source.name))
+                                    expected, dns_on, docker_on, source.name,
+                                    docker_read))
         # A public service with no host rules is a port of its own -- a
         # listener. One with rules that match on nothing we understand is not,
         # and is left out rather than described wrongly.
         if not rules and (service.get("default") or service.get("dns")):
             found.append(listener_chain(service, readings, answers, ports,
                                         expected, dns_on, docker_on,
-                                        source.name))
+                                        source.name, docker_read))
     return found
 
 
@@ -460,11 +487,13 @@ def build(shelf):
     ports = docker_ports(docker_sources)
     dns_on = bool(dns_sources)
     docker_on = bool(docker_sources)
+    docker_read = any(source.ready for source in docker_sources)
 
     chains = []
     for source in firewalls:
         if source.ready:
-            chains.extend(chains_for(source, answers, ports, dns_on, docker_on))
+            chains.extend(chains_for(source, answers, ports, dns_on, docker_on,
+                                     docker_read))
     chains.sort(key=lambda chain: (chain.name.lower(), chain.path))
 
     def dns_lines(ready):

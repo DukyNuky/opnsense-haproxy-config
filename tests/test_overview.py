@@ -324,5 +324,62 @@ one = next(c for c in astray.chains if c.name == "media.example.com")
 check("a wrong entry is changed, not added", one.station("dns").fix_label,
       "Eintrag ändern")
 
-print(f"\n{ok} ok, {fail} fail  (mit Vermerk)")
-sys.exit(1 if fail else 0)
+
+
+# --------------------------------------------------------------------------
+# unknown is not the same as complete, and not the same as missing
+# --------------------------------------------------------------------------
+
+print("-- a chain with an open question is not 'alles vorhanden' -------")
+ok4 = fail4 = 0
+def check4(label, got, want):
+    global ok4, fail4
+    if got == want: ok4 += 1
+    else:
+        fail4 += 1
+        print(f"  FAIL {label}: got {got!r}, want {want!r}")
+
+unclear_chain = with_note("")          # nothing noted, no container found
+check4("mark is a question", unclear_chain.state, ov.UNKNOWN)
+check4("no gaps", unclear_chain.gaps, [])
+check4("but something unclear", [s.key for s in unclear_chain.unclear],
+       ["container"])
+check4("so the row has something to say",
+       bool(unclear_chain.gaps + unclear_chain.unclear), True)
+
+complete = with_note("vm")
+check4("a settled chain has neither", complete.gaps + complete.unclear, [])
+
+print("-- no Docker host answered: say that, not 'no container' --------")
+shelf = shelf_with()
+broken = shelf.get(wiring.DOCKER, "Docker haus")
+broken.data, broken.status, broken.error = None, "failed", "connection refused"
+blind = ov.build(shelf)
+one = next(c for c in blind.chains if c.name == "media.example.com")
+station = one.station("container")
+check4("unknown", station.state, ov.UNKNOWN)
+check4("says why", station.detail, "Kein Docker-Host hat geantwortet")
+check4("does not claim the port is free",
+       "veröffentlicht" in station.detail, False)
+check4("still offers the note", station.fix, "behind")
+
+print("-- a noted VM stays green even with Docker unreachable ----------")
+services = [service(rules=[rule("acl_vm", "vm.example.com",
+                                servers=(("192.168.1.60", "8006"),))])]
+for srv in services[0]["rules"][0]["backend"]["servers"]:
+    srv["uuid"], srv["behind"] = "srv-1", "vm"
+shelf = shelf_with()
+shelf.get(wiring.OPNSENSE, "Zuhause").data = dict(FIREWALL, services=services)
+d = shelf.get(wiring.DOCKER, "Docker haus")
+d.data, d.status = None, "failed"
+noted_blind = ov.build(shelf).chains[0]
+check4("the note settles it", noted_blind.station("container").state, ov.OK)
+
+print("-- with a Docker host that did answer, the old wording stands ---")
+present = ov.build(shelf_with())
+gone = next(c for c in present.chains if c.name == "fremd.anders.de")
+check4("names the address", "192.168.1.99:9999" in
+       gone.station("container").detail, True)
+
+print(f"\n{ok + ok4} ok, {fail + fail4} fail  (alles)")
+sys.exit(1 if (fail or fail4) else 0)

@@ -55,6 +55,14 @@ damit im Fenster unmissverständlich steht, was läuft.
   Das automatische Lesen kurz nach dem Start deckt nichts ab: das Fenster vor
   der ersten Berührung zuzuhängen, womöglich so lange wie der langsamste Host
   zum Aufgeben braucht, hieße sich selbst im Weg zu stehen.
+- **„Alles vorhanden" neben einem Fragezeichen gibt es nicht mehr.** Die
+  Zusammenfassung einer Zeile zählte nur, was *fehlt*, während das Zeichen
+  davor auch das mitzählte, was *unbekannt* ist — die Zeile widersprach damit
+  dem Zeichen daneben. Sie nennt jetzt beides, Lücken zuerst.
+- **Antwortet kein einziger Docker-Host, wird das gesagt** — statt „auf keinem
+  eingerichteten Docker-Host ist dieser Port veröffentlicht". Das wäre eine
+  Beweisführung mit Material, das niemand erhoben hat, und sie stand an jeder
+  einzelnen Kette, jedes Mal aus demselben Grund falsch.
 - **Die Anzeige im Kopf stimmt jetzt mit.** „0 von 8 erreichbar" stand dort,
   während unten längst „4 erreichbar" stand — sie wurde nur beim Tabwechsel
   neu geschrieben.

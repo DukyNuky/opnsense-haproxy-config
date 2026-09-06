@@ -284,9 +284,11 @@ class StatusTab(ttk.Frame):
                                                     rowspan=2, padx=(0, 10))
         ttk.Label(row, text=chain.name + chain.path, style="Host.TLabel").grid(
             row=0, column=1, sticky="w")
-        gaps = chain.gaps
-        summary = ("alles vorhanden" if not gaps else
-                   ", ".join(f"{s.title} {MARK[s.state][2]}" for s in gaps))
+        # Everything that is not settled, gaps first. Saying "alles vorhanden"
+        # beside a question mark was a line contradicting the mark next to it.
+        loose = chain.gaps + chain.unclear
+        summary = ("alles vorhanden" if not loose else
+                   ", ".join(f"{s.title} {MARK[s.state][2]}" for s in loose))
         ttk.Label(row, text=summary, style="RowHint.TLabel", wraplength=560,
                   justify="left").grid(row=1, column=1, sticky="w", pady=(2, 0))
         open_now = chain.name in self.open_chains
