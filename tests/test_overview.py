@@ -236,5 +236,93 @@ check("trouble listed", sorted(c.name for c in picture.trouble),
 check("notes name the station", any("buch.example.com: DNS-Name" in n
                                     for n in picture.notes), True)
 
-print(f"\n{ok} ok, {fail} fail")
+
+# --------------------------------------------------------------------------
+# noting what sits behind an address
+# --------------------------------------------------------------------------
+
+import opnsense_haproxy as core
+
+print("-- the note is read out of the server description ---------------")
+for text, want in (("managed: media.example.com", ""),
+                   ("managed: x behind=vm", "vm"),
+                   ("eigene Notiz behind=docker", "docker"),
+                   ("behind=quatsch", ""),      # not one of ours
+                   ("BEHIND=VM", "vm"),
+                   ("", "")):
+    check(f"behind_of {text!r}", core.behind_of(text), want)
+
+print("-- setting it keeps whatever else the description says ----------")
+check("added", core.with_behind("managed: media", "vm"), "managed: media behind=vm")
+check("replaced", core.with_behind("managed: media behind=vm", "geraet"),
+      "managed: media behind=geraet")
+check("cleared", core.with_behind("managed: media behind=vm", ""), "managed: media")
+check("own words kept", core.with_behind("meine Notiz", "extern"),
+      "meine Notiz behind=extern")
+check("nothing there", core.with_behind("", "vm"), "behind=vm")
+try:
+    core.with_behind("x", "quatsch")
+    check("refuses nonsense", False, True)
+except core.UsageError as exc:
+    check("refuses nonsense", "quatsch" in str(exc), True)
+
+print("-- a VM behind the address makes the chain complete -------------")
+def with_note(note):
+    services = [service(rules=[rule("acl_vm", "vm.example.com",
+                                    servers=(("192.168.1.60", "8006"),))])]
+    for s in services:
+        for r in s["rules"]:
+            for srv in r["backend"]["servers"]:
+                srv["uuid"] = "srv-1"
+                srv["behind"] = note
+    shelf = shelf_with()
+    shelf.get(wiring.OPNSENSE, "Zuhause").data = dict(FIREWALL, services=services)
+    d = shelf.get(wiring.DNS, "DNS eins")
+    d.data = [{"domain": "vm.example.com", "answer": "192.168.1.1"}]
+    return ov.build(shelf).chains[0]
+
+unmarked = with_note("")
+check("unknown without a note", unmarked.station("container").state, ov.UNKNOWN)
+check("chain not complete", unmarked.state, ov.UNKNOWN)
+check("offers to note it", unmarked.station("container").fix, "behind")
+check("with a label", unmarked.station("container").fix_label,
+      "Vermerken, was dort läuft")
+check("and hands over the server", 
+      [s["uuid"] for s in unmarked.station("container").data["servers"]], ["srv-1"])
+
+noted = with_note("vm")
+check("green once noted", noted.station("container").state, ov.OK)
+check("says why", noted.station("container").detail,
+      "eigene VM — vermerkt, es wird kein Container erwartet")
+check("whole chain complete", noted.state, ov.OK)
+check("still changeable", noted.station("container").fix_label, "Vermerk ändern")
+
+print("-- a device or something external counts the same ---------------")
+for kind in ("geraet", "extern"):
+    check(f"{kind} is complete", with_note(kind).state, ov.OK)
+
+print("-- noted as a container, but none is there ----------------------")
+claimed = with_note("docker")
+check("that is a real gap", claimed.station("container").state, ov.WARN)
+check("says both halves", "Als Docker-Container vermerkt" in
+      claimed.station("container").detail, True)
+
+print("-- the station is called what it now answers --------------------")
+check("title", noted.station("container").title, "Dahinter")
+
+print("-- the missing DNS entry carries what to write ------------------")
+books = next(c for c in ov.build(shelf_with()).chains
+             if c.name == "buch.example.com")
+check("fix named", books.station("dns").fix, "dns")
+check("with the name", books.station("dns").data["host"], "buch.example.com")
+check("and where it points", books.station("dns").data["answer"], "192.168.1.1")
+check("button says what it does", books.station("dns").fix_label,
+      "Eintrag anlegen")
+
+astray = ov.build(shelf_with(dns_answer="192.168.1.250"))
+one = next(c for c in astray.chains if c.name == "media.example.com")
+check("a wrong entry is changed, not added", one.station("dns").fix_label,
+      "Eintrag ändern")
+
+print(f"\n{ok} ok, {fail} fail  (mit Vermerk)")
 sys.exit(1 if fail else 0)

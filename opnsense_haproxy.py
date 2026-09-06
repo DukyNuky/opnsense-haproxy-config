@@ -977,6 +977,63 @@ def provision_listener(client, opts, out=print, adguard=None):
     return apply_changes(client, opts, out)
 
 
+# What sits behind a real server when it is not a container. The note is
+# written into the server's description on OPNsense, next to the "managed:"
+# marker, and never into a file here -- it belongs to the entry, so a fresh
+# installation of this program, on this machine or another, reads it back
+# instead of asking again. Same reason the DNS name of a listener lives there.
+BEHIND_KINDS = {
+    "docker": "Docker-Container",
+    "vm": "eigene VM",
+    "geraet": "eigenes Gerät",
+    "extern": "woanders",
+}
+# What each of them means for the overview: whether it makes sense to go
+# looking for a container at that address at all.
+BEHIND_EXPECTS_CONTAINER = {"docker": True, "vm": False, "geraet": False,
+                            "extern": False}
+
+
+def behind_of(description):
+    """What was noted about the thing behind this server, or ''."""
+    found = re.search(r"behind=([A-Za-z]+)", str(description or ""), re.I)
+    kind = found.group(1).lower() if found else ""
+    return kind if kind in BEHIND_KINDS else ""
+
+
+def with_behind(description, kind):
+    """The description with the note set, replaced, or taken out again.
+
+    Whatever else the description says is kept: it may well have been written
+    by hand, and a program that tidies away someone's own words in passing is
+    a program nobody leaves running.
+    """
+    if kind and kind not in BEHIND_KINDS:
+        raise UsageError(f"'{kind}' is not one of {', '.join(BEHIND_KINDS)}")
+    # case-insensitive on the way in and out: this note is meant to be
+    # readable and writable by hand in OPNsense's own form, and somebody
+    # typing "Behind=VM" there should get it replaced, not doubled
+    rest = re.sub(r"\s*behind=[A-Za-z]+", "", str(description or ""),
+                  flags=re.I).strip()
+    if not kind:
+        return rest
+    return f"{rest} behind={kind}".strip()
+
+
+def set_behind(client, server_uuid, kind, description=None):
+    """Write the note onto one real server.
+
+    Only the description is sent. setServer applies exactly the fields it is
+    given, so there is no need to read the server back and write it whole --
+    and no safe way to do that either; see ``link_actions``.
+    """
+    if description is None:
+        description = client.get("server", server_uuid).get("description", "")
+    text = with_behind(description, kind)
+    client.update("server", server_uuid, {"description": text})
+    return text
+
+
 def listener_dns(description):
     """The DNS name a listener was created with, out of its description."""
     found = re.search(r"dns=(\S+)", str(description or ""))
@@ -1426,10 +1483,14 @@ def _read_backend(client, uuid):
         except ApiError:
             continue
         pool["servers"].append({
+            "uuid": server_uuid,
             "name": server.get("name", ""),
             "address": server.get("address", ""),
             "port": server.get("port", ""),
             "ssl": str(server.get("ssl", "0")) == "1",
+            "description": server.get("description", ""),
+            # what somebody noted sits behind this address, if anybody did
+            "behind": behind_of(server.get("description")),
         })
     return pool
 

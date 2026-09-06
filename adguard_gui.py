@@ -63,6 +63,8 @@ class AdGuardTab(ttk.Frame):
         self.error = ""
         # a new rewrite that is waiting for the list to be read first
         self.pending_new = False
+        # the name the status overview asked for, until the form opens with it
+        self.wanted = None
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -157,6 +159,7 @@ class AdGuardTab(ttk.Frame):
         self.connected = False
         self.error = str(error)
         self.pending_new = False  # whatever it was waiting for cannot happen
+        self.wanted = None
         self.app.paint_connection()
         self.render()
 
@@ -303,6 +306,16 @@ class AdGuardTab(ttk.Frame):
 
     # -- writing -----------------------------------------------------------
 
+    def add_named(self, domain, answer=""):
+        """Write the rewrite for one particular name, asked for elsewhere.
+
+        The status overview already knows which name is missing and where it
+        should point. Sending someone here to type both again would be the
+        program forgetting something it had just worked out.
+        """
+        self.wanted = (domain, answer)
+        self.new()
+
     def new(self):
         """Write a name AdGuard should answer itself."""
         if not self.client:
@@ -314,12 +327,26 @@ class AdGuardTab(ttk.Frame):
             # Without the list there is no way to tell whether the name is
             # already taken, and a second, unnoticed answer is exactly the
             # kind of DNS entry nobody finds again. So it is read first and
-            # the form opens on top of it.
+            # the form opens on top of it. Whatever name was asked for waits
+            # in self.wanted until the form actually opens.
             self.pending_new = True
             self.reload()
             return
+        wanted = getattr(self, "wanted", None) or ("", "")
+        self.wanted = None
+        standing = next((e for e in self.entries
+                         if wanted[0]
+                         and e["domain"].lower() == wanted[0].lower()), None)
         dialog = RewriteDialog(self.app, self.app.colors, target=self.target,
-                               entries=self.entries)
+                               entry=standing, entries=self.entries,
+                               domain=wanted[0], answer=wanted[1])
+        if standing:
+            # asked for a name that is already in there: this is a change of
+            # the entry standing there, not a second answer beside it
+            self.app.wait_window(dialog)
+            if dialog.result:
+                self._write(dialog.result, previous=standing)
+            return
         self.app.wait_window(dialog)
         if dialog.result:
             self._write(dialog.result)
@@ -410,7 +437,8 @@ class AdGuardTab(ttk.Frame):
 class RewriteDialog(tk.Toplevel):
     """One rewrite: the name, and what AdGuard answers when it is asked."""
 
-    def __init__(self, parent, colors, target="", entry=None, entries=()):
+    def __init__(self, parent, colors, target="", entry=None, entries=(),
+                 domain="", answer=""):
         super().__init__(parent)
         self.entries = list(entries)
         self.title("Umschreibung ändern" if entry else "Neue Umschreibung")
@@ -433,9 +461,13 @@ class RewriteDialog(tk.Toplevel):
                        "benutzt, landet damit bei der Adresse unten.").grid(
             row=next(rows), column=0, sticky="w", pady=(3, 14))
 
-        self.var_domain = tk.StringVar(value=(entry or {}).get("domain", ""))
+        # ``domain`` and ``answer`` are what somebody else already worked out
+        # -- the status overview knows the missing name and where HAProxy is.
+        # They fill in what the entry does not say.
+        self.var_domain = tk.StringVar(value=(entry or {}).get("domain", "")
+                                       or domain)
         self.var_answer = tk.StringVar(value=(entry or {}).get("answer", "")
-                                       or target)
+                                       or answer or target)
 
         ttk.Label(body, text="Name", style="FieldLabel.TLabel").grid(
             row=next(rows), column=0, sticky="w")

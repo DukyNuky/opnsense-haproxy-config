@@ -233,7 +233,8 @@ class StatusTab(ttk.Frame):
         return card
 
     def _chain_row(self, parent, chain):
-        row = tk.Frame(parent, bg=self.app.colors["surface2"], padx=12, pady=9)
+        row = tk.Frame(parent, bg=self.app.colors["surface2"], padx=12, pady=9,
+                       cursor="hand2")
         row.columnconfigure(1, weight=1)
         mark, style, _word = MARK[chain.state]
         ttk.Label(row, text=mark, style=style).grid(row=0, column=0,
@@ -246,11 +247,29 @@ class StatusTab(ttk.Frame):
         ttk.Label(row, text=summary, style="RowHint.TLabel", wraplength=560,
                   justify="left").grid(row=1, column=1, sticky="w", pady=(2, 0))
         open_now = chain.name in self.open_chains
-        ttk.Button(row, text="Kette schließen" if open_now else "Kette zeigen",
-                   style="Del.TButton",
+        ttk.Button(row, text="▴" if open_now else "▾", style="Del.TButton",
+                   width=3,
                    command=lambda n=chain.name: self._toggle(n)).grid(
             row=0, column=2, rowspan=2, padx=(10, 0))
+        # the whole line answers to a click, not only the button at the end:
+        # a row that visibly opens something is a row people click on
+        self._clickable(row, chain.name)
         return row
+
+    def _clickable(self, frame, name):
+        """Let a click anywhere on the row open or close its chain."""
+        def opened(_event):
+            self._toggle(name)
+            return "break"
+
+        frame.bind("<Button-1>", opened)
+        for child in frame.winfo_children():
+            child.bind("<Button-1>", opened)
+            try:
+                child.configure(cursor="hand2")
+            except tk.TclError:
+                pass  # a ttk widget that will not take a cursor is no reason
+                      # to leave the row unclickable
 
     def _toggle(self, name):
         self.open_chains.symmetric_difference_update({name})
@@ -265,7 +284,8 @@ class StatusTab(ttk.Frame):
             row=0, column=0, sticky="w", pady=(0, 8))
         row = 1
         for number, station in enumerate(chain.stations):
-            self._station(holder, station).grid(row=row, column=0, sticky="ew")
+            self._station(holder, station, chain).grid(row=row, column=0,
+                                                        sticky="ew")
             row += 1
             if number < len(chain.stations) - 1:
                 ttk.Label(holder, text="│", style="Chain.TLabel").grid(
@@ -273,7 +293,7 @@ class StatusTab(ttk.Frame):
                 row += 1
         return holder
 
-    def _station(self, parent, station):
+    def _station(self, parent, station, chain):
         frame = tk.Frame(parent, bg=self.app.colors["surface2"], padx=12,
                          pady=8)
         frame.columnconfigure(1, weight=1)
@@ -290,8 +310,33 @@ class StatusTab(ttk.Frame):
             ttk.Label(frame, text=station.hint, style="RowHint.TLabel",
                       wraplength=520, justify="left").grid(
                 row=2, column=1, sticky="w", pady=(2, 0))
-        if station.tab and station.state in (ov.MISSING, ov.WARN, ov.UNKNOWN):
-            ttk.Button(frame, text="hier ansetzen", style="Del.TButton",
-                       command=lambda t=station.tab: self.app.show_tab(t)).grid(
+        interesting = station.state in (ov.MISSING, ov.WARN, ov.UNKNOWN)
+        if station.fix_label or (station.tab and interesting):
+            ttk.Button(frame, text=station.fix_label or "im Tab öffnen",
+                       style="Accent.TButton" if station.fix else "Del.TButton",
+                       command=lambda c=chain, s=station: self._start(c, s)).grid(
                 row=0, column=2, rowspan=3, padx=(10, 0))
         return frame
+
+    def _start(self, chain, station):
+        """Begin the repair right here, rather than pointing at a tab.
+
+        The overview already worked out which name is missing and where it
+        should point. Handing someone a tab and letting them find that out
+        again would be the program forgetting what it just said.
+        """
+        if station.fix == "dns":
+            tab = self.app.dns
+            if not hasattr(tab, "add_named"):
+                self.app.show_tab("adguard")
+                return
+            self.app.show_tab("adguard")
+            tab.add_named(station.data.get("host", ""),
+                          station.data.get("answer", ""))
+            return
+        if station.fix == "behind":
+            from app.ui import behind
+            behind.ask(self.app, chain, station)
+            return
+        if station.tab:
+            self.app.show_tab(station.tab)

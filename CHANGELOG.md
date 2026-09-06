@@ -25,6 +25,23 @@ damit im Fenster unmissverständlich steht, was läuft.
   eine OPNsense ohne ACME-Plugin ist kein fehlendes Zertifikat. Beides steht
   als Fragezeichen da, nicht als Fehler. Und wo gar nichts eingerichtet ist,
   ist auch nichts kaputt: ohne AdGuard ist ein fehlender DNS-Eintrag kein Loch.
+- **Vermerken, was hinter einer Adresse steht.** Eine eigene VM sieht von hier
+  aus genauso aus wie ein Container, der fehlt: eine Adresse, auf der nichts
+  Bekanntes lauscht. Nur wer es weiß, kann das auseinanderhalten — und wer es
+  einmal gesagt hat, soll es nicht zweimal sagen müssen. Der Vermerk (**eigene
+  VM**, **eigenes Gerät**, **woanders**, **Docker-Container**) wird deshalb in
+  die **Beschreibung des Servers auf der OPNsense** geschrieben, nicht in eine
+  Datei hier. Er überlebt damit jede Neuinstallation und gilt auch auf einem
+  anderen Rechner. Die Station heißt jetzt **Dahinter** statt Container, weil
+  sie beides beantwortet, und die Kette wird grün.
+  Umgekehrt gilt auch: als Container vermerkt und keiner da — das ist dann eine
+  echte Lücke und wird als solche gezeigt.
+- **„Hier ansetzen" fängt die Reparatur an, statt auf einen Tab zu zeigen.**
+  Fehlt der DNS-Eintrag, öffnet sich das Formular dafür — mit dem Namen und der
+  HAProxy-Adresse schon eingetragen. Der Überblick hat beides gerade
+  ausgerechnet; jemanden auf einen Tab zu schicken, damit er es dort noch
+  einmal herausfindet, hieße es wieder zu vergessen.
+- **Die ganze Zeile öffnet die Kette**, nicht nur der Knopf am Ende.
 - **Gelesen wird nur auf Knopfdruck**, je Seite oder alles auf einmal, und über
   allem steht, wie alt der Stand ist.
 - **Mehrere Systeme werden gleichzeitig gefragt.** Drei AdGuards nacheinander

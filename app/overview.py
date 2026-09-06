@@ -45,8 +45,19 @@ class Station:
     detail: str = ""
     #: what to do about it, in words a person can act on
     hint: str = ""
-    #: which tab to open to do that
+    #: which tab to open when there is nothing better to offer
     tab: str = ""
+    #: what the window can do about it right here. A station that names one
+    #: gets a button that does the thing rather than one that moves someone
+    #: to another tab to look for it -- the overview already knows which name
+    #: is missing, and sending them off to type it again would be the program
+    #: forgetting what it just worked out.
+    fix: str = ""
+    fix_label: str = ""
+    #: whatever the window needs to act right here rather than send someone
+    #: away -- the servers of this chain, for instance, so the note about
+    #: what sits behind them can be set without leaving the tab
+    data: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -187,7 +198,9 @@ def dns_station(host, answers, expected, configured):
                        detail=f"Keine Umschreibung für {host}",
                        hint="Ohne sie landet der Name nicht bei HAProxy, und "
                             "die Seite ist im Heimnetz nicht zu erreichen.",
-                       tab="adguard")
+                       tab="adguard", fix="dns",
+                       fix_label="Eintrag anlegen",
+                       data={"host": host, "answer": expected})
     where = ", ".join(sorted({name for name, _answer in entries}))
     targets = sorted({answer for _name, answer in entries if answer})
     detail = f"{host} → {', '.join(targets) or '?'}  ({where})"
@@ -195,7 +208,8 @@ def dns_station(host, answers, expected, configured):
         return Station("dns", "DNS-Name", WARN, detail=detail,
                        hint=f"HAProxy steht auf {expected}. Ein Name, der "
                             "woandershin zeigt, geht am Proxy vorbei.",
-                       tab="adguard")
+                       tab="adguard", fix="dns", fix_label="Eintrag ändern",
+                       data={"host": host, "answer": expected})
     if len(entries) > 1 and len(targets) > 1:
         return Station("dns", "DNS-Name", WARN, detail=detail,
                        hint="Zwei DNS-Server antworten verschieden. Welche "
@@ -204,17 +218,44 @@ def dns_station(host, answers, expected, configured):
     return Station("dns", "DNS-Name", OK, detail=detail, tab="adguard")
 
 
-def container_station(servers, ports, configured):
-    """Läuft hinter der Adresse tatsächlich etwas?"""
-    if not configured:
-        return Station("container", "Container", SKIPPED,
+TITLE_BEHIND = "Dahinter"
+
+
+def _noted(servers):
+    """What was noted about these servers, as one answer if they agree."""
+    kinds = {str(s.get("behind") or "") for s in servers}
+    kinds.discard("")
+    if len(kinds) == 1:
+        return kinds.pop()
+    return ""
+
+
+def behind_station(servers, ports, configured):
+    """Was läuft an der Adresse -- und wenn nichts, ist das ein Problem?
+
+    The note on the server settles the last question, and it is the only thing
+    that can. A VM behind a name looks exactly like a container that is not
+    there: both are an address with nothing of ours listening on it. Only
+    somebody who knows can say which, and once they have said it, it is
+    written on the server itself so nobody has to say it twice.
+    """
+    place = {"servers": servers}
+    noted = _noted(servers)
+    if noted and not core.BEHIND_EXPECTS_CONTAINER.get(noted, True):
+        return Station("container", TITLE_BEHIND, OK,
+                       detail=f"{core.BEHIND_KINDS[noted]} — vermerkt, es wird "
+                              "kein Container erwartet",
+                       tab="haproxy", fix="behind",
+                       fix_label="Vermerk ändern", data=place)
+    if not servers:
+        return Station("container", TITLE_BEHIND, UNKNOWN, detail="",
+                       tab="portainer", data=place)
+    if not configured and not noted:
+        return Station("container", TITLE_BEHIND, SKIPPED,
                        detail="Kein Docker-Host eingerichtet",
                        hint="Was hinter der Adresse läuft, kann von hier aus "
                             "niemand sehen — das ist in Ordnung, wenn es kein "
-                            "Container ist.", tab="portainer")
-    if not servers:
-        return Station("container", "Container", UNKNOWN, detail="",
-                       tab="portainer")
+                            "Container ist.", tab="portainer", data=place)
     hits, misses = [], []
     for server in servers:
         address = str(server.get("address", "")).strip()
@@ -231,22 +272,35 @@ def container_station(servers, ports, configured):
         running = [h for h in hits if h[3] == "running"]
         names = ", ".join(sorted({h[1] or h[2] for h in hits}))
         if not running:
-            return Station("container", "Container", WARN,
+            return Station("container", TITLE_BEHIND, WARN,
                            detail=f"{names} — läuft gerade nicht",
                            hint="Der Eintrag im Proxy stimmt, aber dahinter "
-                                "antwortet nichts.", tab="portainer")
-        return Station("container", "Container", OK, detail=names,
-                       tab="portainer")
+                                "antwortet nichts.", tab="portainer",
+                           data=place)
+        return Station("container", TITLE_BEHIND, OK, detail=names,
+                       tab="portainer", data=place)
     if hits:
-        return Station("container", "Container", WARN,
+        return Station("container", TITLE_BEHIND, WARN,
                        detail=f"nur teilweise gefunden; offen: "
                               f"{', '.join(misses)}",
-                       tab="portainer")
-    return Station("container", "Container", UNKNOWN,
+                       tab="portainer", data=place)
+    if noted:
+        # noted as a container, and none was found -- that is a real gap
+        return Station("container", TITLE_BEHIND, WARN,
+                       detail=f"Als {core.BEHIND_KINDS[noted]} vermerkt, aber "
+                              f"auf {', '.join(misses)} läuft keiner",
+                       hint="Entweder der Container ist weg, oder der Vermerk "
+                            "stimmt nicht mehr.", tab="portainer",
+                       fix="behind", fix_label="Vermerk ändern", data=place)
+    return Station("container", TITLE_BEHIND, UNKNOWN,
                    detail=f"Nichts auf {', '.join(misses)} gefunden",
-                   hint="Auf keinem der eingerichteten Docker-Hosts ist dieser "
-                        "Port veröffentlicht. Das kann stimmen, wenn der "
-                        "Dienst kein Container ist.", tab="portainer")
+                   hint="Auf keinem eingerichteten Docker-Host ist dieser Port "
+                        "veröffentlicht. Wenn dort eine eigene VM oder ein "
+                        "Gerät steht, lässt sich das hier vermerken — dann ist "
+                        "die Kette vollständig und bleibt es auch nach einer "
+                        "Neuinstallation, denn der Vermerk steht auf der "
+                        "OPNsense.", tab="portainer", fix="behind",
+                       fix_label="Vermerken, was dort läuft", data=place)
 
 
 def _servers_of(backend):
@@ -296,7 +350,7 @@ def host_chain(host, path, service, rule, readings, answers, ports,
                                      "Im Pool steht keine Maschine, an die "
                                      "weitergereicht werden könnte.",
                                 tab="haproxy"))
-    stations.append(container_station(servers, ports, docker_on))
+    stations.append(behind_station(servers, ports, docker_on))
     return Chain(name=host, where=where, path=path, kind="host",
                  stations=stations)
 
@@ -338,7 +392,7 @@ def listener_chain(service, readings, answers, ports, expected, dns_on,
                                  "damit.", tab="haproxy"))
     stations.append(Station("server", "Server", OK if servers else MISSING,
                             detail=_server_detail(servers), tab="haproxy"))
-    stations.append(container_station(servers, ports, docker_on))
+    stations.append(behind_station(servers, ports, docker_on))
     return Chain(name=host or service["name"], where=where, kind="listener",
                  stations=stations)
 
