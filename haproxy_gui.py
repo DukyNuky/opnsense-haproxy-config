@@ -2599,7 +2599,8 @@ class App(tk.Tk):
 
         self.log.configure(bg=c["surface"], fg=c["text"],
                            insertbackground=c["text"],
-                           selectbackground=c["accent_soft"])
+                           selectbackground=c["accent_soft"],
+                           inactiveselectbackground=c["accent_soft"])
         self.log.tag_configure("info", foreground=c["text"])
         self.log.tag_configure("muted", foreground=c["muted"])
         self.log.tag_configure("add", foreground=c["ok"])
@@ -2926,12 +2927,23 @@ class App(tk.Tk):
         self._link(bar, f"DukyNuky · v{core.VERSION}", AUTHOR_URL,
                    style="Mark.TLabel").grid(row=0, column=1, sticky="e",
                                              padx=(0, 12))
+        self.copy_button = ttk.Button(bar, text="kopieren", style="Del.TButton",
+                                      command=self._copy_log)
+        self.copy_button.grid(row=0, column=2, sticky="e", padx=(0, 6))
         ttk.Button(bar, text="leeren", style="Del.TButton",
-                   command=self._clear_log).grid(row=0, column=2, sticky="e")
+                   command=self._clear_log).grid(row=0, column=3, sticky="e")
 
         self.log = tk.Text(self.log_frame, height=7, wrap="word", bd=0,
                            highlightthickness=0, padx=14, pady=8,
                            font=self.font_mono, state="disabled")
+        # A disabled text widget does not take the focus when it is clicked,
+        # and without focus Tk sends it no <<Copy>>: the log could be marked
+        # with the mouse and never copied out of the window. The selection was
+        # not even visible, because an unfocused widget draws it in
+        # "inactiveselectbackground", which is unset by default. Both are put
+        # right here -- the log is where a failure is quoted word for word,
+        # and that is exactly the text somebody needs to pass on.
+        self.log.bind("<Button-1>", lambda _e: self.log.focus_set())
         self.log.grid(row=1, column=0, sticky="nsew", padx=(0, 0), pady=(0, 8))
         scroll = ttk.Scrollbar(self.log_frame, orient="vertical",
                                command=self.log.yview)
@@ -3185,6 +3197,26 @@ class App(tk.Tk):
         self._render_inventory()
 
     # -- logging -----------------------------------------------------------
+
+    def _copy_log(self):
+        """Put the log on the clipboard: what is marked, or all of it.
+
+        Without a selection this takes everything, because the reason to
+        reach for it is almost always the whole of a failure -- and marking
+        eight wrapped lines of an API error with the mouse is work nobody
+        should have to do to be able to report it.
+        """
+        try:
+            text = self.log.get("sel.first", "sel.last")
+        except tk.TclError:
+            text = self.log.get("1.0", "end-1c")   # nothing marked
+        if not text.strip():
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.copy_button.configure(text="kopiert")
+        self.after(1500, lambda: self.copy_button.winfo_exists()
+                   and self.copy_button.configure(text="kopieren"))
 
     def _clear_log(self):
         self.log.configure(state="normal")

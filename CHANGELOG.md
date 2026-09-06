@@ -91,6 +91,25 @@ damit im Fenster unmissverständlich steht, was läuft.
   - Scheitert die OPNsense-Seite, wird **der DNS-Eintrag nicht angefasst** —
     solange die Regel steht, würde das Wegnehmen des Namens kaputt machen,
     was gerade funktioniert.
+- **Das Protokoll lässt sich markieren und kopieren.** Ein abgeschaltetes
+  Textfeld nimmt unter Linux den Fokus nicht an, wenn man hineinklickt — und
+  ohne Fokus schickt Tk ihm kein „Kopieren". Die Markierung war nicht einmal
+  zu sehen, weil ein Feld ohne Fokus sie in einer Farbe zeichnet, die gar
+  nicht gesetzt war. Beides ist gerichtet, und daneben steht jetzt ein Knopf
+  **kopieren**: markiert oder, wenn nichts markiert ist, alles. Das Protokoll
+  ist die Stelle, an der ein Fehler wortwörtlich steht — genau der Text, den
+  man weitergeben will.
+- **Vor dem Deploy wird geprüft, ob die verlangte `.env` im Repository liegt.**
+  Portainer klont das Repository nach `/data/compose/<id>` und lässt compose
+  dort laufen. Eine Compose-Datei mit `env_file: .env` braucht die Datei also
+  **im Repository** — die Variablen, die am Stack stehen, werden compose als
+  Variablen übergeben und werden nie eine Datei. Und `.env` ist die eine
+  Datei, die fast jedes Repository aus git heraushält. Das endete in einem
+  Deploy, der nach dem Klonen und dem Image-Pull an einem Satz scheitert, mit
+  dem niemand etwas anfangen kann: `env file /data/compose/82/.env not found`
+  — und alles wird wieder abgeräumt. Jetzt steht die Zeile **vorher** im
+  Protokoll, mitsamt den drei Wegen heraus. Als `required: false` markierte
+  Dateien werden nicht gemeldet: compose kommt ohne sie aus.
 - **Jedes Lesen zeigt den Balken.** Für das Neulesen direkt nach einem Dialog
   gab es eine stille Variante — die Annahme war, ein Fenster, das gleich
   danach aufgeht, wirke wie eine Beschwerde. Es wirkte wie gar nichts: oben

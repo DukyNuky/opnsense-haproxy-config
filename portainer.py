@@ -884,16 +884,32 @@ def _scalars(text):
     return [_scalar(entry)]
 
 
-def compose_env_files(text):
-    """The files a compose file names under ``env_file:``.
+# What "required:" is set to when a compose file says the env file may be
+# absent. Everything else, the key being missing included, means it must be
+# there -- which is what compose itself assumes.
+OPTIONAL_WORDS = ("false", "no", "off", "0")
+
+
+def _env_entries(text):
+    """Every ``env_file:`` a compose file names, with whether it is required.
 
     This reads lines rather than YAML -- there is no parser in the standard
     library and one file name is not worth carrying a dependency for. It knows
     the three ways the key is written: one name, a list of names, and the
-    longer form with ``path:``. Anything it does not recognise is passed over,
-    which costs at most a suggestion.
+    longer form with ``path:`` and ``required:``. Anything it does not
+    recognise is passed over, which costs at most a suggestion.
+
+    A file named twice is one file. If any service insists on it, it counts as
+    required: compose stops for that service, and the stack is no better off
+    for the others having been relaxed about it.
     """
-    names, lines, index = [], str(text or "").splitlines(), 0
+    found, lines, index = [], str(text or "").splitlines(), 0
+
+    def add(names, required=True):
+        for name in names:
+            if name:
+                found.append([name, required])
+
     while index < len(lines):
         line = lines[index]
         index += 1
@@ -902,9 +918,10 @@ def compose_env_files(text):
             continue
         inline = stripped[len("env_file:"):].strip()
         if inline and not inline.startswith("#"):
-            names.extend(_scalars(inline))
+            add(_scalars(inline))
             continue
         indent = len(line) - len(line.lstrip())
+        block = []
         while index < len(lines):
             following = lines[index]
             if not following.strip():
@@ -918,11 +935,32 @@ def compose_env_files(text):
                 item = item[1:].strip()
             if item.startswith("path:"):
                 item = item[5:].strip()
+            elif item.startswith("required:"):
+                # belongs to the entry above it, which is the one it describes
+                if block and item.split(":", 1)[1].strip().strip("\"'").lower() \
+                        in OPTIONAL_WORDS:
+                    block[-1][1] = False
+                continue
             elif ":" in item:
-                continue  # "required: false" and its kind, not a file name
-            names.extend(_scalars(item))
-    # several services usually name the same file; it is one file to read
-    return list(dict.fromkeys(name for name in names if name))
+                continue  # some other key, not a file name
+            for name in _scalars(item):
+                if name:
+                    block.append([name, True])
+        found.extend(block)
+
+    merged = {}
+    for name, required in found:
+        merged[name] = merged.get(name, False) or required
+    return [[name, required] for name, required in merged.items()]
+
+
+def compose_env_files(text):
+    """The files a compose file names under ``env_file:``, optional ones too.
+
+    Used to find values to fill the form with, where a file that may be
+    absent is just as good a source as one that must be there.
+    """
+    return [name for name, _required in _env_entries(text)]
 
 
 def expand(text, variables=None):
@@ -1491,6 +1529,51 @@ def rollback_deploy(client, endpoint_id, name, keep=(), out=print):
     return gone
 
 
+def required_env_files(client, opts):
+    """Env files the compose file insists on that the repository does not have.
+
+    Portainer clones the repository into ``/data/compose/<id>`` and runs
+    compose there. A compose file that says ``env_file: .env`` therefore needs
+    a ``.env`` **in the repository**: the variables set on the stack are
+    handed to compose as variables, they never become a file on disk. And
+    ``.env`` is the one file nearly every repository keeps out of git, so this
+    ends as a deploy that fails on a sentence nobody can act on --
+    "env file /data/compose/82/.env not found" -- after the clone, after the
+    image pull, with everything taken back down again.
+
+    Reading the repository is Portainer's own call, so nothing here needs to
+    reach GitHub. When it cannot be read at all the answer is "nothing known";
+    the deploy that follows will say why soon enough.
+    """
+    compose_path = (getattr(opts, "compose_file", "") or "").strip() \
+        or DEFAULT_COMPOSE_FILE
+
+    def read(path):
+        return client.repo_file(
+            opts.repository, path,
+            reference=getattr(opts, "reference", ""),
+            username=getattr(opts, "username", ""),
+            password=getattr(opts, "password", ""),
+            skip_tls_verify=bool(getattr(opts, "skip_tls_verify", False)))
+
+    try:
+        compose = read(compose_path)
+    except (PortainerError, core.ApiError, core.UsageError):
+        return []
+    folder = posixpath.dirname(compose_path.strip("/"))
+    missing = []
+    for name in [n for n, required in _env_entries(compose) if required]:
+        path = posixpath.normpath(name.lstrip("/") if name.startswith("/")
+                                  else posixpath.join(folder, name))
+        if not path or path.startswith(".."):
+            continue
+        try:
+            read(path)
+        except (PortainerError, core.ApiError, core.UsageError):
+            missing.append(path)
+    return missing
+
+
 def deploy(client, opts, out=print):
     """Create a stack from a repository and say what happened while doing it.
 
@@ -1531,6 +1614,16 @@ def deploy(client, opts, out=print):
                 + (", pulling images" if auto.get("ForcePullImage") else ""))
         else:
             out(f"auto update on webhook {auto.get('Webhook')}")
+
+    # Asked before the clone, the pull and the rollback rather than after
+    # them: this is the one failure that is knowable in advance.
+    for path in required_env_files(client, opts):
+        out(f"! the compose file requires {path} and the repository does not "
+            f"have it -- Portainer clones the repository and looks for the "
+            f"file there. The variables set on the stack are handed to "
+            f"compose as variables; they do not become a file. Commit the "
+            f"file, mark it 'required: false', or take the env_file line out.",
+            file=sys.stderr)
 
     # Who was already there, so that undoing this can tell the containers it
     # started apart from the ones it found. Not knowing is no reason to stop:
