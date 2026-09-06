@@ -31,10 +31,15 @@ class Source:
     is off is not a bug, and the message is kept to be shown beside it.
     """
 
-    def __init__(self, kind, name, read, label=""):
+    def __init__(self, kind, name, read, label="", settings=None):
         self.kind = kind
         self.name = name
         self.label = label or name
+        # The entry this was built from. Kept because what was read is not
+        # always enough on its own: whether a DNS name points at the right
+        # place needs the address HAProxy sits on, and that is written in the
+        # settings rather than in any answer.
+        self.settings = dict(settings or {})
         self._read = read
         self.status = IDLE
         self.data = None
@@ -132,6 +137,7 @@ class Sources:
                 return source
             existing._read = source._read
             existing.label = source.label
+            existing.settings = source.settings
             return existing
 
     def forget(self, kind, name):

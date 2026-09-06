@@ -12,11 +12,21 @@ damit im Fenster unmissverständlich steht, was läuft.
   Einstellungen am Ende, wo ein Tab hingehört, der nicht Teil dieser Kette ist.
   „Portainer“ heißt jetzt **Docker**, „AdGuard“ heißt **DNS**: der Tab ist nach
   der Sache benannt, nicht nach dem Programm, das sie zufällig verwaltet.
-- **Der Status-Tab liest nur aus dem Zwischenspeicher.** Er zeigt jedes
-  eingerichtete System, ob es geantwortet hat und wie alt die Antwort ist.
-  Gefragt wird ausschließlich auf Knopfdruck — je Tab oder alles auf einmal.
-  Das Ablaufdiagramm mit den Abhängigkeiten wächst hier hinein; die Liste der
-  Systeme ist das, woran es hängt.
+- **Der Status-Tab zeigt die ganze Kette.** Oben die Karte der drei Seiten —
+  DNS, HAProxy, Docker — mit Pfeilen dazwischen und dem Zustand jeder Seite.
+  Darunter eine Zeile je Name, der erreichbar sein soll; aufgeklappt steht die
+  vollständige Kette: **Zertifikat → DNS-Name → Öffentlicher Dienst → Regel →
+  Pool → Server → Container**. Jede Station sagt, was gefunden wurde, und bei
+  einer Lücke, was das kostet — „Ohne sie landet der Name nicht bei HAProxy,
+  und die Seite ist im Heimnetz nicht zu erreichen" — mit einem Knopf, der
+  genau dorthin führt, wo man es ergänzt.
+- **Der Unterschied zwischen „fehlt" und „kann ich nicht sagen" wird gemacht.**
+  Ein Docker-Host, der noch nicht gelesen wurde, ist kein fehlender Container;
+  eine OPNsense ohne ACME-Plugin ist kein fehlendes Zertifikat. Beides steht
+  als Fragezeichen da, nicht als Fehler. Und wo gar nichts eingerichtet ist,
+  ist auch nichts kaputt: ohne AdGuard ist ein fehlender DNS-Eintrag kein Loch.
+- **Gelesen wird nur auf Knopfdruck**, je Seite oder alles auf einmal, und über
+  allem steht, wie alt der Stand ist.
 - **Mehrere Systeme werden gleichzeitig gefragt.** Drei AdGuards nacheinander
   kosten drei Zeitüberschreitungen, um zu scheitern; zusammen gefragt kosten
   sie eine, und jedes sagt für sich, wie es lief, während die anderen noch

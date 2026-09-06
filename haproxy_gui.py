@@ -2390,6 +2390,14 @@ class App(tk.Tk):
         style.configure("Beta.TLabel", background=c["warn"],
                         foreground=c["bg"], font=self.font_small,
                         padding=(6, 1))
+        # amber: something to look at, as opposed to BadgeWarn's red for
+        # something that is plainly not there
+        style.configure("BadgeAmber.TLabel", background=c["surface2"],
+                        foreground=c["warn"], font=self.font_small,
+                        padding=(6, 1))
+        # the thin line that joins one station of a chain to the next
+        style.configure("Chain.TLabel", background=c["surface"],
+                        foreground=c["border_strong"], font=self.font_small)
 
         style.configure("Card.TEntry", fieldbackground=c["surface2"],
                         foreground=c["text"], insertcolor=c["text"],

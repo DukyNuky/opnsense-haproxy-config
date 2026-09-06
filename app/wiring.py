@@ -60,6 +60,24 @@ def docker_engine(name, entry):
     return docker_layer.engine_for(name, entry)
 
 
+def read_opnsense(client):
+    """What the overview needs from one firewall, in one reading.
+
+    The certificates are a second call into a second plugin. A firewall
+    without os-acme-client answers everything else perfectly well, so a
+    missing ACME list is written down rather than raised: the overview then
+    says "kann ich nicht sagen" at that one station instead of losing the
+    whole firewall over it.
+    """
+    reading = {"services": core.inventory(client), "domains": [],
+               "domains_error": ""}
+    try:
+        reading["domains"] = core.base_domains(client)
+    except core.ApiError as exc:
+        reading["domains_error"] = str(exc)
+    return reading
+
+
 def entries_of(systems, kind):
     """The saved entries for one kind, under whatever key the file uses."""
     key = DOCKER_KEY if kind == DOCKER else kind
@@ -84,7 +102,7 @@ def source_for(kind, entry, place=None):
     name = str(entry.get("name") or entry.get("url") or "?")
     label = f"{name} · {entry.get('url', '')}".rstrip(" ·")
     if kind == OPNSENSE:
-        read = _reader(lambda: opnsense_client(entry), core.inventory)
+        read = _reader(lambda: opnsense_client(entry), read_opnsense)
     elif kind == DNS:
         read = _reader(lambda: dns_client(entry), lambda client: client.rewrites())
     elif kind == DOCKER:
@@ -92,7 +110,7 @@ def source_for(kind, entry, place=None):
                        lambda engine: engine.read(place))
     else:
         raise LookupError(f"{kind!r} ist keine Art von System")
-    return Source(kind, name, read, label=label)
+    return Source(kind, name, read, label=label, settings=entry)
 
 
 def wire(shelf, systems, places=None):

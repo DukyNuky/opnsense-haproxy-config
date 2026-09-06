@@ -1,56 +1,61 @@
-"""The Status tab: what is set up, and whether it answered.
+"""The Status tab: the whole arrangement, and where it breaks.
 
-Everything shown here is read from the shelf, never from a machine. Pressing
-refresh is the only thing in this tab that asks anybody anything -- which is
-what showing cached data means once there are several systems and one of them
-is a timeout waiting to happen.
+A name that answers in a browser is the end of a chain, and every link of it
+lives somewhere else -- a certificate on the firewall, a name in AdGuard, a
+public service and a rule and a pool in HAProxy, a machine and a port behind
+that, and something in Docker actually listening there. No single system can
+say which link is missing; each one only knows its own part and reports that
+everything is fine.
 
-This is the first stage. The flow diagram of a service and everything it
-depends on grows in below; the list of systems is what it hangs on, and it
-earns its place on its own until then: three DNS servers where one is
-unreachable is worth seeing at a glance rather than finding out later.
+The map at the top says how the three sides are doing. Under it, one line per
+reachable thing, and opening one shows its chain with the gap marked and a way
+in at every station.
+
+Nothing here asks a machine anything. What is drawn was read before and is
+labelled with its age; refreshing is a button, on purpose.
 """
 
 import tkinter as tk
 from tkinter import ttk
 
 import haproxy_gui as gui
+from app import overview as ov
 from app import sources as shelf_module
 from app import wiring
 
-# The state of one system, as a badge and a word.
-PILL = {
-    shelf_module.IDLE: ("BadgeMuted.TLabel", "noch nicht gelesen"),
-    shelf_module.LOADING: ("Badge.TLabel", "wird gelesen …"),
-    shelf_module.OK: ("BadgeOk.TLabel", "erreichbar"),
-    shelf_module.FAILED: ("BadgeWarn.TLabel", "keine Antwort"),
+# How a station is shown: a mark, a badge style, and what the mark means.
+MARK = {
+    ov.OK: ("✓", "BadgeOk.TLabel", "in Ordnung"),
+    ov.WARN: ("⚠", "BadgeAmber.TLabel", "ansehen"),
+    ov.MISSING: ("✗", "BadgeWarn.TLabel", "fehlt"),
+    ov.UNKNOWN: ("?", "BadgeMuted.TLabel", "nicht bekannt"),
+    ov.SKIPPED: ("–", "BadgeMuted.TLabel", "nicht nötig"),
 }
 
-SECTIONS = (
-    (wiring.OPNSENSE, "OPNsense", "Die Firewall mit HAProxy darauf."),
-    (wiring.DNS, "DNS", "AdGuard Home, für die Namen im Heimnetz."),
-    (wiring.DOCKER, "Docker", "Portainer oder Dockhand, je Eintrag."),
-)
+CARD_TAB = {wiring.DNS: "adguard", wiring.OPNSENSE: "haproxy",
+            wiring.DOCKER: "portainer"}
+CARD_HINT = {
+    wiring.DNS: "Welcher Name im Heimnetz wohin zeigt.",
+    wiring.OPNSENSE: "Wo HAProxy zuhört und welche Regel greift.",
+    wiring.DOCKER: "Was hinter den Adressen tatsächlich läuft.",
+}
 
 
 def count_text(summary):
-    """"3 von 4 erreichbar", or what is true instead."""
+    """"2 erreichbar · 1 ohne Antwort", or what is true instead."""
     if not summary["total"]:
         return "noch nichts eingerichtet"
     parts = []
-    if summary["loading"]:
-        parts.append(f"{summary['loading']} wird gelesen")
-    if summary["ok"]:
-        parts.append(f"{summary['ok']} erreichbar")
-    if summary["failed"]:
-        parts.append(f"{summary['failed']} ohne Antwort")
-    if summary["idle"]:
-        parts.append(f"{summary['idle']} noch nicht gelesen")
+    for key, word in (("loading", "wird gelesen"), ("ok", "erreichbar"),
+                      ("failed", "ohne Antwort"),
+                      ("idle", "noch nicht gelesen")):
+        if summary[key]:
+            parts.append(f"{summary[key]} {word}")
     return " · ".join(parts)
 
 
 class StatusTab(ttk.Frame):
-    """What is configured, how it is doing, and how old that answer is."""
+    """The map, the chains, and the way in at every station."""
 
     # what the window asks of every tab
     connected = False
@@ -61,10 +66,9 @@ class StatusTab(ttk.Frame):
         self.app = app
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
-        # one row of widgets per source, kept so an answer coming in changes a
-        # line rather than rebuilding the page under the reader's hands
-        self.rows = {}
-        self.shown = ()
+        #: which chains the reader has opened
+        self.open_chains = set()
+        self._drawn = None
 
         head = ttk.Frame(self, style="TFrame")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
@@ -93,116 +97,201 @@ class StatusTab(ttk.Frame):
     def reload(self):
         self.app.refresh_sources()
 
-    def source_changed(self, source):
-        """One system answered, or started being asked."""
+    def source_changed(self, _source=None):
         self.render()
+
+    # -- when to redraw -----------------------------------------------------
+
+    def _signature(self):
+        """What the picture is made of, so it is redrawn only when that moves.
+
+        Rebuilding on every notification would pull the page out from under
+        whoever is reading it -- and a refresh of four systems sends eight.
+        """
+        return (tuple((s.kind, s.name, s.status, s.reads)
+                      for s in self.app.shelf.all()),
+                tuple(sorted(self.open_chains)))
+
+    def render(self, force=False):
+        signature = self._signature()
+        if force or signature != self._drawn:
+            self._drawn = signature
+            self._build()
+        self._paint_head()
+
+    def _paint_head(self):
+        counted = self.app.shelf.summary()
+        oldest = self.app.shelf.oldest()
+        self.age.configure(
+            text=count_text(counted) + (
+                f"  ·  Stand {shelf_module.describe_age(oldest)}"
+                if oldest is not None else ""))
+        busy = bool(counted["loading"])
+        self.refresh_button.configure(
+            state="disabled" if busy else "normal",
+            text="↻ wird gelesen …" if busy else "↻ Alles neu lesen")
 
     # -- drawing ------------------------------------------------------------
 
-    def _fingerprint(self):
-        """What the page is made of, so it is rebuilt only when that changes."""
-        return tuple((s.kind, s.name) for s in self.app.shelf.all())
-
-    def render(self, force=False):
-        if force or self._fingerprint() != self.shown:
-            self._build()
-        self._paint()
-
     def _build(self):
         self.scroll.clear()
-        self.rows = {}
-        self.shown = self._fingerprint()
         body = self.scroll.body
         body.columnconfigure(0, weight=1)
-        row = 0
-        for kind, title, hint in SECTIONS:
-            card = self._section(body, kind, title, hint)
-            card.grid(row=row, column=0, sticky="ew", padx=18, pady=(18, 0))
-            row += 1
-        ttk.Frame(body, style="TFrame", height=18).grid(row=row, column=0)
+        picture = ov.build(self.app.shelf)
+        rows = 0
+        self._map(body, picture).grid(row=rows, column=0, sticky="ew",
+                                      padx=18, pady=(18, 0))
+        rows += 1
+        self._chains(body, picture).grid(row=rows, column=0, sticky="ew",
+                                         padx=18, pady=(18, 0))
+        rows += 1
+        ttk.Frame(body, style="TFrame", height=18).grid(row=rows, column=0)
 
-    def _section(self, parent, kind, title, hint):
+    # -- the map ------------------------------------------------------------
+
+    def _map(self, parent, picture):
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 16))
+        card.columnconfigure(0, weight=1)
+        ttk.Label(card, text="Die drei Seiten", style="H2.TLabel").grid(
+            row=0, column=0, sticky="w")
+        ttk.Label(card, style="Hint.TLabel", wraplength=640, justify="left",
+                  text="Ein Name wird im DNS auf HAProxy gelenkt, HAProxy "
+                       "reicht ihn an eine Adresse weiter, und dort läuft ein "
+                       "Container. Fehlt eine der drei Seiten, kommt nichts "
+                       "an — die Kette darunter sagt, welche.").grid(
+            row=1, column=0, sticky="w", pady=(3, 12))
+
+        strip = ttk.Frame(card, style="Card.TFrame")
+        strip.grid(row=2, column=0, sticky="ew")
+        for column in (0, 2, 4):
+            strip.columnconfigure(column, weight=1, uniform="side")
+        for index, box in enumerate(picture.cards):
+            self._box(strip, box).grid(row=0, column=index * 2, sticky="nsew",
+                                       padx=(0, 0))
+            if index < len(picture.cards) - 1:
+                ttk.Label(strip, text="→", style="Chain.TLabel").grid(
+                    row=0, column=index * 2 + 1, padx=10)
+        return card
+
+    def _box(self, parent, box):
+        frame = tk.Frame(parent, bg=self.app.colors["surface2"], padx=14,
+                         pady=12)
+        frame.columnconfigure(0, weight=1)
+        head = ttk.Frame(frame, style="Sub.TFrame")
+        head.grid(row=0, column=0, sticky="ew")
+        head.columnconfigure(0, weight=1)
+        ttk.Label(head, text=box.title, style="Switch.TLabel").grid(
+            row=0, column=0, sticky="w")
+        mark, style, _word = MARK[box.state]
+        ttk.Label(head, text=mark, style=style).grid(row=0, column=1, sticky="e")
+        for number, line in enumerate(box.lines or ["—"], start=1):
+            ttk.Label(frame, text=line, style="RowHint.TLabel", wraplength=200,
+                      justify="left").grid(row=number, column=0, sticky="w",
+                                           pady=(3, 0))
+        ttk.Button(frame, text="öffnen", style="Del.TButton",
+                   command=lambda k=box.kind: self.app.show_tab(CARD_TAB[k])).grid(
+            row=len(box.lines or [1]) + 1, column=0, sticky="w", pady=(8, 0))
+        gui.Tooltip(frame, CARD_HINT.get(box.kind, ""))
+        return frame
+
+    # -- the chains ---------------------------------------------------------
+
+    def _chains(self, parent, picture):
         card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 16))
         card.columnconfigure(0, weight=1)
         head = ttk.Frame(card, style="Card.TFrame")
         head.grid(row=0, column=0, sticky="ew")
         head.columnconfigure(1, weight=1)
-        ttk.Label(head, text=title, style="H2.TLabel").grid(row=0, column=0,
-                                                            sticky="w")
-        summary = ttk.Label(head, text="", style="Hint.TLabel")
-        summary.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        ttk.Button(head, text="↻", style="Del.TButton", width=3,
-                   command=lambda k=kind: self.app.refresh_sources([k])).grid(
-            row=0, column=2, sticky="e")
-        ttk.Label(card, text=hint, style="Hint.TLabel", wraplength=520,
-                  justify="left").grid(row=1, column=0, sticky="w", pady=(3, 10))
-        self.rows[kind] = {"summary": summary, "entries": {}}
+        ttk.Label(head, text="Was erreichbar sein soll", style="H2.TLabel").grid(
+            row=0, column=0, sticky="w")
+        trouble = len(picture.trouble)
+        ttk.Label(head, style="Hint.TLabel",
+                  text=(f"{trouble} von {len(picture.chains)} brauchen "
+                        "Aufmerksamkeit" if trouble
+                        else f"{len(picture.chains)} vollständig")).grid(
+            row=0, column=1, sticky="w", padx=(10, 0))
 
-        entries = self.app.shelf.of_kind(kind)
-        if not entries:
-            ttk.Label(card, style="RowHint.TLabel",
-                      text="Nichts eingerichtet.").grid(row=2, column=0,
-                                                        sticky="w")
-            ttk.Button(card, text="+ Einrichten", style="Del.TButton",
-                       command=self.app.open_settings).grid(row=3, column=0,
-                                                            sticky="w",
-                                                            pady=(8, 0))
+        if not picture.chains:
+            ttk.Label(card, style="RowHint.TLabel", wraplength=640,
+                      justify="left",
+                      text="Noch nichts zu zeigen. Sobald eine OPNsense "
+                           "gelesen wurde, steht hier jeder Name, der über "
+                           "HAProxy erreichbar sein soll — mit allem, woran "
+                           "er hängt.").grid(row=1, column=0, sticky="w",
+                                             pady=(8, 0))
             return card
-        for number, source in enumerate(entries, start=2):
-            self._row(card, source).grid(row=number, column=0, sticky="ew",
-                                         pady=(0, 6))
+
+        row = 1
+        for chain in picture.chains:
+            self._chain_row(card, chain).grid(row=row, column=0, sticky="ew",
+                                              pady=(8, 0))
+            row += 1
+            if chain.name in self.open_chains:
+                self._chain_body(card, chain).grid(row=row, column=0,
+                                                   sticky="ew")
+                row += 1
         return card
 
-    def _row(self, parent, source):
+    def _chain_row(self, parent, chain):
         row = tk.Frame(parent, bg=self.app.colors["surface2"], padx=12, pady=9)
-        row.columnconfigure(0, weight=1)
-        ttk.Label(row, text=source.name, style="Host.TLabel").grid(
-            row=0, column=0, sticky="w")
-        pill = ttk.Label(row, text="", style="BadgeMuted.TLabel")
-        pill.grid(row=0, column=1, padx=(8, 0))
-        detail = ttk.Label(row, text=source.label, style="Target.TLabel",
-                           wraplength=520, justify="left")
-        detail.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        note = ttk.Label(row, text="", style="RowHint.TLabel", wraplength=520,
-                         justify="left")
-        note.grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        self.rows[source.kind]["entries"][source.name] = {
-            "pill": pill, "detail": detail, "note": note}
+        row.columnconfigure(1, weight=1)
+        mark, style, _word = MARK[chain.state]
+        ttk.Label(row, text=mark, style=style).grid(row=0, column=0,
+                                                    rowspan=2, padx=(0, 10))
+        ttk.Label(row, text=chain.name + chain.path, style="Host.TLabel").grid(
+            row=0, column=1, sticky="w")
+        gaps = chain.gaps
+        summary = ("alles vorhanden" if not gaps else
+                   ", ".join(f"{s.title} {MARK[s.state][2]}" for s in gaps))
+        ttk.Label(row, text=summary, style="RowHint.TLabel", wraplength=560,
+                  justify="left").grid(row=1, column=1, sticky="w", pady=(2, 0))
+        open_now = chain.name in self.open_chains
+        ttk.Button(row, text="Kette schließen" if open_now else "Kette zeigen",
+                   style="Del.TButton",
+                   command=lambda n=chain.name: self._toggle(n)).grid(
+            row=0, column=2, rowspan=2, padx=(10, 0))
         return row
 
-    def _paint(self):
-        total = self.app.shelf.summary()
-        oldest = self.app.shelf.oldest()
-        self.age.configure(
-            text=count_text(total) + (
-                f"  ·  Stand {shelf_module.describe_age(oldest)}"
-                if oldest is not None else ""))
-        busy = bool(total["loading"])
-        self.refresh_button.configure(
-            state="disabled" if busy else "normal",
-            text="↻ wird gelesen …" if busy else "↻ Alles neu lesen")
-        for kind, widgets in self.rows.items():
-            widgets["summary"].configure(
-                text=count_text(self.app.shelf.summary([kind])))
-            for name, parts in widgets["entries"].items():
-                source = self.app.shelf.get(kind, name)
-                if source is None:
-                    continue
-                style, word = PILL[source.status]
-                parts["pill"].configure(text=word, style=style)
-                parts["detail"].configure(text=source.label)
-                parts["note"].configure(text=self._note(source))
+    def _toggle(self, name):
+        self.open_chains.symmetric_difference_update({name})
+        self.render()
 
-    @staticmethod
-    def _note(source):
-        """The line under a system: what it said, or how old what it said is."""
-        if source.status == shelf_module.FAILED:
-            was = shelf_module.describe_age(source.age())
-            older = ("" if not source.ready
-                     else f"  ·  gezeigt wird der Stand von {was}")
-            return f"{source.error}{older}"
-        if source.status == shelf_module.LOADING and not source.ready:
-            return ""
-        if not source.ready:
-            return ""
-        return f"gelesen {shelf_module.describe_age(source.age())}"
+    def _chain_body(self, parent, chain):
+        holder = ttk.Frame(parent, style="Card.TFrame", padding=(30, 6, 0, 10))
+        holder.columnconfigure(0, weight=1)
+        ttk.Label(holder, style="Hint.TLabel", wraplength=600, justify="left",
+                  text=f"Gelesen von {chain.where}. Von oben nach unten: jede "
+                       "Station braucht die darüber.").grid(
+            row=0, column=0, sticky="w", pady=(0, 8))
+        row = 1
+        for number, station in enumerate(chain.stations):
+            self._station(holder, station).grid(row=row, column=0, sticky="ew")
+            row += 1
+            if number < len(chain.stations) - 1:
+                ttk.Label(holder, text="│", style="Chain.TLabel").grid(
+                    row=row, column=0, sticky="w", padx=(18, 0))
+                row += 1
+        return holder
+
+    def _station(self, parent, station):
+        frame = tk.Frame(parent, bg=self.app.colors["surface2"], padx=12,
+                         pady=8)
+        frame.columnconfigure(1, weight=1)
+        mark, style, _word = MARK[station.state]
+        ttk.Label(frame, text=mark, style=style).grid(row=0, column=0,
+                                                      rowspan=3, padx=(0, 10))
+        ttk.Label(frame, text=station.title, style="Switch.TLabel").grid(
+            row=0, column=1, sticky="w")
+        if station.detail:
+            ttk.Label(frame, text=station.detail, style="Target.TLabel",
+                      wraplength=520, justify="left").grid(
+                row=1, column=1, sticky="w", pady=(2, 0))
+        if station.hint:
+            ttk.Label(frame, text=station.hint, style="RowHint.TLabel",
+                      wraplength=520, justify="left").grid(
+                row=2, column=1, sticky="w", pady=(2, 0))
+        if station.tab and station.state in (ov.MISSING, ov.WARN, ov.UNKNOWN):
+            ttk.Button(frame, text="hier ansetzen", style="Del.TButton",
+                       command=lambda t=station.tab: self.app.show_tab(t)).grid(
+                row=0, column=2, rowspan=3, padx=(10, 0))
+        return frame
