@@ -33,6 +33,17 @@ except ImportError:  # tkinter ships separately on most Linux distributions
 import opnsense_haproxy as core
 
 try:
+    from app import sources as app_sources
+    from app import wiring
+except ImportError:
+    # An update run by a version before 2.11 carried no folders at all, so a
+    # folder it filled has no app/ in it. Refusing to start over that would be
+    # the 1.4.0 mistake exactly: the window has to open, say what is missing,
+    # and offer the way out -- which is "Programmdateien neu holen" in the
+    # settings, two clicks from here.
+    app_sources = wiring = None
+
+try:
     import catalog
 except ImportError:
     catalog = None  # see NoCatalog below -- the window still has to open
@@ -148,6 +159,36 @@ def save_prefs(prefs):
 # --------------------------------------------------------------------------
 # widgets
 # --------------------------------------------------------------------------
+
+
+class NoShelf:
+    """Stands in for the shelf when app/ did not come along with an update.
+
+    Answers everything the window asks with "nothing", so that the rest of it
+    needs no special case. The Status tab says what is actually wrong.
+    """
+
+    def summary(self, kinds=None):
+        return {"total": 0, "loading": 0, "ok": 0, "failed": 0, "idle": 0,
+                "ready": 0}
+
+    def oldest(self, kinds=None, now=None):
+        return None
+
+    def all(self):
+        return []
+
+    def of_kind(self, kind):
+        return []
+
+    def get(self, kind, name):
+        return None
+
+    def refresh(self, **_kwargs):
+        return []
+
+    def __len__(self):
+        return 0
 
 
 class LiveLog(core.LogRecorder):
@@ -928,21 +969,26 @@ class SystemDialog(tk.Toplevel):
         self.destroy()
 
 
-class SettingsDialog(tk.Toplevel):
-    """Everything that is configured, in three lists under each other.
+class SettingsPanel(ttk.Frame):
+    """Everything that is configured, in lists under each other.
 
-    Each change is written to the file straight away: with three lists and a
+    Each change is written to the file straight away: with several lists and a
     dialog per entry, a single Save button at the end would have to remember
     far too much on the way there.
+
+    It is a frame rather than a window because it is now both: the tab named
+    Einstellungen, and the dialog that other windows still open on top of
+    themselves. Two copies of this would have drifted apart within a month.
     """
 
+    # what the window asks of every tab
+    connected = False
+    configured = True
+
     def __init__(self, parent, app):
-        super().__init__(parent)
+        super().__init__(parent, style="TFrame")
         self.app = app
         self.colors = app.colors
-        self.title("Einstellungen")
-        self.transient(parent)
-        self.configure(bg=self.colors["bg"])
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
@@ -957,14 +1003,18 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(footer, style="Hint.TLabel", wraplength=520, justify="left",
                   text=f"Gespeichert in {app.config_path}").grid(row=0, column=0,
                                                                  sticky="w")
-        ttk.Button(footer, text="Fertig", style="Accent.TButton",
-                   command=self.destroy).grid(row=0, column=1, sticky="e")
+        self.buttons = ttk.Frame(footer, style="Card.TFrame")
+        self.buttons.grid(row=0, column=1, sticky="e")
 
         self._render()
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self.update_idletasks()
-        _fit_dialog(self, parent, self.scroll, self.footer, floor=560)
-        self.grab_set()
+
+    def apply_theme(self):
+        self.colors = self.app.colors
+        self.scroll.apply_theme(self.colors)
+        self._render()
+
+    def done(self):
+        """The dialog closes here; the tab has nowhere to go."""
 
     def _render(self):
         self.scroll.clear()
@@ -1023,7 +1073,8 @@ class SettingsDialog(tk.Toplevel):
 
     def _repair(self):
         self.app.repair_wanted = True
-        self.destroy()
+        self.done()
+        self.app.after(120, self.app.settle_program)
 
     def _say_beta(self, trouble=""):
         if trouble:
@@ -1053,10 +1104,13 @@ class SettingsDialog(tk.Toplevel):
                            "werden — die Einstellung bleibt, wie sie war.")
             return
         self.app.channel = wanted
-        # checked once the dialog is out of the way: the update dialog is modal
-        # too, and two modal windows fight over the same clicks
         self.app.channel_changed = True
+        self.app._paint_channel_badge()
         self._say_beta()
+        # not checked from here: the update dialog is modal, and while the
+        # settings are open as a dialog too the two would fight over the same
+        # clicks. settle_program waits for the way to be clear.
+        self.app.after(120, self.app.settle_program)
 
     def _section(self, parent, kind):
         card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 16))
@@ -1130,6 +1184,35 @@ class SettingsDialog(tk.Toplevel):
             return
         self.app.remember_system(kind, entry.get("name", ""), dialog.result)
         self._render()
+
+
+class SettingsDialog(tk.Toplevel):
+    """The settings as a window, for the forms that open them on top.
+
+    The tab is the home of these settings; this exists because a dialog that
+    needs a system added cannot send someone to a tab behind itself.
+    """
+
+    def __init__(self, parent, app):
+        super().__init__(parent)
+        self.app = app
+        self.title("Einstellungen")
+        self.transient(parent)
+        self.configure(bg=app.colors["bg"])
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.panel = SettingsPanel(self, app)
+        self.panel.done = self.destroy
+        self.panel.grid(row=0, column=0, sticky="nsew")
+        ttk.Button(self.panel.buttons, text="Fertig", style="Accent.TButton",
+                   command=self.destroy).grid(row=0, column=0)
+
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        _fit_dialog(self, parent, self.panel.scroll, self.panel.footer,
+                    floor=560)
+        self.grab_set()
 
 
 def _fit_dialog(window, parent, scroll, footer, floor=460):
@@ -2147,6 +2230,13 @@ class App(tk.Tk):
         self.host_dialog = None
         self.listener_dialog = None
 
+        # Every system the program can read, and the last answer from each.
+        # The tabs read out of here rather than each asking on its own: three
+        # DNS servers asked one after the other cost three timeouts to fail.
+        self.shelf = app_sources.Sources() if app_sources else NoShelf()
+        # tabs that want to hear when a system answered
+        self.source_listeners = []
+
         self.update_release = None
         self.update_checking = False
         # which line of the program this folder follows -- read once here and
@@ -2154,6 +2244,9 @@ class App(tk.Tk):
         self.channel = core.channel_state()["channel"]
         self.channel_changed = False
         self.repair_wanted = False
+        # true while the settings are open as a window on top of everything;
+        # an update dialog opened underneath one would be unreachable
+        self.settings_modal = False
 
         self.prefs = load_prefs()
         self.var_update_check = tk.BooleanVar(
@@ -2176,6 +2269,7 @@ class App(tk.Tk):
         self._pump_job = self.after(60, self._pump)
         self.after(100, self._connect)
         self.after(1500, self._update_on_start)
+        self.after(400, self.refresh_sources)
 
     def _set_icon(self):
         """Give the window and the task bar the program's own icon."""
@@ -2242,6 +2336,9 @@ class App(tk.Tk):
                         font=self.font_h1)
         style.configure("H2.TLabel", background=c["surface"], foreground=c["text"],
                         font=self.font_h2)
+        # the same heading, but standing on the page rather than on a card
+        style.configure("H2Page.TLabel", background=c["bg"],
+                        foreground=c["text"], font=self.font_h2)
         style.configure("Muted.TLabel", background=c["bg"], foreground=c["muted"],
                         font=self.font_small)
         style.configure("Version.TLabel", background=c["surface2"],
@@ -2429,6 +2526,8 @@ class App(tk.Tk):
         self._render_inventory()
         self.portainer.apply_theme()
         self.dns.apply_theme()
+        self.status.apply_theme()
+        self.settings_tab.apply_theme()
         for dialog in (self.host_dialog, self.listener_dialog):
             if dialog is not None and dialog.winfo_exists():
                 dialog.apply_theme(c)
@@ -2451,7 +2550,7 @@ class App(tk.Tk):
         self._build_log()
 
     def _build_tabs(self):
-        """The three parts of the program, one behind each tab.
+        """The five parts of the program, one behind each tab.
 
         The strip is built by hand rather than from a ttk.Notebook: clam draws
         the tab that is not chosen taller than the one that is, which reads as
@@ -2473,6 +2572,15 @@ class App(tk.Tk):
             import adguard_gui
         except ImportError:
             adguard_gui = None  # same story, for anything before 2.5.0
+        try:
+            from app.ui import status as status_ui
+        except ImportError:
+            # And the same again for a folder that an update from before 2.11
+            # filled: that one carried no subfolders at all, so app/ is not
+            # there. "Programmdateien neu holen" in the settings fixes it.
+            status_ui = None
+        if wiring is None:
+            status_ui = None  # the tab would have nothing to read out of
 
         strip = ttk.Frame(self, style="Head.TFrame")
         strip.grid(row=1, column=0, sticky="nsew", padx=18)
@@ -2486,6 +2594,14 @@ class App(tk.Tk):
         pages.columnconfigure(0, weight=1)
         pages.rowconfigure(0, weight=1)
 
+        self.status = (status_ui.StatusTab(pages, self) if status_ui
+                       else MissingTab(pages, self, "Status"))
+        self.status.grid(row=0, column=0, sticky="nsew")
+
+        self.dns = (adguard_gui.AdGuardTab(pages, self) if adguard_gui
+                    else MissingTab(pages, self, "AdGuard"))
+        self.dns.grid(row=0, column=0, sticky="nsew")
+
         proxy = ttk.Frame(pages, style="TFrame")
         proxy.grid(row=0, column=0, sticky="nsew")
         proxy.columnconfigure(0, weight=1)
@@ -2496,22 +2612,27 @@ class App(tk.Tk):
                           if portainer_gui else MissingTab(pages, self))
         self.portainer.grid(row=0, column=0, sticky="nsew")
 
-        self.dns = (adguard_gui.AdGuardTab(pages, self) if adguard_gui
-                    else MissingTab(pages, self, "AdGuard"))
-        self.dns.grid(row=0, column=0, sticky="nsew")
+        self.settings_tab = SettingsPanel(pages, self)
+        self.settings_tab.grid(row=0, column=0, sticky="nsew")
 
-        self.pages = {"haproxy": proxy, "portainer": self.portainer,
-                      "adguard": self.dns}
+        # The order is the order of the work: see what is there, give it a
+        # name, put it behind the proxy, run it -- and the settings at the end
+        # where a tab that is not part of that sequence belongs.
+        self.pages = {"status": self.status, "adguard": self.dns,
+                      "haproxy": proxy, "portainer": self.portainer,
+                      "settings": self.settings_tab}
         self.tab_buttons = {}
-        for column, (name, label) in enumerate((("haproxy", "HAProxy"),
-                                                ("portainer", "Portainer"),
-                                                ("adguard", "AdGuard"))):
+        for column, (name, label) in enumerate((("status", "Status"),
+                                                ("adguard", "DNS"),
+                                                ("haproxy", "HAProxy"),
+                                                ("portainer", "Docker"),
+                                                ("settings", "Einstellungen"))):
             button = ttk.Button(bar, text=label, style="Tab.TButton",
                                 command=lambda n=name: self.show_tab(n))
             button.grid(row=0, column=column, padx=(0, 6))
             self.tab_buttons[name] = button
-        self.current_tab = "haproxy"
-        self.show_tab("haproxy")
+        self.current_tab = "status"
+        self.show_tab("status")
 
     def show_tab(self, name):
         """Bring one half to the front and let the header follow it."""
@@ -3180,6 +3301,59 @@ class App(tk.Tk):
         self.prefs["update_check"] = bool(self.var_update_check.get())
         save_prefs(self.prefs)
 
+    # -- the systems on the shelf ------------------------------------------
+
+    def rewire_sources(self):
+        """Let the shelf match what the settings now say.
+
+        Called after the settings are read and after every change to them.
+        Systems that are still there keep the answer they already gave; ones
+        that were removed are dropped, so no tab shows a host that is gone.
+        """
+        if wiring is None:
+            return
+        wiring.wire(self.shelf, self.systems,
+                    places={entry.get("name", ""): self.prefs.get(
+                        "portainer_endpoint", "")
+                        for entry in self.systems.get(wiring.DOCKER_KEY, [])})
+        for listener in self.source_listeners:
+            listener(None)
+
+    def refresh_sources(self, kinds=None):
+        """Ask the systems, all at once, and tell the tabs as answers arrive.
+
+        The shelf reports from worker threads; every notification is handed to
+        the window's own queue, because a widget touched from another thread
+        is a crash waiting for the wrong moment.
+        """
+        def announce(source):
+            self.results.put(("done",
+                              lambda _payload, s=source: self._source_changed(s),
+                              None, None, None))
+
+        self.shelf.refresh(kinds=kinds, notify=announce)
+
+    def _source_changed(self, source):
+        for listener in self.source_listeners:
+            try:
+                listener(source)
+            except Exception as exc:  # noqa: BLE001 - one tab must not stop the rest
+                self._write_log("Fehler", [{"text": str(exc), "level": "error"}],
+                                False)
+
+    def settle_program(self):
+        """Whatever the settings asked for, once nothing modal is in the way."""
+        if self.settings_modal:
+            return  # open_settings does it when the window closes
+        if self.channel_changed:
+            self.channel_changed = False
+            self._paint_channel_badge()
+            self._check_update()
+            return
+        if self.repair_wanted:
+            self.repair_wanted = False
+            self._check_update(repair=True)
+
     def _paint_channel_badge(self):
         """The badge is there on the beta and gone otherwise."""
         if core.channel_state()["installed"]["channel"] == "beta":
@@ -3322,6 +3496,7 @@ class App(tk.Tk):
             else:
                 self.active["opnsense"] = self.args.profile
         self._follow_links()
+        self.rewire_sources()
         self._fill_switcher()
         self._use_active(first_run=True, connect=False)
 
@@ -3347,7 +3522,12 @@ class App(tk.Tk):
         the screen. The way to the settings is at the end of every list.
         """
         kind = self.active_tab()
-        if kind not in ("portainer", "adguard"):
+        if kind in ("status", "settings"):
+            # neither tab is about one system, so a picker naming one would
+            # only say something untrue about what is on the screen
+            self.profile_box.grid_remove()
+            return
+        if kind != "portainer" and kind != "adguard":
             kind = "opnsense"
         names = [e.get("name", "?") for e in self.systems.get(kind, [])]
         self.profile_box.configure(values=names + [EDIT_PROFILE],
@@ -3436,6 +3616,9 @@ class App(tk.Tk):
 
     def _connect_now(self):
         """The connect button: it works on whichever tab is in front."""
+        if self.active_tab() in ("status", "settings"):
+            self.refresh_sources()
+            return
         if self.active_tab() == "portainer":
             self.portainer.reload()
             return
@@ -3449,6 +3632,20 @@ class App(tk.Tk):
 
     def paint_connection(self):
         """Let the pill and the connect button speak for the tab in front."""
+        if self.active_tab() in ("status", "settings"):
+            counted = self.shelf.summary()
+            self.subtitle.configure(
+                text="Überblick über alles Eingerichtete"
+                if self.active_tab() == "status"
+                else "OPNsense, DNS, Docker und das Programm selbst")
+            self.status_pill.configure(
+                text=(f"{counted['ok']}/{counted['total']} erreichbar"
+                      if counted["total"] else "nichts eingerichtet"),
+                style="OkPill.TLabel" if counted["total"]
+                and not counted["failed"] else "IdlePill.TLabel")
+            self.connect_button.configure(text="Alles neu lesen",
+                                          style="Tool.TButton")
+            return
         if self.active_tab() == "portainer":
             text, ok = self.portainer.status_text()
             style = "OkPill.TLabel" if ok else "IdlePill.TLabel"
@@ -3629,21 +3826,19 @@ class App(tk.Tk):
         is currently in front -- where it holds every click and looks like the
         program has hung.
         """
-        dialog = SettingsDialog(parent if parent is not None else self, self)
-        self.wait_window(dialog)
+        self.settings_modal = True
+        try:
+            dialog = SettingsDialog(parent if parent is not None else self, self)
+            self.wait_window(dialog)
+        finally:
+            self.settings_modal = False
         self._fill_switcher()
         self.args.insecure = False
         # an address or a token may be a different one now, so what was read
         # from the old ones says nothing any more
         self.portainer.forget_cache()
         self._use_active()
-        if self.channel_changed:
-            self.channel_changed = False
-            self._paint_channel_badge()
-            self._check_update()
-        if self.repair_wanted:
-            self.repair_wanted = False
-            self._check_update(repair=True)
+        self.settle_program()
 
     def _paint_install_button(self):
         """Offer to install only while there is something left to install.
@@ -3723,6 +3918,7 @@ class App(tk.Tk):
         except OSError as exc:
             messagebox.showerror("Nicht gespeichert", str(exc))
             return False
+        self.rewire_sources()
         self.settings = core.load_config(self.config_path)
         return True
 

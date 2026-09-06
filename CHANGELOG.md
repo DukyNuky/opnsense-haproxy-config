@@ -1,5 +1,35 @@
 # Änderungen
 
+## 3.0.0-beta — im Bau
+
+Der Umbau, offen auf dem Zweig `beta`. Was hier steht, ist noch nicht fertig
+und darf Fehler haben. Die Versionsnummer steht ab jetzt auf `3.0.0-beta`,
+damit im Fenster unmissverständlich steht, was läuft.
+
+- **Fünf Tabs statt drei: Status, DNS, HAProxy, Docker, Einstellungen.** Die
+  Reihenfolge ist die Reihenfolge der Arbeit — sehen, was da ist; einem Dienst
+  einen Namen geben; ihn hinter den Proxy hängen; ihn laufen lassen — und die
+  Einstellungen am Ende, wo ein Tab hingehört, der nicht Teil dieser Kette ist.
+  „Portainer“ heißt jetzt **Docker**, „AdGuard“ heißt **DNS**: der Tab ist nach
+  der Sache benannt, nicht nach dem Programm, das sie zufällig verwaltet.
+- **Der Status-Tab liest nur aus dem Zwischenspeicher.** Er zeigt jedes
+  eingerichtete System, ob es geantwortet hat und wie alt die Antwort ist.
+  Gefragt wird ausschließlich auf Knopfdruck — je Tab oder alles auf einmal.
+  Das Ablaufdiagramm mit den Abhängigkeiten wächst hier hinein; die Liste der
+  Systeme ist das, woran es hängt.
+- **Mehrere Systeme werden gleichzeitig gefragt.** Drei AdGuards nacheinander
+  kosten drei Zeitüberschreitungen, um zu scheitern; zusammen gefragt kosten
+  sie eine, und jedes sagt für sich, wie es lief, während die anderen noch
+  laufen. Eine gescheiterte Abfrage wirft die vorherige Antwort nicht weg: eine
+  halbe Stunde alt und so beschriftet schlägt einen leeren Tab.
+- **Portainer und Dockhand hinter einem Vokabular.** Welches Programm einen
+  Docker-Host verwaltet, ist eine Einstellung. Sichtbar bleibt bewusst eines:
+  **wie ein Stack entstanden ist** — aus einem Repository (mit Adresse, Zweig
+  und Aktualisierungsintervall), aus einer Compose-Datei, oder er war schon da.
+- **Die Einstellungen sind jetzt ein Tab.** Dieselbe Ansicht öffnet sich
+  weiterhin als Fenster, wenn ein Formular danach verlangt — zwei Fassungen
+  davon wären binnen eines Monats auseinandergelaufen.
+
 ## 2.12.0 — 6. September 2026
 
 **Man sieht jetzt, dass die Beta läuft — und kommt aus einem unvollständigen Update wieder heraus.**

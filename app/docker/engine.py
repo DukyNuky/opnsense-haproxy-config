@@ -10,8 +10,8 @@ labels Docker writes. An adapter is then only what is genuinely different:
 how to fetch, and what the manager knows about a stack beyond its containers.
 """
 
-from .model import (ANY_ADDRESS, Container, Inventory, Origin, Place, Port,
-                    Stack, UNKNOWN)
+from .model import (ANY_ADDRESS, Container, Inventory, Origin, Port, Stack,
+                    UNKNOWN)
 
 
 def read_ports(entries):

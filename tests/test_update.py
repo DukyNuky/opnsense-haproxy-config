@@ -1,6 +1,6 @@
 """Checks for the updater -- run them with tests/run.py."""
 
-import sys, os, io, json, zipfile, shutil, tempfile
+import sys, os, io, zipfile, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import opnsense_haproxy as core
 
@@ -154,7 +154,6 @@ check2("offered with repair",
 
 print("-- backups: the newest three stay ------------------------------")
 b = tempfile.mkdtemp()
-import time as _time
 for i, name in enumerate(["backup-1.2.0", "backup-2.3.0", "backup-2.9.0",
                           "backup-2.10.0", "backup-2.11.0"]):
     path = os.path.join(b, name)
