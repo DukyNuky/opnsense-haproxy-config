@@ -68,6 +68,8 @@ class StatusTab(ttk.Frame):
         self.rowconfigure(1, weight=1)
         #: which chains the reader has opened
         self.open_chains = set()
+        #: one entry per drawn line: its chain, its arrow, its opened body
+        self._rows = {}
         self._drawn = None
         #: a redraw waiting to happen, so a burst of answers costs one
         self._pending = None
@@ -120,10 +122,13 @@ class StatusTab(ttk.Frame):
 
         Rebuilding on every notification would pull the page out from under
         whoever is reading it -- and a refresh of four systems sends eight.
+
+        What is opened is deliberately not part of this. Opening a chain
+        changes what is visible, not what is known, and going through a redraw
+        for it meant a click cost the whole page.
         """
-        return (tuple((s.kind, s.name, s.status, s.reads)
-                      for s in self.app.shelf.all()),
-                tuple(sorted(self.open_chains)))
+        return tuple((s.kind, s.name, s.status, s.reads)
+                     for s in self.app.shelf.all())
 
     def render(self, force=False):
         """Redraw, but not once per answer.
@@ -178,6 +183,7 @@ class StatusTab(ttk.Frame):
 
     def _build(self):
         self.scroll.clear()
+        self._rows = {}
         body = self.scroll.body
         body.columnconfigure(0, weight=1)
         picture = ov.build(self.app.shelf)
@@ -264,15 +270,20 @@ class StatusTab(ttk.Frame):
                                              pady=(8, 0))
             return card
 
-        row = 1
-        for chain in picture.chains:
-            self._chain_row(card, chain).grid(row=row, column=0, sticky="ew",
-                                              pady=(8, 0))
-            row += 1
-            if chain.name in self.open_chains:
-                self._chain_body(card, chain).grid(row=row, column=0,
-                                                   sticky="ew")
-                row += 1
+        # Two grid rows per chain: the line, and the place under it where its
+        # chain goes. The place is reserved whether or not anything is in it,
+        # so opening one chain does not renumber the ones below -- renumbering
+        # would mean rebuilding, and rebuilding on a click is exactly what
+        # made the page jump.
+        for index, chain in enumerate(picture.chains):
+            place = 1 + index * 2
+            line, arrow = self._chain_row(card, chain)
+            line.grid(row=place, column=0, sticky="ew", pady=(8, 0))
+            self._rows[chain.name] = {"chain": chain, "card": card,
+                                      "place": place + 1, "arrow": arrow,
+                                      "body": None}
+        for name in sorted(self.open_chains):
+            self._show(name)
         return card
 
     def _chain_row(self, parent, chain):
@@ -291,15 +302,13 @@ class StatusTab(ttk.Frame):
                    ", ".join(f"{s.title} {MARK[s.state][2]}" for s in loose))
         ttk.Label(row, text=summary, style="RowHint.TLabel", wraplength=560,
                   justify="left").grid(row=1, column=1, sticky="w", pady=(2, 0))
-        open_now = chain.name in self.open_chains
-        ttk.Button(row, text="▴" if open_now else "▾", style="Del.TButton",
-                   width=3,
-                   command=lambda n=chain.name: self._toggle(n)).grid(
-            row=0, column=2, rowspan=2, padx=(10, 0))
+        arrow = ttk.Button(row, text="▾", style="Del.TButton", width=3,
+                           command=lambda n=chain.name: self._toggle(n))
+        arrow.grid(row=0, column=2, rowspan=2, padx=(10, 0))
         # the whole line answers to a click, not only the button at the end:
         # a row that visibly opens something is a row people click on
         self._clickable(row, chain.name)
-        return row
+        return row, arrow
 
     def _clickable(self, frame, name):
         """Let a click anywhere on the row open or close its chain."""
@@ -318,7 +327,29 @@ class StatusTab(ttk.Frame):
 
     def _toggle(self, name):
         self.open_chains.symmetric_difference_update({name})
-        self.render()
+        self._show(name)
+
+    def _show(self, name):
+        """Open or close one chain, and touch nothing else.
+
+        A click used to go through the same redraw as an answer from a
+        machine: the picture worked out again, every widget on the page
+        destroyed and built anew, a quarter second later, with the scroll
+        position wherever that left it. What a click actually changes is
+        whether one frame is visible. So the chain is built the first time it
+        is wanted and then kept, hidden, for the next click.
+        """
+        entry = self._rows.get(name)
+        if entry is None:
+            return  # opened before a refresh, gone after it
+        open_now = name in self.open_chains
+        if open_now:
+            if entry["body"] is None:
+                entry["body"] = self._chain_body(entry["card"], entry["chain"])
+            entry["body"].grid(row=entry["place"], column=0, sticky="ew")
+        elif entry["body"] is not None:
+            entry["body"].grid_remove()
+        entry["arrow"].configure(text="▴" if open_now else "▾")
 
     def _chain_body(self, parent, chain):
         holder = ttk.Frame(parent, style="Card.TFrame", padding=(30, 6, 0, 10))

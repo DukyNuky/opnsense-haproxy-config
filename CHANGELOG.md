@@ -71,6 +71,14 @@ damit im Fenster unmissverständlich steht, was läuft.
   Bei jeder Meldung die Seite neu aufzubauen zieht sie demjenigen unter den
   Augen weg, der sie gerade liest. Der Kopf mit dem Fortschritt folgt jeder
   Antwort; die Seite selbst wartet, bis die Antworten aufhören.
+- **Eine Kette auf- oder zuzuklappen baut nicht mehr die Seite neu.** Der
+  Klick lief durch denselben Weg wie eine Antwort aus dem Netz: Übersicht neu
+  gerechnet, jedes Widget der Seite weggeworfen und neu gebaut, eine
+  Viertelsekunde später, mit der Bildlaufposition dort, wo das sie hinterließ.
+  Was ein Klick ändert, ist die Sichtbarkeit eines einzigen Rahmens — und mehr
+  passiert jetzt auch nicht: die Kette wird beim ersten Öffnen gebaut und
+  danach nur noch ein- und ausgeblendet. Jede Zeile hat ihren Platz darunter
+  fest reserviert, damit das Öffnen der einen die anderen nicht verschiebt.
 - **Beim Update-Download steht, wie viel geladen ist.** Eine Prozentzahl nur
   dann, wenn der Server die Gesamtgröße überhaupt nennt — GitHub streamt das
   Quellarchiv ohne `Content-Length`, dann zählen die Kilobytes hoch. Eine
