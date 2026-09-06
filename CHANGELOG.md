@@ -44,11 +44,20 @@ damit im Fenster unmissverständlich steht, was läuft.
 - **Die ganze Zeile öffnet die Kette**, nicht nur der Knopf am Ende.
 - **Gelesen wird nur auf Knopfdruck**, je Seite oder alles auf einmal, und über
   allem steht, wie alt der Stand ist.
-- **Echte Fortschrittsbalken.** Beim Lesen mehrerer Systeme gibt es eine
-  richtige Zahl — wie viele geantwortet haben —, und der Balken zeigt genau
-  die. Darunter steht, auf welches noch gewartet wird. Ein Balken, der nur
-  wackelt, sagt „es passiert etwas", und das weiß derjenige, der gerade
-  gedrückt hat, bereits.
+- **Ein Fortschrittsbalken, auf einer Fläche über dem Fenster.** Beim Lesen
+  mehrerer Systeme gibt es eine richtige Zahl — wie viele geantwortet haben —,
+  und der Balken zeigt genau die, mit den Namen derer, auf die noch gewartet
+  wird. Er liegt über dem Fenster, weil das die Sache ist, die dabei zählt:
+  gerade geht hier nichts. (Echtes Weichzeichnen kann tkinter nicht; die
+  Fläche deckt ab, statt zu verwischen.) Ein Knopf **Im Hintergrund
+  weiterlesen** nimmt sie weg — ein Programm, das sich selbst aussperren kann,
+  wenn ein Host nie antwortet, wäre schlimmer als eines, das langsam liest.
+  Das automatische Lesen kurz nach dem Start deckt nichts ab: das Fenster vor
+  der ersten Berührung zuzuhängen, womöglich so lange wie der langsamste Host
+  zum Aufgeben braucht, hieße sich selbst im Weg zu stehen.
+- **Die Anzeige im Kopf stimmt jetzt mit.** „0 von 8 erreichbar" stand dort,
+  während unten längst „4 erreichbar" stand — sie wurde nur beim Tabwechsel
+  neu geschrieben.
 - **Der Status-Tab zeichnet sich nicht mehr bei jeder Antwort neu.** Fünf
   Systeme melden sich zehnmal — je einmal beim Beginnen und beim Fertigwerden.
   Bei jeder Meldung die Seite neu aufzubauen zieht sie demjenigen unter den

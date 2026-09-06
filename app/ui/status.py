@@ -84,15 +84,14 @@ class StatusTab(ttk.Frame):
                                          command=self.reload)
         self.refresh_button.grid(row=0, column=2, sticky="e")
 
-        # A real bar, filled by the number of systems that have answered.
-        # A wobbling one says "something is happening", which anyone can see
-        # already; this one says how much of it is left.
-        self.bar = ttk.Progressbar(head, mode="determinate", maximum=100,
-                                   style="Bar.Horizontal.TProgressbar")
-        self.bar.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-        self.bar.grid_remove()
+        # No bar here. There is one in the program and it sits on the cover
+        # that goes over the window; a second one in the corner of a tab said
+        # the same thing twice and neither of them said the thing that
+        # matters, which is that nothing can be used right now. What stays is
+        # the line naming which systems are still out, for the reading that
+        # happens by itself at the start and leaves the window usable.
         self.waiting = ttk.Label(head, text="", style="Muted.TLabel")
-        self.waiting.grid(row=2, column=0, columnspan=3, sticky="w",
+        self.waiting.grid(row=1, column=0, columnspan=3, sticky="w",
                           pady=(3, 0))
         self.waiting.grid_remove()
 
@@ -166,11 +165,8 @@ class StatusTab(ttk.Frame):
             text=(f"↻ {here.done} von {here.total}" if busy
                   else "↻ Alles neu lesen"))
         if not busy:
-            self.bar.grid_remove()
             self.waiting.grid_remove()
             return
-        self.bar.configure(maximum=here.total, value=here.done)
-        self.bar.grid()
         outstanding = here.running
         self.waiting.configure(
             text="wird gelesen: " + ", ".join(outstanding[:3])

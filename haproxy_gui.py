@@ -2262,8 +2262,9 @@ class App(tk.Tk):
         self.shelf = app_sources.Sources() if app_sources else NoShelf()
         # tabs that want to hear when a system answered
         self.source_listeners = []
-        # true while the header bar is counting systems rather than wobbling
-        self.progress_round = False
+        # the cover laid over the window while the systems are being read, and
+        # the only progress bar in the program. Built on first use.
+        self.curtain = None
 
         self.update_release = None
         self.update_checking = False
@@ -2297,7 +2298,7 @@ class App(tk.Tk):
         self._pump_job = self.after(60, self._pump)
         self.after(100, self._connect)
         self.after(1500, self._update_on_start)
-        self.after(400, self.refresh_sources)
+        self.after(400, lambda: self.refresh_sources(quiet=True))
 
     def _set_icon(self):
         """Give the window and the task bar the program's own icon."""
@@ -2564,6 +2565,8 @@ class App(tk.Tk):
         self.dns.apply_theme()
         self.status.apply_theme()
         self.settings_tab.apply_theme()
+        if self.curtain is not None:
+            self.curtain.apply_theme()
         for dialog in (self.host_dialog, self.listener_dialog):
             if dialog is not None and dialog.winfo_exists():
                 dialog.apply_theme(c)
@@ -3355,12 +3358,17 @@ class App(tk.Tk):
         for listener in self.source_listeners:
             listener(None)
 
-    def refresh_sources(self, kinds=None):
+    def refresh_sources(self, kinds=None, quiet=False):
         """Ask the systems, all at once, and tell the tabs as answers arrive.
 
         The shelf reports from worker threads; every notification is handed to
         the window's own queue, because a widget touched from another thread
         is a crash waiting for the wrong moment.
+
+        ``quiet`` leaves the window usable. The reading that happens by itself
+        shortly after the start is quiet: covering the window before anybody
+        has touched it, possibly for as long as the slowest host takes to time
+        out, would be the program getting in its own way.
         """
         def announce(source):
             self.results.put(("done",
@@ -3368,37 +3376,33 @@ class App(tk.Tk):
                               None, None, None))
 
         here = self.shelf.refresh(kinds=kinds, notify=announce)
-        if here is not None:
-            self._paint_round()
+        if here is not None and not quiet:
+            self._cover().show("Systeme werden gelesen")
+        self._paint_round()
         return here
 
-    def _paint_round(self):
-        """The header bar fills with the number of systems that have answered.
+    def _cover(self):
+        if self.curtain is None:
+            from app.ui.busy import Curtain
+            self.curtain = Curtain(self)
+        return self.curtain
 
-        Determinate on purpose: with several systems there is a real number,
-        and a bar that only wobbles says "something is happening" -- which
-        whoever pressed the button already knows.
-        """
+    def _paint_round(self):
+        """Move the cover along, and take it away when the round is done."""
         here = self.shelf.round
-        if here is None or not here.active:
-            if self.progress_round:
-                self.progress_round = False
-                self.progress.stop()
-                self.progress.configure(mode="indeterminate")
-                if not self.busy:
-                    self.progress.grid_remove()
-                    self._set_activity("")
+        if self.curtain is None or not self.curtain.showing:
             return
-        if not self.progress_round:
-            self.progress_round = True
-            self.progress.stop()
-            self.progress.configure(mode="determinate")
-            self.progress.grid()
-        self.progress.configure(maximum=here.total, value=here.done)
-        self._set_activity(f"{here.done} von {here.total} Systemen gelesen")
+        if here is None or not here.active:
+            self.curtain.hide()
+            return
+        self.curtain.step(here.done, here.total, here.running)
 
     def _source_changed(self, source):
         self._paint_round()
+        # the pill in the header counts the same systems; without this it
+        # keeps whatever it said when the tab was last switched
+        if self.active_tab() in ("status", "settings"):
+            self.paint_connection()
         for listener in self.source_listeners:
             try:
                 listener(source)
