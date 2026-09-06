@@ -989,6 +989,25 @@ darüber Buch. Der Ordner wird dafür *nicht* durchsucht — läge das Programm
 neben eigenen Dateien, würde eine Suche nach Endungen sie mitnehmen. Und alles
 Entfernte liegt vorher im `backup-`-Ordner.
 
+### Programmdateien neu holen
+
+Ein Update, das eine Version **vor 2.11** ausgeführt hat, konnte keine
+Unterordner übertragen — alles unterhalb der obersten Ebene kam nicht an. Weil
+danach aber die richtige Version im Protokoll steht, meldet jede weitere
+Prüfung „nichts Neueres", obwohl Dateien fehlen. Da kommt man mit dem
+Update-Knopf allein nicht mehr heraus.
+
+Dafür gibt es in den Einstellungen unter **Programm** den Knopf
+**Programmdateien neu holen**: er lädt dieselbe Fassung noch einmal, ob sie nun
+neu ist oder nicht. Auf der Kommandozeile `update --repair`.
+
+### Sicherungen
+
+Vor jedem Update wandert die bisherige Fassung nach `backup-<version>/`. Seit
+2.12.0 bleiben davon die **drei jüngsten** — vorher blieb jede einzelne liegen,
+was in einem seit 1.2 gepflegten Ordner zwei Dutzend Kopien und den größten
+Teil seines Platzbedarfs ausmachte.
+
 Fehlt trotzdem einmal etwas, ist nichts verloren: der Portainer-Tab sagt dann,
 welche Datei es ist, und der Update-Knopf daneben holt sie nach. Startet das
 Programm gar nicht mehr, hilft das
@@ -1013,6 +1032,9 @@ veröffentlichte Version wird installiert — auch wenn ihre Nummer *niedriger*
 ist als die der Beta. Zugangsdaten und Einstellungen bleiben dabei
 unangetastet, wie bei jedem Update, und die Beta-Dateien landen vorher im
 `backup-`-Ordner.
+
+Dass die Beta läuft, steht oben im Fenster neben der Versionsnummer als
+**BETA**, und in den Einstellungen unter **Programm** mit dem Commit dazu.
 
 Auf der Beta sagt keine Versionsnummer, ob es etwas Neues gibt — sie steht über
 viele Commits still. Maßgeblich ist deshalb der Commit selbst; das Programm
@@ -1258,6 +1280,7 @@ Weitere Befehle:
 ./opnsense_haproxy.py update                      # nachsehen und installieren
 ./opnsense_haproxy.py update --beta               # ab jetzt dem Zweig beta folgen
 ./opnsense_haproxy.py update --stable             # zurück zu den Releases
+./opnsense_haproxy.py update --repair             # dieselbe Fassung neu laden
 ./opnsense_haproxy.py gui                         # Fenster
 ./opnsense_haproxy.py --version
 ```

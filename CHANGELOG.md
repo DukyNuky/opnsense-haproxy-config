@@ -1,5 +1,25 @@
 # Änderungen
 
+## 2.12.0 — 6. September 2026
+
+**Man sieht jetzt, dass die Beta läuft — und kommt aus einem unvollständigen Update wieder heraus.**
+
+- **Oben im Fenster steht BETA neben der Versionsnummer.** Vorher gab es
+  nirgends im Programm einen Hinweis darauf, welche Linie läuft: die
+  Versionsnummer liest sich auf beiden gleich. Eine Beta, die aussieht wie die
+  stabile Fassung, ist eine Beta, zu der niemand etwas Brauchbares melden kann.
+  Die Einstellungen nennen unter **Programm** zusätzlich den Commit.
+- **Programmdateien neu holen.** Ein Update, das eine Version vor 2.11
+  ausgeführt hat, konnte keine Unterordner übertragen — und weil danach die
+  richtige Version im Protokoll steht, meldet jede weitere Prüfung „nichts
+  Neueres", obwohl Dateien fehlen. Aus dieser Falle führte kein Weg heraus. Der
+  neue Knopf in den Einstellungen lädt dieselbe Fassung noch einmal, ob sie nun
+  neu ist oder nicht; auf der Kommandozeile `update --repair`.
+- **Von den Sicherungen bleiben die drei jüngsten.** Bisher blieb jede einzelne
+  liegen: ein seit 1.2 gepflegter Ordner trug zwei Dutzend davon und damit den
+  größten Teil seines Platzbedarfs. Was jemand zurückholen will, ist das, was
+  eben noch lief.
+
 ## 2.11.0 — 6. September 2026
 
 **Das Update kann jetzt Ordner — Vorarbeit für den Umbau.**

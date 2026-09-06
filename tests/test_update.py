@@ -102,5 +102,75 @@ check("copied", sorted(copied), ["haproxy_gui.py", "meine-notizen.md",
 check("subdir there", os.path.exists(os.path.join(t, "ui", "status.py")), True)
 
 shutil.rmtree(d); shutil.rmtree(t)
-print(f"\n{ok} ok, {fail} fail")
-sys.exit(1 if fail else 0)
+print(f"\n{ok} ok, {fail} fail  (tree layout)")
+
+# --------------------------------------------------------------------------
+# repair, and backups that do not pile up for ever
+# --------------------------------------------------------------------------
+
+print("-- repair: the same version offered again ----------------------")
+ok2 = fail2 = 0
+def check2(label, got, want):
+    global ok2, fail2
+    if got == want: ok2 += 1
+    else:
+        fail2 += 1
+        print(f"  FAIL {label}: got {got!r}, want {want!r}")
+
+d = tempfile.mkdtemp()
+core.latest_release = lambda repo=core.REPO, timeout=15, channel="stable": {
+    "version": "2.11.0", "tag": "v2.11.0", "ref": "", "notes": "",
+    "zip": "z", "page": "p"}
+state = core.channel_state(d)
+state["installed"] = {"channel": "stable", "ref": "", "version": "2.11.0",
+                      "files": ["opnsense_haproxy.py"]}
+core.write_channel_state(state, d)
+check2("nothing to do", core.check_for_update("2.11.0", folder=d), None)
+r = core.check_for_update("2.11.0", folder=d, repair=True)
+check2("repair offered", r is not None, True)
+check2("marked", r["repair"], True)
+check2("not a switch", r["switch"], False)
+
+print("-- a real update is never called a repair ----------------------")
+core.latest_release = lambda repo=core.REPO, timeout=15, channel="stable": {
+    "version": "3.0.0", "tag": "v3.0.0", "ref": "", "notes": "",
+    "zip": "z", "page": "p"}
+r = core.check_for_update("2.11.0", folder=d, repair=True)
+check2("still an update", r["repair"], False)
+check2("version", r["version"], "3.0.0")
+
+print("-- repair on the beta, same commit -----------------------------")
+core.set_channel("beta", d)
+state = core.channel_state(d)
+state["installed"] = {"channel": "beta", "ref": "abc1234", "version": "2.11.0",
+                      "files": ["opnsense_haproxy.py"]}
+core.write_channel_state(state, d)
+core.latest_release = lambda repo=core.REPO, timeout=15, channel="stable": {
+    "version": "2.11.0", "tag": "beta", "ref": "abc1234", "notes": "",
+    "zip": "z", "page": "p"}
+check2("quiet without repair", core.check_for_update("2.11.0", folder=d), None)
+check2("offered with repair",
+       core.check_for_update("2.11.0", folder=d, repair=True)["repair"], True)
+
+print("-- backups: the newest three stay ------------------------------")
+b = tempfile.mkdtemp()
+import time as _time
+for i, name in enumerate(["backup-1.2.0", "backup-2.3.0", "backup-2.9.0",
+                          "backup-2.10.0", "backup-2.11.0"]):
+    path = os.path.join(b, name)
+    os.makedirs(path)
+    open(os.path.join(path, "opnsense_haproxy.py"), "w").write("x")
+    os.utime(path, (1000 + i * 100, 1000 + i * 100))   # oldest first
+os.makedirs(os.path.join(b, "ui"))          # not a backup, must stay
+open(os.path.join(b, "notes.md"), "w").write("mine")
+dropped = core.prune_backups(b)
+check2("dropped the two oldest", sorted(dropped), ["backup-1.2.0", "backup-2.3.0"])
+check2("three left", sorted(n for n in os.listdir(b) if n.startswith("backup-")),
+       ["backup-2.10.0", "backup-2.11.0", "backup-2.9.0"])
+check2("other folders untouched", os.path.isdir(os.path.join(b, "ui")), True)
+check2("other files untouched", os.path.exists(os.path.join(b, "notes.md")), True)
+check2("nothing to do twice", core.prune_backups(b), [])
+
+shutil.rmtree(d); shutil.rmtree(b)
+print(f"\n{ok + ok2} ok, {fail + fail2} fail  (all)")
+sys.exit(1 if (fail or fail2) else 0)

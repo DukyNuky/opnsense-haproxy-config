@@ -985,8 +985,14 @@ class SettingsDialog(tk.Toplevel):
         rows = itertools.count()
         ttk.Label(card, text="Programm", style="H2.TLabel").grid(
             row=next(rows), column=0, sticky="w")
+        state = core.channel_state()
+        line = ("Beta-Zweig" if state["installed"]["channel"] == "beta"
+                else "veröffentlichte Version")
+        stamp = (state["installed"]["ref"] or "")[:7]
         ttk.Label(card, style="Hint.TLabel", wraplength=520, justify="left",
-                  text=f"Version {core.VERSION} in {core.install_dir()}").grid(
+                  text=f"Version {core.VERSION} · {line}"
+                       + (f" · Stand {stamp}" if stamp else "")
+                       + f"\n{core.install_dir()}").grid(
             row=next(rows), column=0, sticky="w", pady=(3, 10))
 
         ttk.Checkbutton(card, text="Beim Start nach Updates sehen",
@@ -1002,7 +1008,22 @@ class SettingsDialog(tk.Toplevel):
                                    justify="left", text="")
         self.beta_note.grid(row=next(rows), column=0, sticky="w", pady=(4, 0))
         self._say_beta()
+
+        ttk.Button(card, text="Programmdateien neu holen", style="Del.TButton",
+                   command=self._repair).grid(row=next(rows), column=0,
+                                              sticky="w", pady=(12, 0))
+        ttk.Label(card, style="Hint.TLabel", wraplength=520, justify="left",
+                  text="Lädt die installierte Fassung noch einmal, auch wenn "
+                       "sie schon die neueste ist. Nötig, wenn ein Update von "
+                       "einer Version vor 2.11 ausgeführt wurde: die konnte "
+                       "keine Unterordner übertragen, und danach meldet die "
+                       "Prüfung „nichts Neueres“, obwohl Dateien fehlen.").grid(
+            row=next(rows), column=0, sticky="w", pady=(3, 0))
         return card
+
+    def _repair(self):
+        self.app.repair_wanted = True
+        self.destroy()
 
     def _say_beta(self, trouble=""):
         if trouble:
@@ -1152,6 +1173,8 @@ def _headline(release):
     installed one and „ist verfügbar“ would be plainly wrong.
     """
     version = release["version"]
+    if release.get("repair"):
+        return f"Programmdateien von {version} neu holen"
     if not release.get("switch"):
         return f"Version {version} ist verfügbar"
     if release.get("channel") == "beta":
@@ -1205,6 +1228,14 @@ class UpdateDialog(tk.Toplevel):
                        "kopiert, deine Zugangsdaten bleiben unangetastet.").grid(
             row=next(rows), column=0, sticky="w", pady=(12, 0))
 
+        if release.get("repair"):
+            ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                      text="Es wird dieselbe Fassung geladen, die schon "
+                           "installiert ist. Das holt nach, was ein Update "
+                           "einer Version vor 2.11 nicht übertragen konnte — "
+                           "alles, was in einem Unterordner liegt.").grid(
+                row=next(rows), column=0, sticky="w", pady=(8, 0))
+
         if release.get("switch") and release.get("channel") == "beta":
             ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
                       text="Die Beta ist Arbeit im Gang und darf Fehler haben. "
@@ -1231,7 +1262,8 @@ class UpdateDialog(tk.Toplevel):
                                 command=self.destroy)
         self.later.grid(row=0, column=0, padx=(0, 8))
         self.action = ttk.Button(buttons,
-                                 text="Wechseln" if release.get("switch")
+                                 text="Neu holen" if release.get("repair")
+                                 else "Wechseln" if release.get("switch")
                                  else "Jetzt installieren",
                                  style="Accent.TButton", command=self._install)
         self.action.grid(row=0, column=1)
@@ -1293,11 +1325,16 @@ class UpdateDialog(tk.Toplevel):
         self.app.channel = result.get("channel", self.app.channel)
         self.app.var_beta.set(self.app.channel == "beta")
         self.app._paint_update_button()
+        self.app._paint_channel_badge()
         gone = len(result.get("removed") or ())
         # said rather than passed over: a file disappearing from the folder is
         # the kind of thing someone notices later and wonders about
         tidied = (f" {gone} Datei(en), die es dort nicht mehr gibt, wurden "
                   "entfernt — auch sie liegen dort." if gone else "")
+        old = len(result.get("backups_dropped") or ())
+        if old:
+            tidied += (f" {old} ältere Sicherung(en) wurden aufgeräumt; die "
+                       "drei jüngsten bleiben.")
         self._say(f"Version {result['version']} ist installiert. "
                   "Sie wird nach einem Neustart des Programms verwendet.\n"
                   f"Die vorherige Fassung liegt in "
@@ -2116,6 +2153,7 @@ class App(tk.Tk):
         # written straight back to the file whenever the tick changes
         self.channel = core.channel_state()["channel"]
         self.channel_changed = False
+        self.repair_wanted = False
 
         self.prefs = load_prefs()
         self.var_update_check = tk.BooleanVar(
@@ -2251,6 +2289,9 @@ class App(tk.Tk):
                         padding=(6, 1))
         style.configure("BadgeWarn.TLabel", background=c["danger_soft"],
                         foreground=c["danger"], font=self.font_small,
+                        padding=(6, 1))
+        style.configure("Beta.TLabel", background=c["warn"],
+                        foreground=c["bg"], font=self.font_small,
                         padding=(6, 1))
 
         style.configure("Card.TEntry", fieldbackground=c["surface2"],
@@ -2501,10 +2542,17 @@ class App(tk.Tk):
                                                                  sticky="w")
         ttk.Label(titles, text=f"v{core.VERSION}", style="Version.TLabel").grid(
             row=0, column=1, sticky="w", padx=(8, 0))
+        # Without this there is nothing anywhere in the window that says which
+        # line is running -- the version number reads the same either way, and
+        # a beta that looks exactly like the stable release is a beta nobody
+        # can report anything useful about.
+        self.channel_badge = ttk.Label(titles, text="BETA", style="Beta.TLabel")
+        self.channel_badge.grid(row=0, column=2, sticky="w", padx=(6, 0))
+        self._paint_channel_badge()
         # the line under the name says which half of the program is in front
         self.subtitle = ttk.Label(titles, text="OPNsense Reverse Proxy",
                                   style="Muted.TLabel")
-        self.subtitle.grid(row=1, column=0, columnspan=2, sticky="w")
+        self.subtitle.grid(row=1, column=0, columnspan=3, sticky="w")
 
         actions = ttk.Frame(head, style="Head.TFrame")
         actions.grid(row=0, column=2, sticky="e")
@@ -3132,6 +3180,13 @@ class App(tk.Tk):
         self.prefs["update_check"] = bool(self.var_update_check.get())
         save_prefs(self.prefs)
 
+    def _paint_channel_badge(self):
+        """The badge is there on the beta and gone otherwise."""
+        if core.channel_state()["installed"]["channel"] == "beta":
+            self.channel_badge.grid()
+        else:
+            self.channel_badge.grid_remove()
+
     def _paint_update_button(self):
         """The button carries the waiting version number once one is known.
 
@@ -3185,12 +3240,13 @@ class App(tk.Tk):
             "switch": release.get("switch", False)}
         self._paint_update_button()
 
-    def _check_update(self):
+    def _check_update(self, repair=False):
         """The button: always asks GitHub, and always says what it found."""
         if self.update_checking:
             return
         self.update_checking = True
-        self._set_activity("suche nach Updates …")
+        self._set_activity("hole die Programmdateien …" if repair
+                           else "suche nach Updates …")
 
         def done(release):
             self.update_checking = False
@@ -3217,7 +3273,7 @@ class App(tk.Tk):
         def task():
             try:
                 self.results.put(("done", done, None,
-                                  core.check_for_update(), None))
+                                  core.check_for_update(repair=repair), None))
             except Exception as exc:  # noqa: BLE001 - shown in the box above
                 # bound as a default: `exc` is gone once the except block ends
                 self.results.put(("done", lambda _p, error=exc: failed(error),
@@ -3583,7 +3639,11 @@ class App(tk.Tk):
         self._use_active()
         if self.channel_changed:
             self.channel_changed = False
+            self._paint_channel_badge()
             self._check_update()
+        if self.repair_wanted:
+            self.repair_wanted = False
+            self._check_update(repair=True)
 
     def _paint_install_button(self):
         """Offer to install only while there is something left to install.

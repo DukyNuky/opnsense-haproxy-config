@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.11.0"
+VERSION = "2.12.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -1775,7 +1775,7 @@ def latest_release(repo=REPO, timeout=15, channel="stable"):
 
 
 def check_for_update(current=None, repo=REPO, timeout=15, channel=None,
-                     folder=None):
+                     folder=None, repair=False):
     """What this folder could install now, or None when there is nothing.
 
     Two questions in one. On the channel we are already on: is GitHub ahead of
@@ -1783,6 +1783,13 @@ def check_for_update(current=None, repo=REPO, timeout=15, channel=None,
     it. The second is why the answer can point backwards -- leaving the beta
     means going back to the last stable release, which is an older version
     than the installed one and would otherwise never be offered.
+
+    ``repair`` asks a third question, and it is the one nothing else can
+    answer: is what lies here *complete*. An update run by a version from
+    before 2.11 carried no folders, so anything below the top level never
+    arrived -- and because the record then says the right version, no ordinary
+    check would ever offer to bring it. With repair set, the current version is
+    always offered, whether or not it is news.
     """
     state = channel_state(folder)
     channel = channel or state["channel"]
@@ -1791,14 +1798,18 @@ def check_for_update(current=None, repo=REPO, timeout=15, channel=None,
     release["current"] = current or VERSION
     release["channel"] = channel
     release["switch"] = channel != installed["channel"]
-    if release["switch"]:
-        return release
+    release["repair"] = False
     if channel == "beta":
         # between beta commits the version number stands still, the hash does not
-        return release if release.get("ref") != installed["ref"] else None
-    if parse_version(release["version"]) <= parse_version(release["current"]):
-        return None
-    return release
+        newer = release.get("ref") != installed["ref"]
+    else:
+        newer = parse_version(release["version"]) > parse_version(release["current"])
+    if release["switch"] or newer:
+        return release
+    if repair:
+        release["repair"] = True
+        return release
+    return None
 
 
 def install_dir():
@@ -1972,6 +1983,10 @@ def install_update(release, folder=None, report=None, timeout=60):
         say(f"removed {len(removed)} file(s) the new version no longer has")
         _prune_empty(folder, removed)
 
+    dropped = prune_backups(folder)
+    if dropped:
+        say(f"cleared {len(dropped)} older backup folder(s)")
+
     # written last, so a run that fails halfway leaves behind no note claiming
     # a version that is not there
     record["channel"] = release.get("channel") or record["channel"]
@@ -1981,7 +1996,40 @@ def install_update(release, folder=None, report=None, timeout=60):
                            "files": sorted(written)}
     write_channel_state(record, folder)
     return {"files": written, "removed": removed, "backup": backup,
-            "version": release["version"], "channel": record["channel"]}
+            "backups_dropped": dropped, "version": release["version"],
+            "channel": record["channel"]}
+
+
+# One folder per update, and until now not one of them ever went away: a copy
+# updated since 1.2 carries two dozen and most of the folder's size. Three is
+# more than anyone has ever copied back from.
+KEEP_BACKUPS = 3
+
+
+def prune_backups(folder, keep=KEEP_BACKUPS):
+    """Drop all but the newest few backup folders.
+
+    Newest by the time on the folder rather than by the version in its name:
+    what someone wants back is what they had a moment ago, and after a step
+    back out of the beta that is not the highest number.
+    """
+    found = []
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    for name in names:
+        path = os.path.join(folder, name)
+        if name.startswith("backup-") and os.path.isdir(path):
+            found.append((os.path.getmtime(path), name))
+    dropped = []
+    for _when, name in sorted(found, reverse=True)[keep:]:
+        try:
+            shutil.rmtree(os.path.join(folder, name))
+            dropped.append(name)
+        except OSError:
+            pass  # a backup that will not go is not worth failing an update over
+    return dropped
 
 
 def _prune_empty(folder, removed):
@@ -2849,13 +2897,14 @@ def cmd_update(args, _config):
     state = channel_state()
     print(f"installed : {VERSION}  ({state['installed']['channel']})")
     print(f"channel   : {state['channel']}")
-    release = check_for_update()
+    release = check_for_update(repair=args.repair)
     if release is None:
         print("this is the newest version")
         return 0
 
     # on a switch the channel is the news, not the fact that something exists
-    label = release["channel"] if release["switch"] else "available"
+    label = ("repair" if release["repair"]
+             else release["channel"] if release["switch"] else "available")
     print(f"{label:<10}: {release['version']}  ({release['page']})")
     if release["notes"]:
         print()
@@ -2868,7 +2917,9 @@ def cmd_update(args, _config):
     blocked = update_blocked()
     if blocked:
         raise UsageError(update_blocked_text(blocked))
-    what = (f"switch to the {release['channel']} version {release['version']}"
+    what = (f"fetch the files of {release['version']} again"
+            if release["repair"] else
+            f"switch to the {release['channel']} version {release['version']}"
             if release["switch"] else f"install {release['version']}")
     if not args.yes and not confirm(f"{what} now?"):
         return 0
@@ -3068,6 +3119,10 @@ def build_parser():
                         help="follow the beta branch from now on")
     update.add_argument("--stable", action="store_true",
                         help="go back to the published releases")
+    update.add_argument("--repair", action="store_true",
+                        help="fetch the installed version's files again, even "
+                             "when it is already the newest -- for a folder an "
+                             "older version updated without its subfolders")
     update.set_defaults(func=cmd_update)
 
     return parser
