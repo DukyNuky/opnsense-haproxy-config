@@ -91,6 +91,14 @@ damit im Fenster unmissverständlich steht, was läuft.
   - Scheitert die OPNsense-Seite, wird **der DNS-Eintrag nicht angefasst** —
     solange die Regel steht, würde das Wegnehmen des Namens kaputt machen,
     was gerade funktioniert.
+- **Jedes Lesen zeigt den Balken.** Für das Neulesen direkt nach einem Dialog
+  gab es eine stille Variante — die Annahme war, ein Fenster, das gleich
+  danach aufgeht, wirke wie eine Beschwerde. Es wirkte wie gar nichts: oben
+  rechts zählte die Anzeige hoch und sonst passierte sichtbar nichts. Lesen
+  ist der eine Moment, in dem das Programm beschäftigt und nicht benutzbar
+  ist; die stille Variante ist ersatzlos weg. Das Entfernen-Fenster gibt dafür
+  nach getaner Arbeit den Griff frei — es ist dann eine Quittung und keine
+  Entscheidung mehr, und das Fortschrittsfenster lässt sich wieder bedienen.
 - **Docker-Hosts antworteten grundsätzlich nicht.** Welche Docker-Umgebung
   gelesen werden soll, merkt sich das Programm je Verwaltung unter deren Namen
   — mit zwei Docker-Hosts ist die Umgebung des einen keine Antwort für den

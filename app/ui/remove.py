@@ -222,8 +222,16 @@ class RemoveDialog(tk.Toplevel):
             "Entfernt", [{"text": line, "level": "info"} for line in lines]
             + [{"text": f"{name}: {why}", "level": "error"}
                for name, why in failed], not failed)
+        # This window is a receipt now, not a decision, so it lets go of the
+        # grab: otherwise the progress window that comes up for the re-read
+        # would be sitting there unable to take a single click, its "keep
+        # reading in the background" button included.
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass  # already gone with the window
         # read again, so the overview stops showing what is gone
-        self.app.refresh_sources([wiring.OPNSENSE, wiring.DNS], quiet=True)
+        self.app.refresh_sources([wiring.OPNSENSE, wiring.DNS])
 
     def _failed(self, error):
         self._working(False)

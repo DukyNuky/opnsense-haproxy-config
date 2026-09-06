@@ -3407,16 +3407,19 @@ class App(tk.Tk):
         for listener in self.source_listeners:
             listener(None)
 
-    def refresh_sources(self, kinds=None, quiet=False):
+    def refresh_sources(self, kinds=None):
         """Ask the systems, all at once, and tell the tabs as answers arrive.
 
         The shelf reports from worker threads; every notification is handed to
         the window's own queue, because a widget touched from another thread
         is a crash waiting for the wrong moment.
 
-        ``quiet`` asks without the progress window. Used for a re-read of one
-        system straight after a dialog wrote something: the log already says
-        it happened, and a window flashing up there reads as a complaint.
+        Every round shows the bar. There used to be a quiet variant for the
+        re-read that follows a dialog having written something, on the theory
+        that a window appearing right afterwards would read as a complaint.
+        It read as nothing at all: reading is the one moment when the program
+        is busy and cannot be used, and a reading nobody can see is the state
+        this window was built for.
         """
         def announce(source):
             self.results.put(("done",
@@ -3426,10 +3429,9 @@ class App(tk.Tk):
         # Shown before the asking starts. The other way round, a round that
         # finishes before the window is up would leave it standing with
         # nothing left to report.
-        if not quiet:
-            self._progress().show()
+        self._progress().show()
         here = self.shelf.refresh(kinds=kinds, notify=announce)
-        if here is None and not quiet:
+        if here is None:
             self._progress().hide()   # nothing was taken on after all
         self._paint_round()
         return here

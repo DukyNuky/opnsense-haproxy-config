@@ -144,10 +144,7 @@ class BehindDialog(tk.Toplevel):
         self.destroy()
         # read the firewall again, so the overview shows the note rather than
         # what it worked out before it existed
-        # quietly: the line in the log below already says it happened, and a
-        # cover flashing over the window right after a dialog closed reads as
-        # something having gone wrong
-        self.app.refresh_sources([wiring.OPNSENSE], quiet=True)
+        self.app.refresh_sources([wiring.OPNSENSE])
         word = core.BEHIND_KINDS.get(kind, "")
         self.app._write_log(
             "Vermerkt",
