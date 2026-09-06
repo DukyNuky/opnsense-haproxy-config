@@ -52,7 +52,7 @@ open(os.path.join(d, "opnsense_haproxy.py"), "w").write('VERSION = "2.11.0"\n')
 open(os.path.join(d, "config.json"), "w").write('{"secret": "keep me"}')
 open(os.path.join(d, "meine-notizen.md"), "w").write("nicht anfassen\n")
 
-core._download = lambda url, timeout=60, report=None: blob.getvalue()
+core._download = lambda url, timeout=60, report=None, progress=None: blob.getvalue()
 res = core.install_update({"zip": "x", "version": "3.0.0", "channel": "stable",
                            "current": "2.11.0"}, folder=d, report=lambda t: None)
 
@@ -78,7 +78,7 @@ with zipfile.ZipFile(blob2, "w") as z:
     z.writestr("r-def/haproxy_gui.py", "x = 2\n")
     z.writestr("r-def/ui/__init__.py", "")
     z.writestr("r-def/ui/status.py", "y = 9\n")     # ui/parts/card.py is gone
-core._download = lambda url, timeout=60, report=None: blob2.getvalue()
+core._download = lambda url, timeout=60, report=None, progress=None: blob2.getvalue()
 res2 = core.install_update({"zip": "x", "version": "3.1.0", "channel": "stable",
                             "current": "3.0.0"}, folder=d, report=lambda t: None)
 check("removed", res2["removed"], ["ui/parts/card.py"])
@@ -171,5 +171,32 @@ check2("other files untouched", os.path.exists(os.path.join(b, "notes.md")), Tru
 check2("nothing to do twice", core.prune_backups(b), [])
 
 shutil.rmtree(d); shutil.rmtree(b)
-print(f"\n{ok + ok2} ok, {fail + fail2} fail  (all)")
-sys.exit(1 if (fail or fail2) else 0)
+
+# --------------------------------------------------------------------------
+# the package is built by the rule, not by a list
+# --------------------------------------------------------------------------
+
+print("-- the release package carries the whole tree -------------------")
+ok3 = fail3 = 0
+def check3(label, got, want):
+    global ok3, fail3
+    if got == want: ok3 += 1
+    else:
+        fail3 += 1
+        print(f"  FAIL {label}: got {got!r}, want {want!r}")
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+listed = core.program_files(HERE)
+check3("the entry points", all(n in listed for n in core.ESSENTIAL_FILES), True)
+check3("the package too", "app/sources.py" in listed, True)
+check3("and what is under it", "app/docker/model.py" in listed, True)
+check3("the checks stay out", any(n.startswith("tests/") for n in listed), False)
+check3("so do the build scripts",
+       any(n in ("make_release.py", "make_icon.py") for n in listed), False)
+check3("and the packages themselves",
+       any(n.startswith("releases/") for n in listed), False)
+check3("credentials never", any(n in ("config.json", "gui.json", "channel.json")
+                                for n in listed), False)
+
+print(f"\n{ok + ok2 + ok3} ok, {fail + fail2 + fail3} fail  (alles)")
+sys.exit(1 if (fail or fail2 or fail3) else 0)

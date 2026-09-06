@@ -175,6 +175,8 @@ class NoShelf:
     def oldest(self, kinds=None, now=None):
         return None
 
+    round = None
+
     def all(self):
         return []
 
@@ -185,7 +187,7 @@ class NoShelf:
         return None
 
     def refresh(self, **_kwargs):
-        return []
+        return None
 
     def __len__(self):
         return 0
@@ -1380,9 +1382,15 @@ class UpdateDialog(tk.Toplevel):
             self.app.results.put(("done", lambda _p: self._say(text), None,
                                   None, None))
 
+        def loaded(done, total):
+            self.app.results.put(
+                ("done", lambda _p, d=done, t=total: self._loading(d, t),
+                 None, None, None))
+
         def task():
             try:
-                result = core.install_update(self.release, self.folder, report)
+                result = core.install_update(self.release, self.folder, report,
+                                             progress=loaded)
                 self.app.results.put(("done", self._done, None, result, None))
             except Exception as exc:  # noqa: BLE001 - shown in the dialog
                 # bound as a default: Python clears `exc` when the except block
@@ -1391,6 +1399,24 @@ class UpdateDialog(tk.Toplevel):
                                       None, None, None))
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _loading(self, done, total):
+        """How much has arrived. A percentage only when there is one to give.
+
+        GitHub sends the source archive without a Content-Length -- it is
+        streamed -- so most of the time the total is not known. Then the bar
+        keeps wobbling and the number beside it counts up, which is honest.
+        Inventing a total to fill a bar with would not be.
+        """
+        if total:
+            if str(self.progress.cget("mode")) != "determinate":
+                self.progress.stop()
+                self.progress.configure(mode="determinate", maximum=total)
+            self.progress.configure(value=done)
+            self._say(f"Update wird geladen … {done * 100 // total} % "
+                      f"({done // 1024} von {total // 1024} KB)")
+            return
+        self._say(f"Update wird geladen … {done // 1024} KB")
 
     def _failed(self, error):
         self.progress.stop()
@@ -2236,6 +2262,8 @@ class App(tk.Tk):
         self.shelf = app_sources.Sources() if app_sources else NoShelf()
         # tabs that want to hear when a system answered
         self.source_listeners = []
+        # true while the header bar is counting systems rather than wobbling
+        self.progress_round = False
 
         self.update_release = None
         self.update_checking = False
@@ -3339,9 +3367,38 @@ class App(tk.Tk):
                               lambda _payload, s=source: self._source_changed(s),
                               None, None, None))
 
-        self.shelf.refresh(kinds=kinds, notify=announce)
+        here = self.shelf.refresh(kinds=kinds, notify=announce)
+        if here is not None:
+            self._paint_round()
+        return here
+
+    def _paint_round(self):
+        """The header bar fills with the number of systems that have answered.
+
+        Determinate on purpose: with several systems there is a real number,
+        and a bar that only wobbles says "something is happening" -- which
+        whoever pressed the button already knows.
+        """
+        here = self.shelf.round
+        if here is None or not here.active:
+            if self.progress_round:
+                self.progress_round = False
+                self.progress.stop()
+                self.progress.configure(mode="indeterminate")
+                if not self.busy:
+                    self.progress.grid_remove()
+                    self._set_activity("")
+            return
+        if not self.progress_round:
+            self.progress_round = True
+            self.progress.stop()
+            self.progress.configure(mode="determinate")
+            self.progress.grid()
+        self.progress.configure(maximum=here.total, value=here.done)
+        self._set_activity(f"{here.done} von {here.total} Systemen gelesen")
 
     def _source_changed(self, source):
+        self._paint_round()
         for listener in self.source_listeners:
             try:
                 listener(source)

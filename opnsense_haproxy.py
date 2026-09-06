@@ -1909,13 +1909,24 @@ def update_blocked_text(code):
     return UPDATE_BLOCKED_TEXT.get(code, "this folder cannot be updated")
 
 
-def _download(url, timeout=60, report=None):
+def _download(url, timeout=60, report=None, progress=None):
+    """Fetch the archive, saying how far along it is while doing so.
+
+    ``progress`` is called with (bytes so far, bytes in total). The total is
+    whatever the server declared, and 0 when it declared nothing -- a caller
+    drawing a bar has to be able to tell "half way" from "no idea", and
+    guessing a total would turn the second into a confident lie.
+    """
     request = urllib.request.Request(
         url, headers={"Accept": "application/vnd.github+json",
                       "User-Agent": f"opnsense-haproxy/{VERSION}"})
     chunks, size = [], 0
     try:
         with urllib.request.urlopen(request, timeout=timeout) as reply:
+            try:
+                total = int(reply.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                total = 0
             while True:
                 chunk = reply.read(64 * 1024)
                 if not chunk:
@@ -1924,8 +1935,11 @@ def _download(url, timeout=60, report=None):
                 if size > MAX_DOWNLOAD:
                     raise ApiError("the download is far bigger than expected -- stopped")
                 chunks.append(chunk)
+                if progress:
+                    progress(size, total)
                 if report:
-                    report(f"loading … {size // 1024} KB")
+                    report(f"loading … {size // 1024} KB"
+                           + (f" von {total // 1024} KB" if total else ""))
     except urllib.error.HTTPError as exc:
         raise ApiError(f"download failed: {exc.code} {exc.reason}") from None
     except urllib.error.URLError as exc:
@@ -1972,7 +1986,8 @@ def verify_download(files):
             raise ApiError(f"{name} from the download is damaged: {exc}") from None
 
 
-def install_update(release, folder=None, report=None, timeout=60):
+def install_update(release, folder=None, report=None, timeout=60,
+                   progress=None):
     """Replace the program files with the downloaded release.
 
     The previous files are copied into a backup folder first, so an update
@@ -1989,7 +2004,7 @@ def install_update(release, folder=None, report=None, timeout=60):
     say = report or (lambda _text: None)
 
     say("downloading …")
-    files = unpack_release(_download(release["zip"], timeout, report))
+    files = unpack_release(_download(release["zip"], timeout, report, progress))
     verify_download(files)
 
     # What the new version does not bring is not part of it any more. Without

@@ -44,6 +44,26 @@ damit im Fenster unmissverständlich steht, was läuft.
 - **Die ganze Zeile öffnet die Kette**, nicht nur der Knopf am Ende.
 - **Gelesen wird nur auf Knopfdruck**, je Seite oder alles auf einmal, und über
   allem steht, wie alt der Stand ist.
+- **Echte Fortschrittsbalken.** Beim Lesen mehrerer Systeme gibt es eine
+  richtige Zahl — wie viele geantwortet haben —, und der Balken zeigt genau
+  die. Darunter steht, auf welches noch gewartet wird. Ein Balken, der nur
+  wackelt, sagt „es passiert etwas", und das weiß derjenige, der gerade
+  gedrückt hat, bereits.
+- **Der Status-Tab zeichnet sich nicht mehr bei jeder Antwort neu.** Fünf
+  Systeme melden sich zehnmal — je einmal beim Beginnen und beim Fertigwerden.
+  Bei jeder Meldung die Seite neu aufzubauen zieht sie demjenigen unter den
+  Augen weg, der sie gerade liest. Der Kopf mit dem Fortschritt folgt jeder
+  Antwort; die Seite selbst wartet, bis die Antworten aufhören.
+- **Beim Update-Download steht, wie viel geladen ist.** Eine Prozentzahl nur
+  dann, wenn der Server die Gesamtgröße überhaupt nennt — GitHub streamt das
+  Quellarchiv ohne `Content-Length`, dann zählen die Kilobytes hoch. Eine
+  Gesamtgröße zu erfinden, um einen Balken zu füllen, wäre gelogen.
+- **Das Release-Paket wird nach derselben Regel gebaut wie ein Update.**
+  `make_release.py` hatte eine fest eingetragene Liste von dreizehn
+  Dateinamen — genau der Fehler, vor dem der Code an drei anderen Stellen
+  warnt, an der einen Stelle, wo er noch stand. Das Paket für 3.0.0 hätte den
+  Ordner `app/` nicht enthalten; wer es heruntergeladen hätte, hätte ein
+  Programm bekommen, das nicht startet.
 - **Mehrere Systeme werden gleichzeitig gefragt.** Drei AdGuards nacheinander
   kosten drei Zeitüberschreitungen, um zu scheitern; zusammen gefragt kosten
   sie eine, und jedes sagt für sich, wie es lief, während die anderen noch

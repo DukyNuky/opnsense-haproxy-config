@@ -102,6 +102,53 @@ def describe_age(seconds, never="noch nicht gelesen"):
     return f"vor {days} Tag{'en' if days != 1 else ''}"
 
 
+class Round:
+    """One round of asking, and how far along it is.
+
+    A bar that only wobbles says "something is happening", which anybody can
+    already see. With several systems there is a real number to show: how many
+    of them have answered. This is where it is counted, so the window can draw
+    a bar that actually means something and name what is still outstanding.
+    """
+
+    def __init__(self, sources):
+        self.sources = list(sources)
+        self.started = time.time()
+        self._done = []
+        self._lock = threading.Lock()
+
+    def finished(self, source):
+        with self._lock:
+            self._done.append(source)
+
+    @property
+    def total(self):
+        return len(self.sources)
+
+    @property
+    def done(self):
+        with self._lock:
+            return len(self._done)
+
+    @property
+    def running(self):
+        """The ones still out, by name -- what a bar cannot say on its own."""
+        with self._lock:
+            waiting = [s for s in self.sources if s not in self._done]
+        return [source.label or source.name for source in waiting]
+
+    @property
+    def active(self):
+        return self.done < self.total
+
+    @property
+    def fraction(self):
+        return 1.0 if not self.total else self.done / self.total
+
+    def __repr__(self):
+        return f"<Round {self.done}/{self.total}>"
+
+
 class Sources:
     """The shelf: every source, addressed by kind and name.
 
@@ -112,6 +159,8 @@ class Sources:
 
     def __init__(self, workers=6):
         self.workers = workers
+        #: the round that is running, or the last one that ran
+        self.round = None
         self._sources = {}
         self._order = []
         # Reentrant on purpose: refresh() holds it while choosing what to ask,
@@ -197,10 +246,12 @@ class Sources:
             taken = [s for s in self.pick(kinds, names) if s.status != LOADING]
             for source in taken:
                 source.status = LOADING
+            if not taken:
+                return None
+            here = Round(taken)
+            self.round = here
         for source in taken:
             say(source)
-        if not taken:
-            return []
 
         def work(queue):
             while True:
@@ -209,6 +260,7 @@ class Sources:
                 except IndexError:
                     return
                 source.refresh()
+                here.finished(source)
                 say(source)
 
         queue = list(reversed(taken))
@@ -219,7 +271,7 @@ class Sources:
         if block:
             for thread in threads:
                 thread.join()
-        return taken
+        return here
 
     def busy(self, kinds=None):
         return [s for s in self.pick(kinds) if s.status == LOADING]

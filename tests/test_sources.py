@@ -89,7 +89,7 @@ sh2.put(Source("k", "one", counted))
 sh2.refresh(block=False)
 time.sleep(0.05)
 second = sh2.refresh(block=False)      # still loading -> taken on nothing
-check("skipped", second, [])
+check("skipped", second, None)
 time.sleep(0.35)
 check("asked once", calls["n"], 1)
 
@@ -132,5 +132,68 @@ a = sh5.put(Source("k", "a", lambda: 1)); a.read_at = now - 100
 b = sh5.put(Source("k", "b", lambda: 1)); b.read_at = now - 900
 check("oldest", int(sh5.oldest(["k"], now)), 900)
 
-print(f"\n{ok} ok, {fail} fail")
-sys.exit(1 if fail else 0)
+print("-- a round counts how far it has come ---------------------------")
+ok2 = fail2 = 0
+def check2(label, got, want):
+    global ok2, fail2
+    if got == want: ok2 += 1
+    else:
+        fail2 += 1
+        print(f"  FAIL {label}: got {got!r}, want {want!r}")
+
+import threading as _t
+gate = _t.Event()
+def waits(value):
+    def read():
+        gate.wait(2.0)
+        return value
+    return read
+
+shelf = Sources(workers=4)
+for name in ("a", "b", "c", "d"):
+    shelf.put(Source("adguard", name, waits(name), label=f"{name} · https://{name}"))
+here = shelf.refresh(kinds=["adguard"])
+check2("a round comes back", here is not None, True)
+check2("total", here.total, 4)
+check2("none done yet", here.done, 0)
+check2("nothing counted", here.fraction, 0.0)
+check2("running by label", sorted(here.running),
+       ["a · https://a", "b · https://b", "c · https://c", "d · https://d"])
+check2("active", here.active, True)
+gate.set()
+for _ in range(200):
+    if not here.active:
+        break
+    time.sleep(0.01)
+check2("all done", here.done, 4)
+check2("full", here.fraction, 1.0)
+check2("nothing left running", here.running, [])
+check2("no longer active", here.active, False)
+check2("the shelf keeps it", shelf.round is here, True)
+
+print("-- a round that takes nothing on is no round --------------------")
+# a gate of its own: the one above is open by now, and a source that answers
+# instantly is not still loading when the second refresh looks
+held = _t.Event()
+def held_read():
+    held.wait(2.0)
+    return "x"
+busy = Sources()
+busy.put(Source("k", "one", held_read))
+first = busy.refresh()
+check2("first is a round", first is not None, True)
+check2("second is none while it runs", busy.refresh(), None)
+check2("and did not replace it", busy.round is first, True)
+held.set()
+for _ in range(200):
+    if not first.active:
+        break
+    time.sleep(0.01)
+check2("then it may be asked again", busy.refresh() is not None, True)
+held.set()
+
+print("-- an empty shelf ------------------------------------------------")
+check2("nothing to do", Sources().refresh(), None)
+
+print(f"\n{ok + ok2} ok, {fail + fail2} fail  (alles)")
+sys.exit(1 if (fail or fail2) else 0)

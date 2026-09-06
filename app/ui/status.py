@@ -69,6 +69,8 @@ class StatusTab(ttk.Frame):
         #: which chains the reader has opened
         self.open_chains = set()
         self._drawn = None
+        #: a redraw waiting to happen, so a burst of answers costs one
+        self._pending = None
 
         head = ttk.Frame(self, style="TFrame")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
@@ -81,6 +83,18 @@ class StatusTab(ttk.Frame):
                                          style="Tool.TButton",
                                          command=self.reload)
         self.refresh_button.grid(row=0, column=2, sticky="e")
+
+        # A real bar, filled by the number of systems that have answered.
+        # A wobbling one says "something is happening", which anyone can see
+        # already; this one says how much of it is left.
+        self.bar = ttk.Progressbar(head, mode="determinate", maximum=100,
+                                   style="Bar.Horizontal.TProgressbar")
+        self.bar.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        self.bar.grid_remove()
+        self.waiting = ttk.Label(head, text="", style="Muted.TLabel")
+        self.waiting.grid(row=2, column=0, columnspan=3, sticky="w",
+                          pady=(3, 0))
+        self.waiting.grid_remove()
 
         self.scroll = gui.ScrollFrame(self, app.colors)
         self.scroll.grid(row=1, column=0, sticky="nsew")
@@ -113,11 +127,30 @@ class StatusTab(ttk.Frame):
                 tuple(sorted(self.open_chains)))
 
     def render(self, force=False):
+        """Redraw, but not once per answer.
+
+        A refresh of five systems reports ten times -- once as each starts and
+        once as it finishes. Rebuilding the page on every one of them pulls it
+        out from under whoever is reading, and the reading is the point. So
+        the head, which is cheap and is where the progress shows, follows
+        every answer; the page itself waits until the answers stop coming.
+        """
+        self._paint_head()
+        if force:
+            self._redraw()
+            return
+        if self._pending is not None:
+            self.after_cancel(self._pending)
+        self._pending = self.after(250, self._redraw)
+
+    def _redraw(self):
+        self._pending = None
+        if not self.winfo_exists():
+            return
         signature = self._signature()
-        if force or signature != self._drawn:
+        if signature != self._drawn:
             self._drawn = signature
             self._build()
-        self._paint_head()
 
     def _paint_head(self):
         counted = self.app.shelf.summary()
@@ -126,10 +159,24 @@ class StatusTab(ttk.Frame):
             text=count_text(counted) + (
                 f"  ·  Stand {shelf_module.describe_age(oldest)}"
                 if oldest is not None else ""))
-        busy = bool(counted["loading"])
+        here = self.app.shelf.round
+        busy = bool(here and here.active)
         self.refresh_button.configure(
             state="disabled" if busy else "normal",
-            text="↻ wird gelesen …" if busy else "↻ Alles neu lesen")
+            text=(f"↻ {here.done} von {here.total}" if busy
+                  else "↻ Alles neu lesen"))
+        if not busy:
+            self.bar.grid_remove()
+            self.waiting.grid_remove()
+            return
+        self.bar.configure(maximum=here.total, value=here.done)
+        self.bar.grid()
+        outstanding = here.running
+        self.waiting.configure(
+            text="wird gelesen: " + ", ".join(outstanding[:3])
+                 + (f" und {len(outstanding) - 3} weitere"
+                    if len(outstanding) > 3 else ""))
+        self.waiting.grid()
 
     # -- drawing ------------------------------------------------------------
 
