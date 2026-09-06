@@ -102,6 +102,12 @@ class Card:
     title: str
     state: str = OK
     lines: list = field(default_factory=list)
+    #: what a system that failed actually said, in full. The box shows a
+    #: shortened line, because a box is a box; the whole sentence is kept
+    #: here so it can be read somewhere -- throwing it away and printing
+    #: "keine Antwort" left nobody, the reader included, able to tell an
+    #: unreachable host from a wrong token from a plain mistake of ours.
+    trouble: list = field(default_factory=list)
 
 
 @dataclass
@@ -456,6 +462,12 @@ def chains_for(source, answers, ports, dns_on, docker_on, docker_read=True):
     return found
 
 
+def short(text, limit=70):
+    """Enough of a message to recognise it by, on one or two lines."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def _card(kind, title, sources, lines_for):
     """One box of the map, with the state of the systems behind it."""
     unread = [s for s in sources if not s.ready]
@@ -468,12 +480,14 @@ def _card(kind, title, sources, lines_for):
     elif unread:
         state = UNKNOWN
     lines = lines_for([s for s in sources if s.ready])
+    trouble = []
     for source in broken:
-        lines.append(f"{source.name}: keine Antwort")
+        lines.append(f"{source.name}: {short(source.error) or 'keine Antwort'}")
+        trouble.append(f"{source.name}: {source.error or 'keine Antwort'}")
     for source in unread:
         if source not in broken:
             lines.append(f"{source.name}: noch nicht gelesen")
-    return Card(kind, title, state, lines)
+    return Card(kind, title, state, lines, trouble)
 
 
 def build(shelf):

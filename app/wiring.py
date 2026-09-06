@@ -84,6 +84,34 @@ def entries_of(systems, kind):
     return [entry for entry in (systems.get(key) or []) if isinstance(entry, dict)]
 
 
+def entry_name(entry):
+    """What a saved system is called on the shelf.
+
+    One rule, used everywhere: a source is looked up by this and the place to
+    read is looked up by this, and the two silently missing each other is a
+    host that never answers for no visible reason.
+    """
+    return str(entry.get("name") or entry.get("url") or "?")
+
+
+def places_for(systems, remembered):
+    """Which Docker environment to read on each configured manager.
+
+    ``remembered`` is what the Docker tab writes down: one environment per
+    manager, keyed by the manager's name -- because with two Docker hosts the
+    environment of the one is no answer for the other.
+
+    Looking the name up is the whole job, and not doing it was a real fault:
+    the entire mapping went to every manager as the environment it should
+    read, each of them was asked for an environment named after a dictionary,
+    and each of them rightly said it had no such thing. Every Docker host
+    reported "keine Antwort", and with that every chain lost its last station.
+    """
+    kept = remembered if isinstance(remembered, dict) else {}
+    return {entry_name(entry): str(kept.get(entry_name(entry), "") or "")
+            for entry in entries_of(systems, DOCKER)}
+
+
 def _reader(build, ask):
     """A source's read: build the client, then ask it.
 
@@ -99,7 +127,7 @@ def _reader(build, ask):
 
 def source_for(kind, entry, place=None):
     """One configured system, ready to be asked."""
-    name = str(entry.get("name") or entry.get("url") or "?")
+    name = entry_name(entry)
     label = f"{name} · {entry.get('url', '')}".rstrip(" ·")
     if kind == OPNSENSE:
         read = _reader(lambda: opnsense_client(entry), read_opnsense)
@@ -125,12 +153,10 @@ def wire(shelf, systems, places=None):
     for kind in KINDS:
         entries = entries_of(systems, kind)
         for entry in entries:
-            name = str(entry.get("name") or entry.get("url") or "?")
             shelf.put(source_for(kind, entry,
-                                 place=places.get(name) if kind == DOCKER
-                                 else None))
-        shelf.keep_only(kind, [str(e.get("name") or e.get("url") or "?")
-                               for e in entries])
+                                 place=places.get(entry_name(entry))
+                                 if kind == DOCKER else None))
+        shelf.keep_only(kind, [entry_name(e) for e in entries])
     return shelf
 
 

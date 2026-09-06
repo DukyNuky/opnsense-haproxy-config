@@ -71,6 +71,30 @@ damit im Fenster unmissverständlich steht, was läuft.
   Bei jeder Meldung die Seite neu aufzubauen zieht sie demjenigen unter den
   Augen weg, der sie gerade liest. Der Kopf mit dem Fortschritt folgt jeder
   Antwort; die Seite selbst wartet, bis die Antworten aufhören.
+- **Docker-Hosts antworteten grundsätzlich nicht.** Welche Docker-Umgebung
+  gelesen werden soll, merkt sich das Programm je Verwaltung unter deren Namen
+  — mit zwei Docker-Hosts ist die Umgebung des einen keine Antwort für den
+  anderen. Nachgeschlagen wurde dieser Name aber nicht: jede Verwaltung bekam
+  die **ganze Zuordnung** als die Umgebung, die sie lesen soll, wurde also nach
+  einer Umgebung namens `{'Haus': '3', …}` gefragt und sagte völlig zu Recht,
+  die kenne sie nicht. Damit meldete **jeder** Docker-Host „keine Antwort", und
+  jede Kette verlor ihre letzte Station — auch die, an der vermerkt war, dass
+  dort ein Container läuft. Die Regel steht jetzt in `wiring.places_for` und
+  wird geprüft.
+- **Was ein System geantwortet hat, steht jetzt da.** In der Karte stand
+  „keine Antwort" und die Fehlermeldung wurde weggeworfen — womit niemand,
+  auch nicht das Programm selbst, einen nicht erreichbaren Host von einem
+  falschen Token oder einem Fehler von uns unterscheiden konnte. Die Karte
+  zeigt den Anfang der Meldung, der Tooltip den ganzen Satz. Der Fehler eine
+  Zeile darüber wäre ohne das nicht zu finden gewesen.
+- **Fenster wachsen jetzt mit dem, was in ihnen steht.** Ein Dialog bekam
+  seine Größe **einmal**, am Ende des Aufbaus — und danach klappte eine Notiz
+  auf oder ein Fortschrittsbalken erschien. Der Rahmen blieb, der Textteil
+  wurde gestaucht, und der Rest lief unten aus dem Fenster: „Version 3.0.0-beta
+  ist installiert. Sie wird nach einem Neustart des" — Satz zu Ende, Fenster
+  zu Ende. Jetzt misst sich jedes dieser Fenster neu, wenn es etwas einblendet
+  oder umschreibt (`fit_window`), und während des Lesens wächst es nur, statt
+  im Takt der eintreffenden Antworten zu zucken.
 - **Eine Kette auf- oder zuzuklappen baut nicht mehr die Seite neu.** Der
   Klick lief durch denselben Weg wie eine Antwort aus dem Netz: Übersicht neu
   gerechnet, jedes Widget der Seite weggeworfen und neu gebaut, eine

@@ -1217,23 +1217,59 @@ class SettingsDialog(tk.Toplevel):
         self.grab_set()
 
 
+def fit_window(window, floor=460, height=None, shrink=True):
+    """Give a window the size its content asks for -- again, when that changes.
+
+    Sizing a window once, at the end of __init__, is a promise that what is
+    in it will never change again. These windows all break that promise: a
+    note appears when something goes wrong, a bar appears while something
+    runs, a line that named one host names four. The window keeps the size it
+    was given, the part of it that holds the text gets squeezed instead, and
+    the last line is simply cut off at the bottom edge -- which is how a
+    dialog ends mid-sentence.
+
+    So sizing is not a one-off. Everything that reveals or rewrites something
+    asks for it again; when nothing moved this costs a comparison.
+
+    ``shrink=False`` for a window whose content is in motion: while systems
+    are being read, the line naming the outstanding ones goes from three back
+    to one, and a window that followed that down and up again would twitch
+    for the whole reading. Growing is necessary; shrinking is only tidy.
+    """
+    window.update_idletasks()
+    width = max(window.winfo_reqwidth(), floor)
+    tall = window.winfo_reqheight() if height is None else height
+    if not shrink and window.winfo_height() > 1:
+        tall = max(tall, window.winfo_height())
+        width = max(width, window.winfo_width())
+    tall = min(tall, int(window.winfo_screenheight() * 0.9))
+    want = f"{width}x{tall}"
+    if getattr(window, "_fitted", "") == want:
+        return
+    window._fitted = want
+    window.geometry(want)
+
+
+def place_over(window, parent):
+    """Put a window over its parent, a little above the middle."""
+    window.update_idletasks()
+    x = parent.winfo_rootx() + (parent.winfo_width() - window.winfo_width()) // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - window.winfo_height()) // 3
+    window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+
 def _fit_dialog(window, parent, scroll, footer, floor=460):
     """Size a scrolled dialog to its content, but never past the screen.
 
     The size has to come from the scrolled content: a canvas reports its own
     default size, not what is inside it.
     """
-    content = scroll.body.winfo_reqheight()
     width = max(scroll.body.winfo_reqwidth() + 18, floor)
-    tallest = int(window.winfo_screenheight() * 0.85)
-    height = min(content + footer.winfo_reqheight() + 4, tallest)
-    window.geometry(f"{width}x{height}")
-    window.minsize(width, min(420, height))
+    height = scroll.body.winfo_reqheight() + footer.winfo_reqheight() + 4
+    fit_window(window, floor=width, height=height)
+    window.minsize(width, min(420, window.winfo_height()))
     window.resizable(False, True)
-    window.update_idletasks()
-    x = parent.winfo_rootx() + (parent.winfo_width() - window.winfo_width()) // 2
-    y = parent.winfo_rooty() + (parent.winfo_height() - window.winfo_height()) // 3
-    window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    place_over(window, parent)
 
 
 # --------------------------------------------------------------------------
@@ -1359,15 +1395,17 @@ class UpdateDialog(tk.Toplevel):
             self.action.configure(state="disabled")
 
         self.bind("<Escape>", lambda _e: self.destroy())
-        self.update_idletasks()
-        width = max(self.winfo_reqwidth(), 460)
-        self.geometry(f"{width}x{self.winfo_reqheight()}")
+        fit_window(self, floor=460)
         self.resizable(False, False)
         self.grab_set()
 
     def _say(self, text):
         self.note.configure(text=text)
         self.note.grid()
+        # what was just revealed needs room; without this it lands under the
+        # bottom edge, which is where "ist installiert. Sie wird nach einem
+        # Neustart des" stopped mid-sentence
+        fit_window(self, floor=460, shrink=False)
 
     def _install(self):
         self.action.configure(state="disabled")
@@ -1548,8 +1586,7 @@ class InstallDialog(tk.Toplevel):
         self.action.grid(row=0, column=1)
 
         self.bind("<Escape>", lambda _e: self.destroy())
-        self.update_idletasks()
-        self.geometry(f"{max(self.winfo_reqwidth(), 500)}x{self.winfo_reqheight()}")
+        fit_window(self, floor=500)
         self.resizable(False, False)
         self.grab_set()
 
@@ -1564,6 +1601,7 @@ class InstallDialog(tk.Toplevel):
     def _say(self, text):
         self.note.configure(text=text)
         self.note.grid()
+        fit_window(self, floor=500, shrink=False)
 
     def _install(self):
         target = self.var_target.get().strip()
@@ -3352,9 +3390,8 @@ class App(tk.Tk):
         if wiring is None:
             return
         wiring.wire(self.shelf, self.systems,
-                    places={entry.get("name", ""): self.prefs.get(
-                        "portainer_endpoint", "")
-                        for entry in self.systems.get(wiring.DOCKER_KEY, [])})
+                    places=wiring.places_for(
+                        self.systems, self.prefs.get("portainer_endpoint")))
         for listener in self.source_listeners:
             listener(None)
 

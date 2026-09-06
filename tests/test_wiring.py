@@ -115,6 +115,25 @@ src._read = lambda: engine.read("5")
 src.refresh()
 check("place handed through", asked["place"], "5")
 
+print("-- each manager is asked for its own environment -----------------")
+# the preference is a mapping of manager name -> environment. Handing the
+# whole mapping to every manager asked each of them for an environment named
+# after a dictionary; each said it had no such thing, and every Docker host
+# in the program reported "keine Antwort".
+kept = {"Docker haus": "5", "Docker nas": "2"}
+check("one environment each", wiring.places_for(SYSTEMS, kept),
+      {"Docker haus": "5", "Docker nas": "2"})
+check("a manager nobody chose for gets none",
+      wiring.places_for({"portainer": [{"name": "Neu", "url": "https://n.lan"}]},
+                        kept), {"Neu": ""})
+check("no preference yet", wiring.places_for(SYSTEMS, None),
+      {"Docker haus": "", "Docker nas": ""})
+check("and a preference of the wrong shape is not passed on",
+      wiring.places_for(SYSTEMS, "5"), {"Docker haus": "", "Docker nas": ""})
+check("named the way the shelf names them",
+      sorted(wiring.places_for({"portainer": [{"url": "https://only.lan"}]},
+                               {})), ["https://only.lan"])
+
 print("-- nothing configured at all ------------------------------------")
 empty = wiring.wire(Sources(), {})
 check("empty shelf", len(empty), 0)

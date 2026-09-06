@@ -171,6 +171,23 @@ check("card unknown", next(c for c in unread.cards if c.kind == wiring.DOCKER).s
 check("and says so", "noch nicht gelesen" in
       " ".join(next(c for c in unread.cards if c.kind == wiring.DOCKER).lines), True)
 
+print("-- a system that failed says what it said -----------------------")
+shelf = shelf_with()
+gone = shelf.get(wiring.DOCKER, "Docker haus")
+gone.data, gone.status = None, "failed"
+gone.error = ("Portainer Docker haus kennt keinen Docker-Host '2' "
+              "(bekannt: 1: local)")
+spoke = next(c for c in ov.build(shelf).cards if c.kind == wiring.DOCKER)
+check("the box quotes it", "kennt keinen" in " ".join(spoke.lines), True)
+check("and keeps the whole sentence", spoke.trouble,
+      [f"Docker haus: {gone.error}"])
+gone.error = ""
+mute = next(c for c in ov.build(shelf).cards if c.kind == wiring.DOCKER)
+check("a failure with nothing to say still says something",
+      "keine Antwort" in " ".join(mute.lines), True)
+check("shortened to fit a box", ov.short("a" * 90).endswith("…"), True)
+check("and left alone when it fits", ov.short("kurz"), "kurz")
+
 print("-- an unreachable firewall means no chains, not wrong ones ------")
 shelf = shelf_with()
 shelf.get(wiring.OPNSENSE, "Zuhause").data = None

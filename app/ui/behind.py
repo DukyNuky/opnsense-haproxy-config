@@ -97,14 +97,15 @@ class BehindDialog(tk.Toplevel):
         self.action.grid(row=0, column=1)
 
         self.bind("<Escape>", lambda _e: self.destroy())
-        self.update_idletasks()
-        self.geometry(f"{max(self.winfo_reqwidth(), 480)}x{self.winfo_reqheight()}")
+        gui.fit_window(self, floor=480)
         self.resizable(False, False)
+        gui.place_over(self, self.app)
         self.grab_set()
 
     def _say(self, text):
         self.note.configure(text=text)
         self.note.grid()
+        gui.fit_window(self, floor=480, shrink=False)
 
     def _write(self):
         if not self.servers:

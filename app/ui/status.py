@@ -240,7 +240,9 @@ class StatusTab(ttk.Frame):
         ttk.Button(frame, text="öffnen", style="Del.TButton",
                    command=lambda k=box.kind: self.app.show_tab(CARD_TAB[k])).grid(
             row=len(box.lines or [1]) + 1, column=0, sticky="w", pady=(8, 0))
-        gui.Tooltip(frame, CARD_HINT.get(box.kind, ""))
+        # the whole message, for the box that can only show the start of it
+        gui.Tooltip(frame, "\n".join([CARD_HINT.get(box.kind, "")]
+                                     + list(box.trouble)).strip())
         return frame
 
     # -- the chains ---------------------------------------------------------

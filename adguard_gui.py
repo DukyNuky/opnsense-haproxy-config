@@ -513,12 +513,9 @@ class RewriteDialog(tk.Toplevel):
 
         self.bind("<Return>", lambda _e: self._go())
         self.bind("<Escape>", lambda _e: self.destroy())
-        self.update_idletasks()
-        self.geometry(f"{max(self.winfo_reqwidth(), 480)}x{self.winfo_reqheight()}")
+        ui.fit_window(self, floor=480)
         self.resizable(False, False)
-        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
-        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 3
-        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        ui.place_over(self, parent)
         self.domain_box.focus_set()
         self.grab_set()
 
@@ -561,6 +558,7 @@ class RewriteDialog(tk.Toplevel):
     def _say(self, text):
         self.note.configure(text=text)
         self.note.grid()
+        ui.fit_window(self, floor=480, shrink=False)
 
     def _go(self):
         # a name is a name whatever it was typed as; DNS does not care about

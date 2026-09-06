@@ -14,6 +14,8 @@ behind it -- and closing it through the window manager does the same.
 import tkinter as tk
 from tkinter import ttk
 
+import haproxy_gui as gui
+
 
 class Progress:
     """The one progress window, built on first use and reused after that."""
@@ -70,16 +72,22 @@ class Progress:
                 pass  # not mapped yet; the window is still perfectly readable
 
     def _centre(self):
-        app, window = self.app, self.window
-        width, height = window.winfo_reqwidth(), window.winfo_reqheight()
+        app = self.app
+        self._fit()
         if app.winfo_width() <= 1:
             # the very first reading starts before the main window has been
             # given a size; let the window manager place this one
-            window.geometry(f"{width}x{height}")
             return
-        x = app.winfo_rootx() + (app.winfo_width() - width) // 2
-        y = app.winfo_rooty() + (app.winfo_height() - height) // 3
-        window.geometry(f"{width}x{height}+{max(x, 0)}+{max(y, 0)}")
+        gui.place_over(self.window, app)
+
+    def _fit(self):
+        """Room for what is in it, every time that changes.
+
+        The line naming what is still outstanding is one line for one host
+        and three for six. A window sized once, when the line was still
+        empty, cuts the rest of it off along with the button underneath.
+        """
+        gui.fit_window(self.window, floor=460, shrink=False)
 
     def step(self, done, total, waiting=()):
         """How far along, and which systems are still out."""
@@ -92,6 +100,7 @@ class Progress:
             text=("noch offen: " + ", ".join(names[:4])
                   + (f" und {len(names) - 4} weitere" if len(names) > 4 else ""))
             if names else "gleich fertig")
+        self._fit()
 
     def hide(self):
         if not self.showing:
