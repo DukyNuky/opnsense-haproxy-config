@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "2.9.1"
+VERSION = "2.10.0"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -1480,6 +1480,17 @@ def show_domains(client, opts, out=print):
 
 REPO = "DukyNuky/opnsense-haproxy-config"
 GITHUB_API = "https://api.github.com"
+GITHUB_RAW = "https://raw.githubusercontent.com"
+
+# Which line of the program a folder follows. "stable" installs published
+# releases; "beta" follows the tip of the beta branch, where the next version
+# is built in the open. Everyone stays on stable until they ask otherwise.
+CHANNELS = ("stable", "beta")
+BETA_BRANCH = "beta"
+# Kept beside the program rather than in the user's config: which line is
+# installed is a property of these files, and the command line has to read the
+# same answer as the window.
+CHANNEL_FILE = "channel.json"
 
 # Exactly these files are replaced by an update. Anything else in the download
 # is ignored, so neither a stray file in the repository nor a manipulated
@@ -1494,7 +1505,8 @@ GITHUB_API = "https://api.github.com"
 UPDATE_SUFFIXES = (".py", ".json", ".md", ".bat", ".png", ".ico")
 # Never taken from anywhere: the first two belong to the user, the last two are
 # for building a release and have no business in an installation.
-UPDATE_NEVER = ("config.json", "gui.json", "make_release.py", "make_icon.py")
+UPDATE_NEVER = ("config.json", "gui.json", "channel.json",
+                "make_release.py", "make_icon.py")
 # Without these there is no program, so an incomplete download is refused
 # before a single file is replaced.
 ESSENTIAL_FILES = ("opnsense_haproxy.py", "haproxy_gui.py", "portainer.py",
@@ -1514,6 +1526,65 @@ def updatable(name):
 # The whole project is well under a megabyte; anything beyond this is either a
 # mistake or something we should not be unpacking.
 MAX_DOWNLOAD = 20 * 1024 * 1024
+
+
+def default_channel_state():
+    return {"channel": "stable",
+            "installed": {"channel": "stable", "ref": "", "version": VERSION}}
+
+
+def channel_state(folder=None):
+    """Which line this folder follows, and which one actually lies in it.
+
+    Two answers rather than one, because they differ exactly when it matters:
+    the moment the beta is ticked, the wish says "beta" while the files on
+    disk are still the stable release -- and that gap is what the update check
+    turns into an offer.
+    """
+    path = os.path.join(folder or install_dir(), CHANNEL_FILE)
+    try:
+        with open(path) as handle:
+            saved = json.load(handle)
+    except (OSError, ValueError):
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    installed = saved.get("installed")
+    if not isinstance(installed, dict):
+        installed = {}
+    state = default_channel_state()
+    if saved.get("channel") in CHANNELS:
+        state["channel"] = saved["channel"]
+    if installed.get("channel") in CHANNELS:
+        state["installed"]["channel"] = installed["channel"]
+    state["installed"]["ref"] = str(installed.get("ref") or "")
+    state["installed"]["version"] = str(installed.get("version") or VERSION)
+    return state
+
+
+def write_channel_state(state, folder=None):
+    """False when the folder will not take the file -- never an exception.
+
+    A folder that cannot be written is already refused by ``update_blocked``
+    with a sentence of its own; there is nothing this one could add.
+    """
+    path = os.path.join(folder or install_dir(), CHANNEL_FILE)
+    try:
+        with open(path, "w") as handle:
+            json.dump(state, handle, indent=2)
+        return True
+    except OSError:
+        return False
+
+
+def set_channel(name, folder=None):
+    """Follow the published releases from now on, or the beta branch."""
+    if name not in CHANNELS:
+        raise UsageError(f"unknown channel {name!r} -- "
+                         f"use {' or '.join(CHANNELS)}")
+    state = channel_state(folder)
+    state["channel"] = name
+    return write_channel_state(state, folder)
 
 
 def parse_version(text):
@@ -1544,17 +1615,81 @@ def _github(path, timeout=15):
         raise ApiError("GitHub sent a reply that is not JSON") from None
 
 
-def latest_release(repo=REPO, timeout=15):
+def _fetch(url, timeout=15, limit=None):
+    """Raw bytes from a URL, at most ``limit`` of them."""
+    headers = {"User-Agent": f"opnsense-haproxy/{VERSION}"}
+    if limit:
+        headers["Range"] = f"bytes=0-{limit - 1}"
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as reply:
+            return reply.read(limit or MAX_DOWNLOAD)
+    except urllib.error.HTTPError as exc:
+        raise ApiError(f"GitHub answered {exc.code} {exc.reason}") from None
+    except urllib.error.URLError as exc:
+        raise ApiError(f"cannot reach GitHub: {exc.reason}") from None
+
+
+def branch_version(repo, reference, timeout=15):
+    """The version number written into the program at that commit.
+
+    Only the head of the file is asked for: VERSION stands in the first lines,
+    and a whole 200 KB script is a lot to download for one number. A server
+    that ignores the range simply sends more, which does no harm. An empty
+    answer is not an error -- the commit is identified by its hash anyway.
+    """
+    url = f"{GITHUB_RAW}/{repo}/{reference}/opnsense_haproxy.py"
+    try:
+        head = _fetch(url, timeout, limit=4096).decode("utf-8", "replace")
+    except ApiError:
+        return ""
+    found = re.search(r'^VERSION = "([^"]+)"', head, re.M)
+    return found.group(1) if found else ""
+
+
+def beta_release(repo=REPO, branch=BETA_BRANCH, timeout=15):
+    """The tip of the beta branch, described the way a release is.
+
+    A branch has no version of its own, so the commit hash is what says
+    whether there is something new -- the version number on the beta branch
+    stands still for many commits at a time.
+    """
+    try:
+        data = _github(f"repos/{repo}/branches/{branch}", timeout)
+    except FileNotFoundError:
+        raise ApiError(f"{repo} has no branch called {branch}") from None
+    commit = data.get("commit") or {}
+    reference = commit.get("sha") or ""
+    detail = commit.get("commit") or {}
+    when = ((detail.get("committer") or {}).get("date") or "")[:10]
+    message = (detail.get("message") or "").strip()
+    stamp = "  ".join(part for part in (when, reference[:7]) if part)
+    return {
+        "version": branch_version(repo, reference or branch, timeout) or VERSION,
+        "tag": branch,
+        "ref": reference,
+        "notes": "\n\n".join(part for part in (stamp, message) if part),
+        "zip": f"{GITHUB_API}/repos/{repo}/zipball/{reference or branch}",
+        "page": f"https://github.com/{repo}/tree/{branch}",
+    }
+
+
+def latest_release(repo=REPO, timeout=15, channel="stable"):
     """The newest published version: a Release if one exists, else the highest tag.
 
     Tags are a deliberate fallback. Publishing a Release is a manual step in
     the web interface that is easy to forget, while a pushed tag already
     carries both the version number and a downloadable archive.
+
+    On the beta channel none of that applies: there the branch itself is the
+    release.
     """
+    if channel == "beta":
+        return beta_release(repo, BETA_BRANCH, timeout)
     try:
         data = _github(f"repos/{repo}/releases/latest", timeout)
         tag = data.get("tag_name") or data.get("name") or ""
-        return {"version": tag.lstrip("vV"), "tag": tag,
+        return {"version": tag.lstrip("vV"), "tag": tag, "ref": "",
                 "notes": (data.get("body") or "").strip(),
                 "zip": data.get("zipball_url") or "",
                 "page": data.get("html_url") or f"https://github.com/{repo}/releases"}
@@ -1566,17 +1701,34 @@ def latest_release(repo=REPO, timeout=15):
         raise ApiError(f"{repo} has no published version yet")
     newest = max(tags, key=lambda entry: parse_version(entry.get("name")))
     tag = newest.get("name", "")
-    return {"version": tag.lstrip("vV"), "tag": tag, "notes": "",
+    return {"version": tag.lstrip("vV"), "tag": tag, "ref": "", "notes": "",
             "zip": newest.get("zipball_url") or "",
             "page": f"https://github.com/{repo}/releases/tag/{tag}"}
 
 
-def check_for_update(current=None, repo=REPO, timeout=15):
-    """Release information when GitHub is ahead of us, otherwise None."""
-    current = current or VERSION
-    release = latest_release(repo, timeout)
-    release["current"] = current
-    if parse_version(release["version"]) <= parse_version(current):
+def check_for_update(current=None, repo=REPO, timeout=15, channel=None,
+                     folder=None):
+    """What this folder could install now, or None when there is nothing.
+
+    Two questions in one. On the channel we are already on: is GitHub ahead of
+    us. After the channel was changed: does what lies on disk still belong to
+    it. The second is why the answer can point backwards -- leaving the beta
+    means going back to the last stable release, which is an older version
+    than the installed one and would otherwise never be offered.
+    """
+    state = channel_state(folder)
+    channel = channel or state["channel"]
+    installed = state["installed"]
+    release = latest_release(repo, timeout, channel)
+    release["current"] = current or VERSION
+    release["channel"] = channel
+    release["switch"] = channel != installed["channel"]
+    if release["switch"]:
+        return release
+    if channel == "beta":
+        # between beta commits the version number stands still, the hash does not
+        return release if release.get("ref") != installed["ref"] else None
+    if parse_version(release["version"]) <= parse_version(release["current"]):
         return None
     return release
 
@@ -1712,7 +1864,17 @@ def install_update(release, folder=None, report=None, timeout=60):
             os.chmod(temporary, mode)  # keep the executable bit
         os.replace(temporary, target)  # atomic: no half written script survives
         written.append(name)
-    return {"files": written, "backup": backup, "version": release["version"]}
+
+    # written last, so a run that fails halfway leaves behind no note claiming
+    # a version that is not there
+    record = channel_state(folder)
+    record["channel"] = release.get("channel") or record["channel"]
+    record["installed"] = {"channel": record["channel"],
+                           "ref": release.get("ref") or "",
+                           "version": release["version"]}
+    write_channel_state(record, folder)
+    return {"files": written, "backup": backup, "version": release["version"],
+            "channel": record["channel"]}
 
 
 # --------------------------------------------------------------------------
@@ -1886,6 +2048,13 @@ def copy_program(source, target, report=None):
             continue
         shutil.copy2(origin, os.path.join(target, name))
         copied.append(name)
+    # Not one of the program's files -- an update must never take it from a
+    # download -- but the copy has to know which line it is: without it a
+    # freshly installed beta would call itself stable, and the way back out
+    # would be gone.
+    note = os.path.join(source, CHANNEL_FILE)
+    if os.path.isfile(note):
+        shutil.copy2(note, os.path.join(target, CHANNEL_FILE))
     for name in RUNNABLE:
         path = os.path.join(target, name)
         if os.path.exists(path):
@@ -2538,13 +2707,24 @@ def cmd_status(args, config):
 
 
 def cmd_update(args, _config):
-    print(f"installed : {VERSION}")
+    if args.beta and args.stable:
+        raise UsageError("--beta and --stable cannot both be given")
+    if args.beta or args.stable:
+        wanted = "beta" if args.beta else "stable"
+        if not set_channel(wanted):
+            raise UsageError(f"cannot write {CHANNEL_FILE} in {install_dir()}")
+
+    state = channel_state()
+    print(f"installed : {VERSION}  ({state['installed']['channel']})")
+    print(f"channel   : {state['channel']}")
     release = check_for_update()
     if release is None:
         print("this is the newest version")
         return 0
 
-    print(f"available : {release['version']}  ({release['page']})")
+    # on a switch the channel is the news, not the fact that something exists
+    label = release["channel"] if release["switch"] else "available"
+    print(f"{label:<10}: {release['version']}  ({release['page']})")
     if release["notes"]:
         print()
         for line in release["notes"].splitlines():
@@ -2556,7 +2736,9 @@ def cmd_update(args, _config):
     blocked = update_blocked()
     if blocked:
         raise UsageError(update_blocked_text(blocked))
-    if not args.yes and not confirm(f"install {release['version']} now?"):
+    what = (f"switch to the {release['channel']} version {release['version']}"
+            if release["switch"] else f"install {release['version']}")
+    if not args.yes and not confirm(f"{what} now?"):
         return 0
 
     result = install_update(release, report=lambda text: print(f"  {text}"))
@@ -2750,6 +2932,10 @@ def build_parser():
                         help="only report what is available, install nothing")
     update.add_argument("-y", "--yes", action="store_true",
                         help="install without asking")
+    update.add_argument("--beta", action="store_true",
+                        help="follow the beta branch from now on")
+    update.add_argument("--stable", action="store_true",
+                        help="go back to the published releases")
     update.set_defaults(func=cmd_update)
 
     return parser

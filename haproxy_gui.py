@@ -974,7 +974,68 @@ class SettingsDialog(tk.Toplevel):
         for kind in core.SYSTEM_KINDS:
             self._section(body, kind).grid(row=next(rows), column=0, sticky="ew",
                                            padx=18, pady=(18, 0))
+        self._program_section(body).grid(row=next(rows), column=0, sticky="ew",
+                                         padx=18, pady=(18, 0))
         ttk.Frame(body, style="TFrame", height=18).grid(row=next(rows), column=0)
+
+    def _program_section(self, parent):
+        """The program itself: where it lies, and which line it follows."""
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 16))
+        card.columnconfigure(0, weight=1)
+        rows = itertools.count()
+        ttk.Label(card, text="Programm", style="H2.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Label(card, style="Hint.TLabel", wraplength=520, justify="left",
+                  text=f"Version {core.VERSION} in {core.install_dir()}").grid(
+            row=next(rows), column=0, sticky="w", pady=(3, 10))
+
+        ttk.Checkbutton(card, text="Beim Start nach Updates sehen",
+                        variable=self.app.var_update_check,
+                        command=self.app.remember_update_check,
+                        style="Card.TCheckbutton").grid(
+            row=next(rows), column=0, sticky="w")
+        ttk.Checkbutton(card, text="Beta-Version verwenden",
+                        variable=self.app.var_beta, command=self._beta_toggled,
+                        style="Card.TCheckbutton").grid(
+            row=next(rows), column=0, sticky="w", pady=(6, 0))
+        self.beta_note = ttk.Label(card, style="Hint.TLabel", wraplength=520,
+                                   justify="left", text="")
+        self.beta_note.grid(row=next(rows), column=0, sticky="w", pady=(4, 0))
+        self._say_beta()
+        return card
+
+    def _say_beta(self, trouble=""):
+        if trouble:
+            self.beta_note.configure(text=trouble)
+            return
+        installed = core.channel_state()["installed"]["channel"]
+        if self.app.var_beta.get():
+            text = ("Der Haken folgt dem Zweig „beta“ auf GitHub, in dem die "
+                    "nächste Fassung entsteht. Sie ist noch nicht fertig und "
+                    "darf Fehler haben.")
+            if installed != "beta":
+                text += (" Sie ist noch nicht geladen — der Update-Knopf oben "
+                         "rechts holt sie.")
+        else:
+            text = ("Ohne Haken kommen nur veröffentlichte Versionen. Aus "
+                    "der Beta führt der Weg über den Update-Knopf zurück.")
+            if installed == "beta":
+                text += (" Zurzeit liegt hier noch eine Beta-Fassung; der "
+                         "nächste Update-Lauf ersetzt sie.")
+        self.beta_note.configure(text=text)
+
+    def _beta_toggled(self):
+        wanted = "beta" if self.app.var_beta.get() else "stable"
+        if not core.set_channel(wanted):
+            self.app.var_beta.set(not self.app.var_beta.get())  # nothing changed
+            self._say_beta(f"In {core.install_dir()} kann nichts geschrieben "
+                           "werden — die Einstellung bleibt, wie sie war.")
+            return
+        self.app.channel = wanted
+        # checked once the dialog is out of the way: the update dialog is modal
+        # too, and two modal windows fight over the same clicks
+        self.app.channel_changed = True
+        self._say_beta()
 
     def _section(self, parent, kind):
         card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 16))
@@ -1083,6 +1144,21 @@ BLOCKED_TEXT = {
 }
 
 
+def _headline(release):
+    """What this dialog is about, in one line.
+
+    Three cases rather than one: a newer version, the step into the beta, and
+    the step back out of it -- where the number on offer is *lower* than the
+    installed one and „ist verfügbar“ would be plainly wrong.
+    """
+    version = release["version"]
+    if not release.get("switch"):
+        return f"Version {version} ist verfügbar"
+    if release.get("channel") == "beta":
+        return f"Auf die Beta-Version {version} wechseln"
+    return f"Zurück zur stabilen Version {version}"
+
+
 class UpdateDialog(tk.Toplevel):
     """Shows what GitHub has to offer and installs it when asked to."""
 
@@ -1104,8 +1180,8 @@ class UpdateDialog(tk.Toplevel):
         body.columnconfigure(0, weight=1)
         rows = itertools.count()
 
-        ttk.Label(body, text=f"Version {release['version']} ist verfügbar",
-                  style="H2.TLabel").grid(row=next(rows), column=0, sticky="w")
+        ttk.Label(body, text=_headline(release), style="H2.TLabel").grid(
+            row=next(rows), column=0, sticky="w")
         ttk.Label(body, style="Hint.TLabel",
                   text=f"installiert: {core.VERSION}   ·   {release['page']}").grid(
             row=next(rows), column=0, sticky="w", pady=(2, 12))
@@ -1129,6 +1205,13 @@ class UpdateDialog(tk.Toplevel):
                        "kopiert, deine Zugangsdaten bleiben unangetastet.").grid(
             row=next(rows), column=0, sticky="w", pady=(12, 0))
 
+        if release.get("switch") and release.get("channel") == "beta":
+            ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
+                      text="Die Beta ist Arbeit im Gang und darf Fehler haben. "
+                           "Der Haken in den Einstellungen führt jederzeit "
+                           "wieder zurück.").grid(
+                row=next(rows), column=0, sticky="w", pady=(8, 0))
+
         self.note = ttk.Label(body, style="Hint.TLabel", wraplength=420,
                               justify="left", text="")
         self.note.grid(row=next(rows), column=0, sticky="w", pady=(8, 0))
@@ -1147,7 +1230,9 @@ class UpdateDialog(tk.Toplevel):
         self.later = ttk.Button(buttons, text="Später", style="Ghost.TButton",
                                 command=self.destroy)
         self.later.grid(row=0, column=0, padx=(0, 8))
-        self.action = ttk.Button(buttons, text="Jetzt installieren",
+        self.action = ttk.Button(buttons,
+                                 text="Wechseln" if release.get("switch")
+                                 else "Jetzt installieren",
                                  style="Accent.TButton", command=self._install)
         self.action.grid(row=0, column=1)
 
@@ -1204,7 +1289,9 @@ class UpdateDialog(tk.Toplevel):
         self.progress.stop()
         self.progress.grid_remove()
         self.app.update_release = None
-        self.app.prefs["update_found"] = ""
+        self.app.prefs["update_found"] = None
+        self.app.channel = result.get("channel", self.app.channel)
+        self.app.var_beta.set(self.app.channel == "beta")
         self.app._paint_update_button()
         self._say(f"Version {result['version']} ist installiert. "
                   "Sie wird nach einem Neustart des Programms verwendet.\n"
@@ -2020,8 +2107,15 @@ class App(tk.Tk):
 
         self.update_release = None
         self.update_checking = False
+        # which line of the program this folder follows -- read once here and
+        # written straight back to the file whenever the tick changes
+        self.channel = core.channel_state()["channel"]
+        self.channel_changed = False
 
         self.prefs = load_prefs()
+        self.var_update_check = tk.BooleanVar(
+            value=bool(self.prefs.get("update_check", True)))
+        self.var_beta = tk.BooleanVar(value=self.channel == "beta")
         self.theme_name = self.prefs.get("theme", "dark")
         self.colors = THEMES[self.theme_name]
 
@@ -3029,21 +3123,46 @@ class App(tk.Tk):
 
     # -- updates -----------------------------------------------------------
 
+    def remember_update_check(self):
+        self.prefs["update_check"] = bool(self.var_update_check.get())
+        save_prefs(self.prefs)
+
     def _paint_update_button(self):
-        """The button carries the new version number once one is known."""
-        if self.update_release:
-            self.update_button.configure(
-                text=f"⇩ {self.update_release['version']}", style="Update.TButton")
-        else:
+        """The button carries the waiting version number once one is known.
+
+        A different arrow for a change of channel: going back to the stable
+        version is a step sideways, and a download arrow next to a number
+        lower than the installed one would read as a mistake.
+        """
+        if not self.update_release:
             self.update_button.configure(text="⇩ Update", style="Tool.TButton")
+            return
+        arrow = "⇄" if self.update_release.get("switch") else "⇩"
+        self.update_button.configure(
+            text=f"{arrow} {self.update_release['version']}",
+            style="Update.TButton")
+
+    def _cached_release(self):
+        """What yesterday's check found, unless it has since been installed."""
+        known = self.prefs.get("update_found")
+        if isinstance(known, str):  # written by 2.9 and older
+            known = {"version": known} if known else None
+        if not isinstance(known, dict) or not known.get("version"):
+            return None
+        installed = core.channel_state()["installed"]
+        if (known.get("channel", "stable") == installed["channel"]
+                and known.get("ref", "") == installed["ref"]
+                and known["version"] == installed["version"]):
+            return None  # it is already here -- an update run outside this window
+        return known
 
     def _update_on_start(self):
         """Ask GitHub at most once a day, and remember the answer in between."""
         if not self.prefs.get("update_check", True):
             return
-        known = self.prefs.get("update_found", "")
-        if known and core.parse_version(known) > core.parse_version(core.VERSION):
-            self.update_release = {"version": known}  # enough to show the badge
+        cached = self._cached_release()
+        if cached:
+            self.update_release = cached  # enough to show the badge
             self._paint_update_button()
 
         last = self.prefs.get("update_checked", 0)
@@ -3054,7 +3173,11 @@ class App(tk.Tk):
 
     def _update_found(self, release):
         self.update_release = release
-        self.prefs["update_found"] = release["version"] if release else ""
+        self.prefs["update_found"] = release and {
+            "version": release["version"],
+            "channel": release.get("channel", "stable"),
+            "ref": release.get("ref", ""),
+            "switch": release.get("switch", False)}
         self._paint_update_button()
 
     def _check_update(self):
@@ -3070,10 +3193,12 @@ class App(tk.Tk):
             self._set_activity("")
             self._update_found(release)
             if release is None:
+                where = ("Der Zweig „beta“ hat nichts Neueres."
+                         if self.channel == "beta"
+                         else "Es gibt nichts Neueres auf GitHub.")
                 messagebox.showinfo(
-                    APP_TITLE,
-                    f"Version {core.VERSION} ist aktuell.\n\n"
-                    "Es gibt nichts Neueres auf GitHub.", parent=self)
+                    APP_TITLE, f"Version {core.VERSION} ist aktuell.\n\n{where}",
+                    parent=self)
                 return
             UpdateDialog(self, self.colors, release)
 
@@ -3451,6 +3576,9 @@ class App(tk.Tk):
         # from the old ones says nothing any more
         self.portainer.forget_cache()
         self._use_active()
+        if self.channel_changed:
+            self.channel_changed = False
+            self._check_update()
 
     def _paint_install_button(self):
         """Offer to install only while there is something left to install.

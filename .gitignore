@@ -4,3 +4,6 @@ gui.json
 
 __pycache__/
 *.py[cod]
+
+# which line this working copy follows -- an installation detail, not code
+channel.json

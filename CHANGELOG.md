@@ -1,5 +1,34 @@
 # Änderungen
 
+## 2.10.0 — 6. September 2026
+
+**Ein Haken für die Beta — und einer wieder heraus.**
+
+- **Das Programm kann jetzt zwei Linien folgen.** In den Einstellungen steht
+  unter **Programm** der Haken **Beta-Version verwenden**. Ohne ihn bleibt
+  alles wie bisher: es kommen nur veröffentlichte Versionen. Mit ihm folgt der
+  Update-Knopf dem Zweig `beta` auf GitHub, in dem die nächste Fassung
+  entsteht — offen und unfertig, mit allem, was das heißt.
+- **Der Weg zurück ist derselbe Weg.** Haken heraus, **⇄ Update**, und die
+  letzte veröffentlichte Version wird installiert. Dass ihre Nummer dabei
+  *niedriger* ist als die der Beta, hätte die alte Prüfung „ist GitHub weiter
+  als wir" nie durchgelassen; sie fragt jetzt zusätzlich, ob das, was im Ordner
+  liegt, überhaupt noch zur gewählten Linie gehört.
+- **Der Knopf trägt bei einem Wechsel ⇄ statt ⇩.** Ein Download-Pfeil neben
+  einer Nummer, die kleiner ist als die installierte, liest sich wie ein
+  Fehler.
+- **Auf der Beta zählt der Commit, nicht die Nummer.** Eine Versionsnummer
+  steht dort über viele Änderungen still; woran ein Update erkannt wird, ist
+  deshalb der Commit selbst. Welche Linie ein Ordner verfolgt und was
+  tatsächlich in ihm liegt, steht in `channel.json` neben dem Programm — es
+  beschreibt die Dateien, nicht den Benutzer, und wird von einem Update nie
+  überschrieben.
+- **Auf der Kommandozeile: `update --beta` und `update --stable`.** Fenster und
+  Terminal lesen dieselbe Datei, also gilt der Haken in beiden.
+- **Der tägliche Update-Blick lässt sich endlich anklicken.** `update_check`
+  gab es in `gui.json` schon lange, nur nirgends im Fenster. Jetzt steht er als
+  **Beim Start nach Updates sehen** neben dem Beta-Haken.
+
 ## 2.9.1 — 19. August 2026
 
 **Der Ladebalken läuft jetzt da, wo man gerade hinschaut.**

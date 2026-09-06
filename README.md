@@ -980,9 +980,30 @@ Programm gar nicht mehr, hilft das
 [ZIP](https://github.com/DukyNuky/opnsense-haproxy-config/releases/latest),
 über den Ordner entpackt.
 
-Wer die tägliche Nachfrage nicht möchte, setzt in
-`~/.config/opnsense-haproxy/gui.json` `"update_check": false`; der Knopf
+Wer die tägliche Nachfrage nicht möchte, nimmt in den Einstellungen unter
+**Programm** den Haken **Beim Start nach Updates sehen** heraus; der Knopf
 funktioniert weiter.
+
+### Beta
+
+Unter **Programm** steht ein zweiter Haken: **Beta-Version verwenden**. Mit ihm
+folgt das Programm nicht mehr den veröffentlichten Versionen, sondern dem Zweig
+`beta` auf GitHub — dort entsteht die nächste Fassung, und zwar offen und
+unfertig. Der Haken allein lädt noch nichts; er ändert nur, wonach der
+Update-Knopf sucht. Der Knopf trägt dann **⇄** statt **⇩**, weil es kein
+Update, sondern ein Wechsel ist.
+
+Zurück geht es genauso: Haken raus, **⇄ Update**, und die letzte
+veröffentlichte Version wird installiert — auch wenn ihre Nummer *niedriger*
+ist als die der Beta. Zugangsdaten und Einstellungen bleiben dabei
+unangetastet, wie bei jedem Update, und die Beta-Dateien landen vorher im
+`backup-`-Ordner.
+
+Auf der Beta sagt keine Versionsnummer, ob es etwas Neues gibt — sie steht über
+viele Commits still. Maßgeblich ist deshalb der Commit selbst; das Programm
+merkt sich, welcher installiert ist. Welche Linie ein Ordner verfolgt und was
+tatsächlich in ihm liegt, steht in `channel.json` neben dem Programm — nicht in
+den Zugangsdaten, denn es beschreibt die Dateien, nicht dich.
 
 ---
 
@@ -1220,6 +1241,8 @@ Weitere Befehle:
 ./opnsense_haproxy.py install                     # fester Platz + Starter
 ./opnsense_haproxy.py update --check              # nur nachsehen
 ./opnsense_haproxy.py update                      # nachsehen und installieren
+./opnsense_haproxy.py update --beta               # ab jetzt dem Zweig beta folgen
+./opnsense_haproxy.py update --stable             # zurück zu den Releases
 ./opnsense_haproxy.py gui                         # Fenster
 ./opnsense_haproxy.py --version
 ```
