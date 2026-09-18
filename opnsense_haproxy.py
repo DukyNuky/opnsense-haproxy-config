@@ -10,6 +10,7 @@ Only the Python standard library is required.
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import getpass
 import io
 import json
@@ -24,7 +25,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "3.0.0-beta"
+VERSION = "3.0.0-beta.1"
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/opnsense-haproxy/config.json")
 
@@ -1453,10 +1454,60 @@ def public_url(service, host, path=""):
     return f"{scheme}://{host}{suffix}{path or ''}"
 
 
+class _InventoryReader:
+    """One refresh's records, fetched in bounded parallel batches.
+
+    Cache failures as well: a broken shared reference should not cost one
+    timeout per rule. The existing readers still decide which errors are
+    fatal and which leave an incomplete rule or pool in the display.
+    """
+
+    def __init__(self, client, executor):
+        self.client = client
+        self.executor = executor
+        self.records = {}
+
+    def prefetch(self, keys):
+        pending = {key: self.executor.submit(self.client.get, *key)
+                   for key in dict.fromkeys(keys) if key not in self.records}
+        for key, future in pending.items():
+            try:
+                self.records[key] = future.result()
+            except ApiError as exc:
+                self.records[key] = exc
+
+    def get(self, kind, uuid):
+        record = self.records[kind, uuid]
+        if isinstance(record, ApiError):
+            raise record
+        return record
+
+    def references(self, kind, field, target_kind):
+        return [(target_kind, uuid)
+                for (record_kind, _), record in self.records.items()
+                if record_kind == kind and not isinstance(record, ApiError)
+                for uuid in selected_values(record.get(field))]
+
+
 def inventory(client):
-    """Collect every public service with the rules, pools and servers behind it."""
+    """Read each reachable object once per refresh, with at most four requests."""
+    rows = sorted(client.search("frontend"), key=lambda r: r.get("name", ""))
+    if not rows:
+        return []
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        reader = _InventoryReader(client, executor)
+        reader.prefetch(("frontend", row["uuid"]) for row in rows)
+        reader.prefetch(reader.references("frontend", "linkedActions", "action")
+                        + reader.references("frontend", "defaultBackend", "backend"))
+        reader.prefetch(reader.references("action", "linkedAcls", "acl")
+                        + reader.references("action", "use_backend", "backend"))
+        reader.prefetch(reader.references("backend", "linkedServers", "server"))
+    return _inventory_from_records(reader, rows)
+
+
+def _inventory_from_records(client, rows):
     services = []
-    for row in sorted(client.search("frontend"), key=lambda r: r.get("name", "")):
+    for row in rows:
         frontend = client.get("frontend", row["uuid"])
         # A listener without rules is not an empty listener: it may send
         # everything that arrives to one pool, which is what a port for one

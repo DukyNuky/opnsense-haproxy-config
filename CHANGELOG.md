@@ -1,5 +1,13 @@
 # Änderungen
 
+## 3.0.0-beta.1 — 18.09.2026
+
+- **HAProxy-Konfiguration schneller einlesen.** Listener, Regeln, Conditions,
+  Pools und Server werden mit höchstens vier gleichzeitigen API-Abfragen gelesen.
+  Gemeinsam verwendete Objekte werden pro Aktualisierung nur einmal abgefragt,
+  auch wenn eine Referenz nicht lesbar ist. Jede neue Aktualisierung liest die
+  Daten erneut. Das gilt für den HAProxy- und den Status-Tab.
+
 ## 3.0.0-beta — im Bau
 
 Der Umbau, offen auf dem Zweig `beta`. Was hier steht, ist noch nicht fertig
