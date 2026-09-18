@@ -6,6 +6,15 @@ Der Umbau, offen auf dem Zweig `beta`. Was hier steht, ist noch nicht fertig
 und darf Fehler haben. Die Versionsnummer steht ab jetzt auf `3.0.0-beta`,
 damit im Fenster unmissverständlich steht, was läuft.
 
+- **Host-Anlage nach TCP/HTTP-Wechsel abgesichert.** Neue Host-Formulare starten
+  beim Backend-Modus wieder mit „automatisch“. Der gespeicherte Pool-Modus wird
+  bei Hosts und Listenern zurückgelesen; Abweichungen brechen die Anlage mit
+  Rollback ab. Auch Typ und Vergleichswert jeder Condition werden geprüft.
+  Ein unbekannter Public-Service-Modus wird nicht als HTTP geraten.
+- **Alle Listener sind auswählbar.** Public Services ohne Port 443 werden nicht
+  mehr versteckt. Die Auswahl zeigt Modus, Bind-Adresse, TLS-Terminierung und Aktivierungsstatus.
+  Darunter stehen Regelanzahl und gegebenenfalls Standard-Backend.
+
 - **Fünf Tabs statt drei: Status, DNS, HAProxy, Docker, Einstellungen.** Die
   Reihenfolge ist die Reihenfolge der Arbeit — sehen, was da ist; einem Dienst
   einen Namen geben; ihn hinter den Proxy hängen; ihn laufen lassen — und die

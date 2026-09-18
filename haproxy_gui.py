@@ -1854,13 +1854,12 @@ class HostDialog(FormDialog):
 
         ttk.Label(right, text="Public Service", style="FieldLabel.TLabel").grid(
             row=next(rows), column=0, sticky="w")
-        self.frontend_box = ttk.Combobox(right, textvariable=app.var_frontend,
+        self.frontend_box = ttk.Combobox(right,
                                          state="readonly",
                                          style="Card.TCombobox")
         self.frontend_box.grid(row=next(rows), column=0, sticky="ew", pady=(4, 2))
         self.frontend_box.bind("<<ComboboxSelected>>",
-                               lambda _e: self.frontend_hint())
-        self.hidden_frontends = 0
+                               lambda _e: self.frontend_selected())
         self.frontend_note = ttk.Label(right, style="Hint.TLabel", text="",
                                        wraplength=340, justify="left")
         self.frontend_note.grid(row=next(rows), column=0, sticky="w",
@@ -1874,9 +1873,7 @@ class HostDialog(FormDialog):
         for text, variable in (
                 ("Backend-Zertifikat prüfen", app.var_ssl_verify),
                 ("X-Forwarded-For setzen", app.var_forward_for),
-                ("Nur speichern, HAProxy nicht neu laden", app.var_no_apply),
-                ("Auch Public Services ohne Port 443 zeigen",
-                 app.var_all_frontends)):
+                ("Nur speichern, HAProxy nicht neu laden", app.var_no_apply)):
             ttk.Checkbutton(right, text=text, variable=variable,
                             style="Card.TCheckbutton").grid(
                 row=next(rows), column=0, sticky="w", pady=(0, 4))
@@ -1932,64 +1929,65 @@ class HostDialog(FormDialog):
                                state="readonly" if names else "disabled")
 
     def fill_frontends(self):
-        """The public services to choose from, the one on 443 in front.
-
-        A place with more than one listener usually has a second on port 80
-        whose whole job is to send browsers to the first. A rule hung into that
-        one answers nothing, and the list used to begin with whichever came
-        first by name -- so that is what got picked.
-
-        The others are left out rather than merely sorted down, because the
-        choice is between things that look alike from here. What is hidden is
-        said under the field, and the switch in the advanced options brings
-        them back for a place whose HTTPS lives on 8443.
-        """
+        """Offer every listener, with port 443 first as a useful default."""
         app = self.app
-        every = list(app.services)
-        shown = every if app.var_all_frontends.get() else [
-            service for service in every if core.serves_https(service)]
-        if not shown:
-            shown = every  # nothing on 443 at all: better all of them than none
+        shown = list(app.services)
         chosen = app.var_frontend.get()
-        if chosen and chosen not in [service["name"] for service in shown]:
-            # a service somebody picked on purpose does not vanish underneath
-            keep = next((s for s in every if s["name"] == chosen), None)
-            if keep:
-                shown = shown + [keep]
         # 443 first, then what is switched on, then by name -- so the first
         # entry is the one to start with even when everything is shown
         shown.sort(key=lambda service: (0 if core.serves_https(service) else 1,
                                         0 if service.get("enabled", True) else 1,
                                         service.get("name", "").lower()))
         names = [service["name"] for service in shown]
-        self.frontend_box.configure(values=names,
+        self.frontend_names = names
+        labels = [
+            f"{service['name']} · {(service.get('mode') or '?').upper()} · "
+            f"{service.get('bind') or 'keine Bind-Adresse'} · "
+            + ("TLS-Terminierung" if service.get("tls") else "ohne TLS-Terminierung")
+            + (" · deaktiviert" if not service.get("enabled", True) else " · aktiv")
+            for service in shown
+        ]
+        self.frontend_box.configure(values=labels,
                                     state="disabled" if len(names) <= 1
                                     else "readonly")
         if chosen not in names:
             preferred = app.profile.get("frontend", "")
-            app.var_frontend.set(preferred if preferred in names
-                                 else (names[0] if names else ""))
-        self.hidden_frontends = len(every) - len(shown)
+            chosen = preferred if preferred in names else (names[0] if names else "")
+            app.var_frontend.set(chosen)
+        if chosen in names:
+            self.frontend_box.current(names.index(chosen))
+        else:
+            self.frontend_box.set("")
+        self.frontend_hint()
+
+    def frontend_selected(self):
+        """Keep the API name separate from the descriptive dropdown label."""
+        index = self.frontend_box.current()
+        if 0 <= index < len(self.frontend_names):
+            self.app.var_frontend.set(self.frontend_names[index])
         self.frontend_hint()
 
     def frontend_hint(self):
-        """What the chosen service listens on, and what is not in the list."""
+        """Show the chosen listener's address and protocol."""
         chosen = next((service for service in self.app.services
                        if service["name"] == self.app.var_frontend.get()), None)
         parts = []
         if chosen:
             parts.append(f"hört auf {chosen.get('bind') or '?'}")
+            parts.append(f"Modus {chosen.get('mode') or 'unbekannt'}")
+            parts.append("TLS endet hier" if chosen.get("tls")
+                         else "keine TLS-Terminierung")
+            parts.append(f"{len(chosen.get('rules') or [])} Regeln")
+            default = chosen.get("default")
+            if default:
+                parts.append(f"Standard-Backend: {default.get('name') or '?'}")
+            if not chosen.get("enabled", True):
+                parts.append("ist abgeschaltet")
             if not core.serves_https(chosen):
                 parts.append("nicht Port 443 — sicher, dass Anfragen hier "
                              "ankommen?")
-            elif not chosen.get("enabled", True):
-                parts.append("ist abgeschaltet")
         elif not self.app.connected:
             parts.append("erst nach dem Verbinden bekannt")
-        if self.hidden_frontends:
-            parts.append(f"{self.hidden_frontends} ohne 443 ausgeblendet "
-                         "(Erweiterte Optionen)" if self.hidden_frontends > 1
-                         else "einer ohne 443 ausgeblendet (Erweiterte Optionen)")
         self.frontend_note.configure(text=" · ".join(parts))
 
     def refresh_hints(self):
@@ -2851,13 +2849,6 @@ class App(tk.Tk):
         self.var_ssl_verify = tk.BooleanVar(value=False)
         self.var_forward_for = tk.BooleanVar(value=True)
         self.var_no_apply = tk.BooleanVar(value=False)
-        # A place with an unusual listener -- 8443, or plain HTTP inside --
-        # would otherwise have to tick this at every start.
-        self.var_all_frontends = tk.BooleanVar(
-            value=bool(self.prefs.get("all_frontends", False)))
-        self.var_all_frontends.trace_add("write",
-                                         lambda *_a: self._fill_frontends())
-
         # the second form of this tab: a listener of its own
         self.var_listen_name = tk.StringVar()
         self.var_listen_port = tk.StringVar()
@@ -4212,6 +4203,8 @@ class App(tk.Tk):
             self.host_dialog.lift()
             self.host_dialog.focus_set()
             return
+        # A manual override belongs to this host, not to the next one.
+        self.var_backend_mode.set("automatisch")
         self.host_dialog = HostDialog(self)
 
     def open_listener(self):
@@ -4395,8 +4388,8 @@ class App(tk.Tk):
 
     def _save_prefs(self):
         # keep everything else that is in there, e.g. the update bookkeeping
-        self.prefs.update({"theme": self.theme_name, "geometry": self.geometry(),
-                           "all_frontends": bool(self.var_all_frontends.get())})
+        self.prefs.update({"theme": self.theme_name, "geometry": self.geometry()})
+        self.prefs.pop("all_frontends", None)
         save_prefs(self.prefs)
 
     def _on_close(self):

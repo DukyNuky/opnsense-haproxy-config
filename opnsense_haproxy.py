@@ -556,7 +556,10 @@ def provision(client, opts, out=print, adguard=None):
     names = Names(host, path, opts.prefix)
 
     frontend, frontend_uuid, frontend_name = pick_frontend(client, opts.frontend)
-    frontend_mode = selected_value(frontend.get("mode")) or "http"
+    frontend_mode = selected_value(frontend.get("mode"))
+    if frontend_mode not in ("http", *SNI_MODES):
+        raise UsageError(f"public service '{frontend_name}' has an unknown mode "
+                         f"({frontend_mode or 'missing'})")
     sni_mode = frontend_mode in SNI_MODES
 
     if path and sni_mode:
@@ -661,6 +664,7 @@ def provision(client, opts, out=print, adguard=None):
             backend_body["forwardFor"] = "1" if opts.forward_for else "0"
         backend_uuid = client.add("backend", backend_body)
         created.append(("backend", backend_uuid))
+        verify_backend_mode(client, backend_uuid, backend_mode)
         out(f"+ backend pool  {names.backend}")
 
         acl_uuids = []
@@ -671,17 +675,20 @@ def provision(client, opts, out=print, adguard=None):
         host_acl["description"] = f"managed: {label}"
         acl_uuid = client.add("acl", host_acl)
         created.append(("acl", acl_uuid))
+        verify_condition(client, acl_uuid, host_acl)
         acl_uuids.append(acl_uuid)
         out(f"+ condition     {names.acl_host}")
 
         if path:
-            path_uuid = client.add("acl", {
+            path_acl = {
                 "name": names.acl_path,
                 "description": f"managed: {label}",
                 "expression": "path_beg",
                 "path_beg": path,
-            })
+            }
+            path_uuid = client.add("acl", path_acl)
             created.append(("acl", path_uuid))
+            verify_condition(client, path_uuid, path_acl)
             acl_uuids.append(path_uuid)
             out(f"+ condition     {names.acl_path}")
 
@@ -811,6 +818,28 @@ def listener_choices(client):
     return {"certificates": option_list(record.get("ssl_certificates")),
             "modes": [choice for choice in option_list(record.get("mode"))
                       if choice["id"] in LISTEN_MODES]}
+
+
+def verify_backend_mode(client, uuid, wanted):
+    """Check the stored pool mode before linking it or applying changes."""
+    actual = selected_value(client.get("backend", uuid).get("mode"))
+    if actual != wanted:
+        raise ApiError(f"the backend pool was not stored as asked: "
+                       f"mode is {actual or '?'}, not {wanted}")
+
+
+def verify_condition(client, uuid, wanted):
+    """Verify both the match type and its value before creating a rule."""
+    written = client.get("acl", uuid)
+    expression = wanted["expression"]
+    problems = []
+    for field in ("expression", expression):
+        actual = selected_value(written.get(field))
+        if actual != wanted[field]:
+            problems.append(f"{field} is {actual or '?'}, not {wanted[field]}")
+    if problems:
+        raise ApiError("the condition was not stored as asked: "
+                       + "; ".join(problems))
 
 
 def verify_frontend(client, uuid, wanted):
@@ -947,6 +976,8 @@ def provision_listener(client, opts, out=print, adguard=None):
             "healthCheckEnabled": "0",
         })
         created.append(("backend", backend_uuid))
+        verify_backend_mode(client, backend_uuid,
+                            "http" if mode == "http" else "tcp")
         out(f"+ backend pool  {names.backend}")
 
         frontend_uuid = client.add("frontend", {

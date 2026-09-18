@@ -1072,12 +1072,13 @@ Der ACME-Client ist nicht installiert oder dem Benutzer fehlt das Recht
 *Services: ACME Client*. Kein Beinbruch: den vollen Hostnamen eintippen.
 
 **Im Feld „Public Service" fehlt einer.**
-Zur Wahl stehen nur die Listener, die auf **Port 443** hören — dort kommen die
-Anfragen an. Ein zweiter auf Port 80, der Browser nur weiterschickt, ist keine
-Stelle für eine Regel und wird darum ausgeblendet; unter dem Feld steht, wie
-viele das betrifft. Wer seinen Eingang auf einem anderen Port betreibt (etwa
-8443), holt sie mit **Erweiterte Optionen → „Auch Public Services ohne Port 443
-zeigen"** zurück. Hört überhaupt keiner auf 443, stehen ohnehin alle da.
+Zur Wahl stehen alle geladenen Listener, auch auf Port 80, 8443 oder eigenen
+Ports. Listener auf **Port 443** stehen zuerst. Unter dem Feld siehst du Adresse
+und Modus des gewählten Public Service. Die Auswahlliste zeigt bereits Name,
+Modus, Bind-Adresse, TLS-Terminierung und Aktivierungsstatus. Darunter stehen
+zusätzlich die Anzahl der Regeln und das Standard-Backend, sofern vorhanden.
+Wurde ein Listener außerhalb des Tools
+angelegt, die Verbindung aktualisieren, damit die Liste neu eingelesen wird.
 
 **Der Name ist schon vergeben.**
 Bestehendes wird nie überschrieben. Das Programm bricht ab und sagt, welches
