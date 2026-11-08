@@ -22,13 +22,14 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
-.glow { position: fixed; width: 60vmax; height: 60vmax; border-radius: 50%;
-  filter: blur(120px); opacity: .22; pointer-events: none; z-index: 0; }
-.g1 { background: #5eead4; top: -35vmax; left: -20vmax; animation: drift 24s ease-in-out infinite alternate; }
-.g2 { background: #818cf8; bottom: -38vmax; right: -22vmax; animation: drift 30s ease-in-out infinite alternate-reverse; }
-@keyframes drift { to { transform: translate(6vmax, 4vmax) scale(1.08); } }
+/* Hintergrundlicht: Farbverläufe statt Weichzeichner. Ein animierter
+   filter: blur() über der ganzen Seite kostete in WebKit zwei Drittel der Bildrate. */
+.glow { position: fixed; width: 90vmax; height: 90vmax; border-radius: 50%; pointer-events: none; z-index: 0; will-change: transform; }
+.g1 { background: radial-gradient(circle closest-side, rgba(94, 234, 212, .20), rgba(94, 234, 212, 0)); top: -50vmax; left: -35vmax; animation: drift 40s ease-in-out infinite alternate; }
+.g2 { background: radial-gradient(circle closest-side, rgba(129, 140, 248, .22), rgba(129, 140, 248, 0)); bottom: -52vmax; right: -38vmax; animation: drift 52s ease-in-out infinite alternate-reverse; }
+@keyframes drift { to { transform: translate3d(6vmax, 4vmax, 0); } }
 
-#app { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; padding: 22px 20px 80px; }
+#app { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; padding: 22px 20px 80px; }
 
 /* Kopf */
 header { display: flex; align-items: center; gap: 12px; padding: 6px 0 26px; }
@@ -46,7 +47,7 @@ header .spacer { flex: 1; }
 /* Karten */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 26px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  box-shadow: 0 20px 60px -30px rgba(0, 0, 0, .8); animation: rise .45s cubic-bezier(.2, .8, .2, 1) both; }
+  box-shadow: 0 20px 60px -30px rgba(0, 0, 0, .8); animation: rise .3s cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
 h1 { font-size: 28px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -.3px; }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); font-weight: 600; margin: 34px 0 12px; }
@@ -179,3 +180,25 @@ details ol { padding-left: 20px; margin: 6px 0; }
   .composer select, .composer .static { padding-left: 20px; flex-basis: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.pill.update { background: var(--grad); color: #07101a; font-weight: 650; border: 0; box-shadow: 0 8px 24px -10px rgba(94, 234, 212, .6); animation: rise .4s both; }
+.pill.update:hover { filter: brightness(1.07); background: var(--grad); }
+.notes { white-space: pre-wrap; background: rgba(0, 0, 0, .25); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; max-height: 260px; overflow: auto; font-size: 14px; color: var(--muted); }
+.foot { text-align: center; color: var(--muted); font-size: 13px; margin-top: 40px; }
+.foot .link { font-size: 13px; }
+
+/* zwei Spalten: links neu anlegen, rechts die vorhandenen Hosts */
+.cols { display: grid; grid-template-columns: minmax(330px, 450px) minmax(0, 1fr); gap: 28px; align-items: start; }
+.cols .left { position: sticky; top: 16px; }
+h2.first { margin-top: 6px; }
+#app > .card, #app > .row, #app > .notice { max-width: 760px; margin-left: auto; margin-right: auto; }
+.cols .composer input, .cols .composer select, .cols .composer .static { font-size: 19px; }
+.hostwrap { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; animation: rise .25s both; }
+.hostwrap .host { border: 0; border-radius: 0; background: transparent; }
+.edit { padding: 6px 18px 18px; border-top: 1px solid var(--line); background: rgba(0, 0, 0, .18); }
+.edit .preview { margin-bottom: 14px; }
+.icon-btn.on { color: var(--a); border-color: rgba(94, 234, 212, .4); }
+@media (max-width: 900px) {
+  .cols { grid-template-columns: minmax(0, 1fr); }
+  .cols .left { position: static; }
+}

@@ -59,7 +59,8 @@ const S = {
   cfg: null,       // /api/state
   ov: null,        // /api/overview
   form: { label: "", domain: "", target: "", listener: "" },
-  hostFilter: "", allHosts: false,
+  hostFilter: "", allHosts: false, editing: null,
+  update: null,    // /api/update
   wiz: null,
 };
 
@@ -77,6 +78,9 @@ function header() {
     h("div", { class: "brand" }, h("img", { src: "logo.svg", alt: "" }), "Pforte"),
     h("div", { class: "spacer" }),
   ];
+  if (S.update && S.update.available) {
+    kids.push(h("button", { class: "pill update", title: "Neue Version verfügbar", onclick: renderUpdate }, "Update " + S.update.version));
+  }
   if (profiles.length) {
     const name = S.cfg.active;
     kids.push(h("button", { class: "pill", onclick: profileMenu }, name, h("span", { html: ICON.chevron })));
@@ -104,6 +108,65 @@ function profileMenu(event) {
   setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
 }
 
+/* ---------- Updates ---------- */
+
+async function checkUpdate(force) {
+  try {
+    S.update = await api("/api/update" + (force ? "?force=1" : ""));
+  } catch (e) {
+    S.update = null;
+  }
+  return S.update;
+}
+
+function footer() {
+  return h("div", { class: "foot" }, "Version " + (S.cfg ? S.cfg.version : ""), " · ",
+    h("button", { class: "link", onclick: async () => {
+      const info = await checkUpdate(true);
+      if (info && info.available) return renderUpdate();
+      toast(info && info.error ? info.error : "Du hast die neueste Version.");
+      refreshHeader();
+    } }, "Nach Updates suchen"));
+}
+
+function refreshHeader() {
+  const old = document.querySelector("header");
+  if (old) old.replaceWith(header());
+}
+
+function renderUpdate() {
+  const u = S.update;
+  const go = h("button", { class: "btn", disabled: !!u.blocked, onclick: installUpdate }, "Jetzt aktualisieren");
+  mount(header(), h("div", { class: "card" },
+    h("h1", {}, "Version " + u.version + " ist da"),
+    h("p", { class: "lead" }, "Installiert ist " + u.current + ". Deine Zugangsdaten bleiben erhalten, die alte Version wird gesichert."),
+    u.notes ? h("div", { class: "notes" }, u.notes) : null,
+    u.blocked ? h("div", { class: "notice" }, u.blocked) : null,
+    h("div", { class: "row between", style: "margin-top:18px" },
+      h("button", { class: "link", onclick: () => (S.ov ? renderMain() : loadMain()) }, "Später"), go)));
+}
+
+async function installUpdate() {
+  const result = await runJob("Aktualisiere", () => api("/api/update/install", {}));
+  if (!result.ok) {
+    return mount(header(), h("div", { class: "card" }, h("h1", {}, "Das hat nicht geklappt"),
+      h("div", { class: "notice bad" }, result.error),
+      h("p", { class: "muted" }, "Es wurde nichts verändert, was nicht gesichert wäre."),
+      h("button", { class: "btn ghost", onclick: () => (S.ov ? renderMain() : loadMain()) }, "Zurück")));
+  }
+  mount(h("div", { class: "card success" },
+    h("div", { html: '<svg class="check" viewBox="0 0 84 84"><circle cx="42" cy="42" r="30"/><path d="M29 43l9 9 18-19"/></svg>' }),
+    h("h1", {}, "Version " + result.result.version + " ist installiert"),
+    h("p", { class: "lead" }, "Zum Benutzen muss Pforte einmal neu starten."),
+    h("button", { class: "btn", onclick: restart }, "Neu starten")));
+}
+
+async function restart() {
+  try { await api("/api/restart", {}); } catch (e) { /* der Server geht gleich aus */ }
+  mount(h("div", { class: "card success" }, h("h1", {}, "Startet neu …"),
+    h("p", { class: "lead" }, "Ein neues Fenster öffnet sich gleich. Dieses darf zu.")));
+}
+
 /* ---------- Start ---------- */
 
 async function boot() {
@@ -117,6 +180,7 @@ async function boot() {
   const demo = location.hash.match(/^#wizard(?::(\d))?/);
   if (demo) return startWizard({ add: true, step: Number(demo[1] || 0) });
   if (!S.cfg.profiles.length) return startWizard({ first: true });
+  checkUpdate().then(refreshHeader);
   loadMain();
 }
 
@@ -157,41 +221,61 @@ function listenerLabel(l) {
   return l.name + ports + " · " + l.rule_count + (l.rule_count === 1 ? " Regel" : " Regeln") + (l.enabled ? "" : " · aus");
 }
 
+/* Name . Domain in einer Zeile. ``obj`` hält label und domain, ``onInput`` meldet jede Änderung. */
+function composerNode(obj, onInput, domainsExtra) {
+  const ov = S.ov;
+  const label = h("input", { type: "text", placeholder: "wiki", autocomplete: "off", autocapitalize: "off", spellcheck: "false", value: obj.label,
+    oninput: (e) => { obj.label = e.target.value; fit(); onInput(); } });
+  const fit = () => { label.style.width = "calc(" + Math.max(5, label.value.length + 1) + "ch + 24px)"; };
+  setTimeout(fit, 0);
+  const known = ov.domains.map((d) => d.domain);
+  if (domainsExtra && domainsExtra.length) for (const d of domainsExtra) if (!known.includes(d)) known.push(d);
+  let domainField;
+  if (known.length > 1) {
+    domainField = h("select", { onchange: (e) => { obj.domain = e.target.value; onInput(); } },
+      known.map((d) => h("option", { value: d, selected: d === obj.domain }, d)));
+  } else if (known.length === 1) {
+    obj.domain = known[0];
+    domainField = h("div", { class: "static" }, known[0]);
+  } else {
+    domainField = h("input", { type: "text", placeholder: "example.com", value: obj.domain, style: "padding-left:8px",
+      oninput: (e) => { obj.domain = e.target.value.trim(); onInput(); } });
+  }
+  return { node: h("div", { class: "composer" }, label, h("span", { class: "dot" }, "."), domainField), focus: () => label.focus() };
+}
+
+function fqdnOf(obj) {
+  const label = obj.label.trim().toLowerCase().replace(/\.+$/, "");
+  if (!label || !obj.domain) return "";
+  return label.endsWith("." + obj.domain) || label === obj.domain ? label : label + "." + obj.domain;
+}
+
+function listenerSelect(obj) {
+  const ls = S.ov.listeners;
+  if (ls.length > 1) {
+    return h("select", { onchange: (e) => { obj.listener = e.target.value; } },
+      ls.map((l) => h("option", { value: l.uuid, selected: l.uuid === obj.listener }, listenerLabel(l))));
+  }
+  return ls[0] ? h("span", { class: "chip" }, listenerLabel(ls[0])) : null;
+}
+
+function layout(left, right) {
+  return h("div", { class: "cols" }, h("div", { class: "left" }, left), h("div", { class: "right" }, right));
+}
+
 function renderMain(extra) {
   const ov = S.ov, f = S.form;
   const preview = h("div", { class: "preview" });
   const go = h("button", { class: "btn big" }, "Anlegen");
 
   const updatePreview = () => {
-    const label = f.label.trim().toLowerCase().replace(/\.+$/, "");
-    const fqdn = label && f.domain ? (label.endsWith("." + f.domain) || label === f.domain ? label : label + "." + f.domain) : "";
+    const fqdn = fqdnOf(f);
     preview.replaceChildren(fqdn ? h("span", {}, "wird ", h("b", {}, fqdn)) : "Wie soll dein neuer Host heißen?");
     go.disabled = !(f.label.trim() && f.domain.trim() && f.target.trim() && f.listener);
   };
-
-  const label = h("input", { type: "text", placeholder: "wiki", autocomplete: "off", autocapitalize: "off", spellcheck: "false", value: f.label,
-    oninput: (e) => { f.label = e.target.value; fit(); updatePreview(); } });
-  const fit = () => { label.style.width = "calc(" + Math.max(5, label.value.length + 1) + "ch + 24px)"; };
-  setTimeout(fit, 0);
-
-  let domainField;
-  if (ov.domains.length > 1) {
-    domainField = h("select", { onchange: (e) => { f.domain = e.target.value; updatePreview(); } },
-      ov.domains.map((d) => h("option", { value: d.domain, selected: d.domain === f.domain }, d.domain)));
-  } else if (ov.domains.length === 1) {
-    domainField = h("div", { class: "static" }, ov.domains[0].domain);
-  } else {
-    domainField = h("input", { type: "text", placeholder: "example.com", value: f.domain, style: "padding-left:8px",
-      oninput: (e) => { f.domain = e.target.value.trim(); updatePreview(); } });
-  }
-
-  const target = comboTarget(updatePreview);
-
-  const via = ov.listeners.length > 1
-    ? h("div", { class: "via" }, "Eingang",
-        h("select", { onchange: (e) => { f.listener = e.target.value; } },
-          ov.listeners.map((l) => h("option", { value: l.uuid, selected: l.uuid === f.listener }, listenerLabel(l)))))
-    : (ov.listeners[0] ? h("div", { class: "via" }, "Eingang", h("span", { class: "chip" }, listenerLabel(ov.listeners[0]))) : null);
+  const composer = composerNode(f, updatePreview);
+  const target = comboTarget(f, "target", updatePreview);
+  const via = ov.listeners.length ? h("div", { class: "via" }, "Eingang", listenerSelect(f)) : null;
 
   const notices = [];
   if (!ov.listeners.length) notices.push(h("div", { class: "notice bad" }, "Auf dieser OPNsense gibt es noch keinen Public Service. Lege in HAProxy zuerst einen an (Services → HAProxy → Einstellungen), dann geht es hier weiter."));
@@ -204,25 +288,24 @@ function renderMain(extra) {
   const card = h("div", { class: "card", id: "compose" },
     h("h1", {}, "Neuer Host"),
     h("p", { class: "lead" }, "Name wählen, Ziel angeben, anlegen."),
-    h("div", { class: "composer" }, label, h("span", { class: "dot" }, "."), domainField),
-    preview,
+    composer.node, preview,
     h("label", { class: "field" }, h("span", {}, "Wohin soll er zeigen?"), target),
     via, extra, notices, go);
 
-  mount(header(), card, hostList());
+  mount(header(), layout(card, hostList()), footer());
   updatePreview();
-  label.focus();
+  composer.focus();
 }
 
-function comboTarget(onChange) {
-  const f = S.form, items = S.ov.suggestions;
+function comboTarget(obj, key, onChange) {
+  const items = S.ov.suggestions;
   const input = h("input", { type: "text", placeholder: items.length ? "Container wählen oder 192.168.0.5:8080" : "192.168.0.5:8080",
-    autocomplete: "off", spellcheck: "false", value: f.target });
+    autocomplete: "off", spellcheck: "false", value: obj[key] });
   const wrap = h("div", { class: "combo" }, input);
   let list = null, index = -1;
 
   const close = () => { if (list) list.remove(); list = null; index = -1; };
-  const pick = (item) => { f.target = item.target; input.value = item.target; close(); onChange(); };
+  const pick = (item) => { obj[key] = item.target; input.value = item.target; close(); onChange(); };
   const open = () => {
     const q = input.value.trim().toLowerCase();
     const shown = items.filter((i) => !q || (i.name + " " + i.stack + " " + i.target).toLowerCase().includes(q)).slice(0, 40);
@@ -233,7 +316,7 @@ function comboTarget(onChange) {
       h("code", {}, i.host + ":" + i.port))));
     wrap.append(list);
   };
-  input.addEventListener("input", () => { f.target = input.value; onChange(); open(); });
+  input.addEventListener("input", () => { obj[key] = input.value; onChange(); open(); });
   input.addEventListener("focus", open);
   input.addEventListener("blur", () => setTimeout(close, 120));
   input.addEventListener("keydown", (e) => {
@@ -259,7 +342,7 @@ function hostUrl(host) {
   return (plain ? "http://" : "https://") + host.host + (l && !l.ports.includes(443) && !plain && port ? ":" + port : "") + (host.path || "");
 }
 
-const SHOWN = 8;
+const SHOWN = 12;
 
 function hostList() {
   const hosts = S.ov.hosts;
@@ -271,11 +354,15 @@ function hostList() {
     const q = (S.hostFilter || "").trim().toLowerCase();
     const matching = hosts.filter((x) => !q || (x.host + " " + x.target).toLowerCase().includes(q));
     const visible = q || S.allHosts ? matching : matching.slice(0, SHOWN);
-    const rows = visible.map((host, n) => hostRow(host, n));
+    // der Host, der gerade bearbeitet wird, bleibt immer sichtbar
+    if (S.editing && !visible.some((x) => x.uuid === S.editing)) {
+      const editing = hosts.find((x) => x.uuid === S.editing);
+      if (editing) visible.unshift(editing);
+    }
     const kids = [];
     if (!hosts.length) kids.push(h("div", { class: "empty" }, "Noch keine Hosts. Der erste ist gleich angelegt."));
     else if (!matching.length) kids.push(h("div", { class: "empty" }, "Nichts gefunden."));
-    else kids.push(h("div", { class: "hosts" }, rows));
+    else kids.push(h("div", { class: "hosts" }, visible.map((host, n) => hostRow(host, n, draw))));
     if (visible.length < matching.length) {
       kids.push(h("div", { class: "row", style: "justify-content:center;margin-top:12px" },
         h("button", { class: "btn ghost", onclick: () => { S.allHosts = true; draw(); } }, "Alle " + matching.length + " anzeigen")));
@@ -283,31 +370,102 @@ function hostList() {
     holder.replaceChildren(...kids);
   };
   draw();
-  return [h("h2", {}, "Deine Hosts" + (hosts.length ? " (" + hosts.length + ")" : "")), hosts.length > SHOWN ? query : null, holder];
+  return h("div", { id: "hosts" }, h("h2", { class: "first" }, "Deine Hosts" + (hosts.length ? " (" + hosts.length + ")" : "")), hosts.length > SHOWN ? query : null, holder);
 }
 
-function hostRow(host, n) {
-  const del = host.managed ? h("button", { class: "icon-btn", title: "Entfernen", html: ICON.trash })
-    : h("span", { class: "chip", title: "Nicht von Pforte angelegt — in OPNsense selbst ändern" }, "manuell");
-  if (host.managed) {
-    let armed = false;
-    del.addEventListener("click", () => {
-      if (!armed) {
-        armed = true;
-        del.replaceChildren(document.createTextNode("Sicher?"));
-        del.style.width = "auto"; del.style.padding = "0 14px"; del.style.borderRadius = "999px"; del.style.color = "var(--bad)";
-        setTimeout(() => { if (document.body.contains(del)) { armed = false; del.innerHTML = ICON.trash; del.style.cssText = ""; } }, 3500);
-        return;
-      }
-      removeHost(host);
-    });
+/* Liste und Eingänge im Hintergrund neu lesen, ohne den Bildschirm zu wechseln. */
+async function refreshOverview() {
+  try {
+    S.ov = await api("/api/overview?fresh=1&profile=" + encodeURIComponent(S.cfg.active));
+  } catch (e) {
+    return;
   }
-  return h("div", { class: "host", style: "animation-delay:" + Math.min(n, 8) * 40 + "ms" },
+  const old = document.getElementById("hosts");
+  if (old) old.replaceWith(hostList());
+}
+
+const PENCIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+
+function targetText(host) {
+  return (host.ssl ? "https://" : "") + host.target;
+}
+
+function hostRow(host, n, redraw) {
+  const open = S.editing === host.uuid;
+  const actions = [];
+  if (host.editable) {
+    actions.push(h("button", { class: "icon-btn" + (open ? " on" : ""), title: open ? "Schließen" : "Bearbeiten", html: PENCIL,
+      onclick: () => { S.editing = open ? null : host.uuid; redraw(); } }));
+  } else {
+    actions.push(h("span", { class: "chip", title: host.reason || "In OPNsense selbst ändern" }, host.managed ? "gesperrt" : "manuell"));
+  }
+  const row = h("div", { class: "host", style: "animation-delay:" + Math.min(n, 8) * 40 + "ms" },
     h("div", { class: "dot" }),
     h("div", { class: "main" },
       h("a", { href: hostUrl(host), target: "_blank", rel: "noopener" }, host.host + (host.path || "")),
-      h("div", { class: "sub" }, "→ " + (host.ssl ? "https://" : "") + host.target + (host.listener ? "  ·  " + host.listener : ""))),
-    del);
+      h("div", { class: "sub" }, "→ " + targetText(host) + (host.listener ? "  ·  " + host.listener : ""))),
+    actions);
+  if (!open) return row;
+  return h("div", { class: "hostwrap" }, row, editPanel(host, redraw));
+}
+
+function splitHost(host) {
+  const known = S.ov.domains.map((d) => d.domain).sort((a, b) => b.length - a.length);
+  const hit = known.find((d) => host === d || host.endsWith("." + d));
+  if (hit) return { label: host === hit ? "@" : host.slice(0, host.length - hit.length - 1), domain: hit, extra: [] };
+  const dot = host.indexOf(".");
+  const domain = dot > 0 ? host.slice(dot + 1) : "";
+  return { label: dot > 0 ? host.slice(0, dot) : host, domain, extra: domain ? [domain] : [] };
+}
+
+function editPanel(host, redraw) {
+  const split = splitHost(host.host);
+  const ed = { label: split.label, domain: split.domain, target: targetText(host), listener: host.listener_uuid };
+  const preview = h("div", { class: "preview" });
+  const save = h("button", { class: "btn" }, "Speichern");
+  const changed = () => ed.label !== split.label || ed.domain !== split.domain || ed.target.trim() !== targetText(host) || ed.listener !== host.listener_uuid;
+  const update = () => {
+    const fqdn = fqdnOf(ed);
+    preview.replaceChildren(fqdn && fqdn !== host.host ? h("span", {}, "wird ", h("b", {}, fqdn)) : "");
+    save.disabled = !(ed.label.trim() && ed.domain.trim() && ed.target.trim() && changed());
+  };
+  const composer = composerNode(ed, update, split.extra);
+  const target = comboTarget(ed, "target", update);
+  let armed = false;
+  const del = h("button", { class: "btn danger" }, "Entfernen");
+  del.addEventListener("click", () => {
+    if (!host.managed) return toast("Von Hand angelegt — bitte in OPNsense entfernen.");
+    if (!armed) {
+      armed = true; del.textContent = "Wirklich entfernen?";
+      return void setTimeout(() => { armed = false; del.textContent = "Entfernen"; }, 3500);
+    }
+    removeHost(host);
+  });
+  save.addEventListener("click", () => saveEdit(host, ed));
+  const panel = h("div", { class: "edit" },
+    composer.node, preview,
+    h("label", { class: "field" }, h("span", {}, "Wohin zeigt er?"), target),
+    S.ov.listeners.length > 1 ? h("div", { class: "via" }, "Eingang", listenerSelect(ed)) : null,
+    !host.managed ? h("div", { class: "notice info" }, "Von Hand angelegt. Namen und Beschreibungen in OPNsense bleiben, wie sie sind.") : null,
+    h("div", { class: "row between" }, host.managed ? del : h("span"),
+      h("div", { class: "row" }, h("button", { class: "btn ghost", onclick: () => { S.editing = null; redraw(); } }, "Abbrechen"), save)));
+  setTimeout(update, 0);
+  return panel;
+}
+
+async function saveEdit(host, ed) {
+  const result = await runJob(host.host + " ändern", () => api("/api/edit", {
+    profile: S.cfg.active, uuid: host.uuid, label: ed.label, domain: ed.domain, target: ed.target,
+    listener: ed.listener, dns_target: S.ov.dns.target }));
+  if (!result.ok) {
+    renderMain(h("div", { class: "notice bad" }, result.error));
+    return refreshOverview();
+  }
+  S.editing = null;
+  const warnings = (result.result && result.result.warnings) || [];
+  toast(result.result && result.result.changed === false ? "Nichts geändert" : "Gespeichert");
+  renderMain(warnings.map((w) => h("div", { class: "notice" }, w)));
+  refreshOverview();
 }
 
 /* ---------- Anlegen und Entfernen ---------- */
@@ -334,9 +492,8 @@ async function runJob(title, start) {
     state = await api("/api/jobs/" + job);
     if (state.steps.length !== shown) { shown = state.steps.length; draw(state.steps, state.done); }
     if (state.done) { draw(state.steps, true); break; }
-    await sleep(250);
+    await sleep(120);
   }
-  await sleep(350);
   return state;
 }
 
@@ -351,11 +508,9 @@ async function submit() {
   const host = result.result.host;
   const warnings = result.result.warnings || [];
   S.form.label = ""; S.form.target = "";
-  const fresh = await api("/api/overview?profile=" + encodeURIComponent(S.cfg.active)).catch(() => null);
-  if (fresh) S.ov = fresh;
   const l = S.ov.listeners.find((x) => x.uuid === f.listener);
   const url = (l && l.ports.length && !l.ports.includes(443) && l.ports.includes(80) ? "http://" : "https://") + host;
-  mount(header(), h("div", { class: "card success" },
+  mount(header(), layout(h("div", { class: "card success" },
     h("div", { html: '<svg class="check" viewBox="0 0 84 84"><circle cx="42" cy="42" r="30"/><path d="M29 43l9 9 18-19"/></svg>' }),
     h("a", { class: "hostname", href: url, target: "_blank", rel: "noopener" }, host),
     h("p", { class: "lead" }, "ist angelegt und HAProxy hat die neue Konfiguration geladen."),
@@ -363,14 +518,19 @@ async function submit() {
     h("div", { class: "row", style: "justify-content:center;margin-top:18px" },
       h("a", { class: "btn", href: url, target: "_blank", rel: "noopener" }, "Öffnen"),
       h("button", { class: "btn ghost", onclick: () => renderMain() }, "Noch ein Host"))),
-    hostList());
+    hostList()), footer());
+  refreshOverview();
 }
 
 async function removeHost(host) {
   const result = await runJob(host.host + " entfernen", () => api("/api/remove", { profile: S.cfg.active, uuid: host.uuid }));
   if (!result.ok) toast(result.error);
-  else toast(host.host + " ist entfernt");
-  loadMain();
+  else {
+    toast(host.host + " ist entfernt");
+    S.ov.hosts = S.ov.hosts.filter((x) => x.uuid !== host.uuid);
+  }
+  renderMain();
+  refreshOverview();
 }
 
 /* ---------- Einrichtung (Wizard) ---------- */

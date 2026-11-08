@@ -1,10 +1,10 @@
 @echo off
 setlocal
 chcp 65001 >nul 2>&1
-title Pforte
+title HAProxy - OPNsense
 cd /d "%~dp0"
 
-if not exist "pforte.py" goto :missing
+if not exist "haproxy_gui.py" goto :missing
 
 set "PY="
 py -3 --version >nul 2>&1
@@ -18,13 +18,13 @@ goto :nopython
 :found
 %PY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" >nul 2>&1
 if errorlevel 1 goto :oldpython
-%PY% pforte.py %*
+%PY% haproxy_gui.py %*
 if errorlevel 1 pause
 exit /b 0
 
 :missing
 echo.
-echo   pforte.py fehlt. Diese Datei muss im selben Ordner liegen.
+echo   haproxy_gui.py fehlt. Diese Datei muss im selben Ordner liegen.
 echo.
 pause
 exit /b 1

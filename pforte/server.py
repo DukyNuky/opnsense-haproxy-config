@@ -10,6 +10,8 @@ import mimetypes
 import os
 import secrets
 import socket
+import subprocess
+import sys
 import threading
 import time
 import uuid as uuidlib
@@ -17,14 +19,20 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import VERSION, config, opnsense
+from . import VERSION, config, opnsense, update
 from .adguard import AdGuard
 from .net import ApiError, PforteError, base_url
 from .portainer import Portainer
 
+try:
+    from . import _web
+except ImportError:      # nur im Entwicklungsordner, vor dem ersten Bauen
+    _web = None
+
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 IDLE_SECONDS = 150     # Browser bremsen Hintergrund-Tabs stark; also großzügig
 BYE_SECONDS = 8        # nach „Fenster zu“ so lange auf einen Neuladen warten
+OVERVIEW_TTL = 30       # Sekunden, die eine gelesene Übersicht frisch genug ist
 GRACE_SECONDS = 180    # Zeit bis zum ersten Lebenszeichen des Fensters
 
 
@@ -139,6 +147,9 @@ class App:
         self.lock = threading.Lock()
         self.last_ping = None
         self.bye_at = None
+        self._update = None
+        self._release = None
+        self._overviews = {}
         self.started = time.time()
 
     # -- Einstellungen -------------------------------------------------
@@ -240,8 +251,34 @@ class App:
 
     # -- Übersicht -----------------------------------------------------
 
-    def overview(self, name=None):
+    def overview(self, name=None, fresh=False):
+        """Die Übersicht eines Profils; bis 30 s alte Antworten sind erlaubt.
+
+        Der Start wärmt sie vor, während das Fenster noch aufgebaut wird.
+        Nach jedem Anlegen oder Entfernen wird sie verworfen.
+        """
         profile = self.profile(name)
+        key = profile["name"]
+        with self.lock:
+            hit = self._overviews.get(key)
+        if hit and not fresh and time.time() - hit[0] < OVERVIEW_TTL:
+            return hit[1]
+        result = self._read_overview(profile)
+        with self.lock:
+            self._overviews[key] = (time.time(), result)
+        return result
+
+    def warm(self):
+        try:
+            self.overview()
+        except Exception:  # noqa: BLE001 - Vorwärmen darf nie stören
+            pass
+
+    def forget(self, name):
+        with self.lock:
+            self._overviews.pop(name, None)
+
+    def _read_overview(self, profile):
         client = opnsense_client(profile)
         guard = adguard_client(profile)
         docker = portainer_client(profile)
@@ -277,6 +314,52 @@ class App:
                 "dns": {"enabled": guard is not None, "target": dns_target},
                 "docker": docker is not None, "problems": problems}
 
+    # -- Updates -------------------------------------------------------
+
+    def update_info(self, force=False):
+        """Gibt es eine neuere Version? Fehler werden gemeldet, nie geworfen."""
+        with self.lock:
+            cached = self._update
+            if cached and not force and time.time() - cached["at"] < 6 * 3600:
+                return cached["info"]
+        info = {"current": VERSION, "available": False, "error": ""}
+        release = None
+        try:
+            release = update.check(VERSION)
+        except PforteError as exc:
+            info["error"] = str(exc)
+        if release:
+            info.update(available=True, version=release["version"],
+                        notes=release["notes"][:1500], page=release["page"])
+            why = update.blocked()
+            info["blocked"] = update.BLOCKED[why] if why else ""
+        with self.lock:
+            self._release = release
+            self._update = {"at": time.time(), "info": info}
+        return info
+
+    def install_update(self):
+        release = self._release
+        if not release:
+            raise PforteError("Es gibt nichts zu installieren — bitte erst "
+                              "nach Updates suchen.")
+
+        def work(say):
+            result = update.install(release, say=say)
+            self._update = None
+            return {"version": result["version"]}
+        return self.jobs.start(work)
+
+    def restart(self):
+        """Das Programm neu starten (nach einem Update)."""
+        argv = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+        if os.name == "nt":
+            subprocess.Popen(argv, close_fds=True, creationflags=0x00000008 | 0x00000200)
+        else:
+            subprocess.Popen(argv, close_fds=True, start_new_session=True)
+        threading.Timer(0.6, os._exit, [0]).start()
+        return {"ok": True}
+
     # -- Aufträge ------------------------------------------------------
 
     def create(self, body):
@@ -294,10 +377,32 @@ class App:
         def work(say):
             entry = next((d for d in opnsense.domains(client)
                           if d["domain"] == domain.lower()), None)
-            return opnsense.create_host(
-                client, label=label, domain=domain, target=target,
-                listener_uuid=listener, domain_entry=entry, adguard=guard,
-                dns_target=dns_target, say=say)
+            try:
+                return opnsense.create_host(
+                    client, label=label, domain=domain, target=target,
+                    listener_uuid=listener, domain_entry=entry, adguard=guard,
+                    dns_target=dns_target, say=say)
+            finally:
+                self.forget(profile["name"])
+        return self.jobs.start(work)
+
+    def edit(self, body):
+        profile = self.profile(body.get("profile"))
+        client, guard = opnsense_client(profile), adguard_client(profile)
+        dns_target = (body.get("dns_target")
+                      or (profile.get("adguard") or {}).get("target") or "")
+        args = dict(label=body.get("label", ""), domain=(body.get("domain") or "").strip(),
+                    target=body.get("target", ""), listener_uuid=body.get("listener") or "",
+                    adguard=guard, dns_target=dns_target)
+        action = body.get("uuid", "")
+        if not args["listener_uuid"]:
+            raise PforteError("Bitte einen Listener wählen.")
+
+        def work(say):
+            try:
+                return opnsense.update_host(client, action, say=say, **args)
+            finally:
+                self.forget(profile["name"])
         return self.jobs.start(work)
 
     def remove(self, body):
@@ -306,7 +411,10 @@ class App:
         action = body.get("uuid", "")
 
         def work(say):
-            return opnsense.remove_host(client, action, adguard=guard, say=say)
+            try:
+                return opnsense.remove_host(client, action, adguard=guard, say=say)
+            finally:
+                self.forget(profile["name"])
         return self.jobs.start(work)
 
 
@@ -381,10 +489,19 @@ def make_handler(app, port):
                 return app.set_active(body.get("name", ""))
             if method == "DELETE" and parts[:1] == ["profile"] and len(parts) == 2:
                 return app.delete_profile(parts[1])
+            if route == ("GET", "update"):
+                return app.update_info(force=bool(query.get("force")))
+            if route == ("POST", "update") and parts[1:] == ["install"]:
+                return {"job": app.install_update()}
+            if route == ("POST", "restart"):
+                return app.restart()
             if route == ("GET", "overview"):
-                return app.overview((query.get("profile") or [None])[0])
+                return app.overview((query.get("profile") or [None])[0],
+                                    fresh=bool(query.get("fresh")))
             if route == ("POST", "hosts"):
                 return {"job": app.create(body)}
+            if route == ("POST", "edit"):
+                return {"job": app.edit(body)}
             if route == ("POST", "remove"):
                 return {"job": app.remove(body)}
             if route == ("GET", "jobs") and len(parts) == 2:
@@ -429,11 +546,16 @@ def make_handler(app, port):
         def static(self, path):
             name = "index.html" if path in ("/", "") else path.lstrip("/")
             full = os.path.normpath(os.path.join(WEB, name))
-            if not full.startswith(WEB + os.sep) or not os.path.isfile(full):
+            if os.path.isfile(full) and full.startswith(WEB + os.sep):
+                with open(full, "rb") as handle:
+                    data = handle.read()
+            elif _web is not None and name in _web.FILES:
+                # eingebettete Fassung: so kommt die Oberfläche über einen
+                # Updater an, der nur .py-Dateien mitnimmt
+                data = _web.FILES[name].encode("utf-8")
+            else:
                 return self.send(404, b"nicht gefunden", "text/plain")
-            ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
-            with open(full, "rb") as handle:
-                data = handle.read()
+            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
             if ctype.startswith("text/") or ctype.endswith(("javascript", "json")):
                 ctype += "; charset=utf-8"
             self.send(200, data, ctype)

@@ -233,5 +233,129 @@ class Removing(Base):
         self.assertIn(foreign, self.state.objects["action"])
 
 
+
+class Editing(Base):
+    def entry(self, host):
+        return next(h for h in opnsense.hosts(self.client) if h["host"] == host)
+
+    def edit(self, host="wiki.home.example.com", **kw):
+        current = self.entry(host)
+        args = dict(label=host.split(".")[0], domain=host.split(".", 1)[1],
+                    target=current["target"], listener_uuid=current["listener_uuid"],
+                    adguard=self.guard, dns_target="192.168.0.1", say=self.say)
+        args.update(kw)
+        return opnsense.update_host(self.client, current["uuid"], **args)
+
+    def snapshot(self):
+        import copy
+        return copy.deepcopy((self.state.objects, self.state.rewrites))
+
+    def test_hosts_report_what_is_needed_for_editing(self):
+        wiki = self.entry("wiki.home.example.com")
+        self.assertTrue(wiki["editable"])
+        for key in ("acl_uuid", "backend_uuid", "server_uuid", "listener_uuid"):
+            self.assertTrue(wiki[key], key)
+
+    def test_change_the_target(self):
+        result = self.edit(target="https://192.168.0.99:8443")
+        self.assertTrue(result["changed"])
+        wiki = self.entry("wiki.home.example.com")
+        self.assertEqual((wiki["target"], wiki["ssl"]), ("192.168.0.99:8443", True))
+        self.assertEqual(self.state.reconfigured, 1)
+
+    def test_rename_moves_names_conditions_and_dns(self):
+        self.state.rewrites.append({"domain": "wiki.home.example.com", "answer": "192.168.0.1"})
+        result = self.edit(label="wiki2")
+        self.assertEqual(result["host"], "wiki2.home.example.com")
+        self.assertEqual(self.state.rewrites,
+                         [{"domain": "wiki2.home.example.com", "answer": "192.168.0.1"}])
+        moved = self.entry("wiki2.home.example.com")
+        self.assertEqual(moved["name"], "rule_wiki2_home_example_com")
+        names = {o["name"] for o in self.state.objects["server"].values()}
+        self.assertIn("srv_wiki2.home.example.com", names)
+        self.assertNotIn("srv_wiki.home.example.com", names)
+        self.assertEqual(self.counts()["action"], 2)
+        # umbenannt heißt auch: dieselben Namen lassen sich wieder anlegen
+        self.create(label="wiki")
+
+    def test_foreign_dns_answer_is_not_touched(self):
+        self.state.rewrites.append({"domain": "wiki.home.example.com", "answer": "9.9.9.9"})
+        self.edit(label="wiki2")
+        self.assertIn({"domain": "wiki.home.example.com", "answer": "9.9.9.9"}, self.state.rewrites)
+
+    def test_change_the_listener(self):
+        other = self.frontend("http_redirect")["uuid"]
+        self.edit(listener_uuid=other)
+        self.assertEqual(self.entry("wiki.home.example.com")["listener"], "http_redirect")
+        self.assertEqual(self.frontend("https_frontend")["rule_count"], 1)
+        self.assertEqual(self.frontend("http_redirect")["rule_count"], 1)
+
+    def test_listener_of_another_kind_is_refused(self):
+        before = self.snapshot()
+        with self.assertRaises(PforteError):
+            self.edit(listener_uuid=self.frontend("mqtt_tcp")["uuid"])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_nothing_changed_does_nothing(self):
+        result = self.edit()
+        self.assertFalse(result["changed"])
+        self.assertEqual(self.state.reconfigured, 0)
+
+    def test_name_taken_by_another_host(self):
+        before = self.snapshot()
+        with self.assertRaises(PforteError) as caught:
+            self.edit(label="cloud")
+        self.assertIn("gibt es schon", str(caught.exception))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_every_failure_restores_everything(self):
+        for verb, kind in (("set", "server"), ("set", "backend"), ("set", "acl"),
+                           ("set", "action"), ("set", "frontend")):
+            with self.subTest(step=kind):
+                self.state.fail_on = (verb, kind)
+                before = self.snapshot()
+                other = self.frontend("http_redirect")["uuid"]
+                with self.assertRaises(PforteError):
+                    self.edit(label="wiki3", target="10.0.0.9:81", listener_uuid=other)
+                self.state.fail_on = None
+                self.assertEqual(self.snapshot(), before)
+
+    def test_refused_config_restores_everything_and_does_not_reload(self):
+        before = self.snapshot()
+        self.state.config_ok = False
+        with self.assertRaises(PforteError):
+            self.edit(label="wiki3", target="10.0.0.9:81")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.state.reconfigured, 0)
+
+    def test_manual_rules_can_be_edited_but_keep_their_names(self):
+        server = self.state.add("server", name="mein_server", description="", address="1.1.1.1",
+                                port="80", ssl="0")
+        backend = self.state.add("backend", name="mein_pool", description="", mode="http",
+                                 linkedServers=[server])
+        acl = self.state.add("acl", name="meine_bed", description="", expression="hdr",
+                             hdr="hand.home.example.com")
+        action = self.state.add("action", name="meine_regel", description="", type="use_backend",
+                                linkedAcls=[acl], use_backend=backend)
+        https = next(k for k, o in self.state.objects["frontend"].items() if o["name"] == "https_frontend")
+        self.state.objects["frontend"][https]["linkedActions"].append(action)
+        self.edit(host="hand.home.example.com", label="hand2", target="2.2.2.2:8080")
+        self.assertEqual(self.state.objects["server"][server]["name"], "mein_server")
+        self.assertEqual(self.state.objects["server"][server]["description"], "")
+        self.assertEqual(self.state.objects["acl"][acl]["hdr"], "hand2.home.example.com")
+        self.assertEqual(self.state.objects["server"][server]["address"], "2.2.2.2")
+
+    def test_shared_parts_block_editing(self):
+        wiki = self.entry("wiki.home.example.com")
+        twin = self.state.add("action", name="rule_zwilling", description="", type="use_backend",
+                              linkedAcls=[], use_backend=wiki["backend_uuid"])
+        self.assertIn(twin, self.state.objects["action"])
+        entry = self.entry("wiki.home.example.com")
+        self.assertFalse(entry["editable"])
+        with self.assertRaises(PforteError) as caught:
+            self.edit(label="wiki9")
+        self.assertIn("mitbenutzt", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

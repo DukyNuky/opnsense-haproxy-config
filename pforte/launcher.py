@@ -6,7 +6,9 @@ import subprocess
 import sys
 import webbrowser
 
-from . import NAME, config
+import threading
+
+from . import NAME, config, window
 from .server import App, make_server, watch_window
 
 
@@ -51,6 +53,7 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     port = 0
     show = "--no-window" not in argv
+    force_browser = "--browser" in argv
     for arg in argv:
         if arg.startswith("--port="):
             port = int(arg.split("=", 1)[1])
@@ -58,15 +61,26 @@ def main(argv=None):
     server = make_server(app, port)
     real = server.server_address[1]
     url = f"http://127.0.0.1:{real}/?t={app.token}"
-    print(f"{NAME} läuft auf http://127.0.0.1:{real}/ — Fenster schließen beendet das Programm.")
-    if show:
-        if not open_window(url):
-            print(f"Bitte diese Adresse im Browser öffnen:\n  {url}")
-        watch_window(app, server)
-    else:
-        print(f"  {url}")
+    print(f"{NAME} läuft auf http://127.0.0.1:{real}/", flush=True)
+    # die Übersicht schon lesen, während das Fenster noch aufgebaut wird
+    threading.Thread(target=app.warm, daemon=True).start()
     try:
-        server.serve_forever()
+        if show and not force_browser and window.available():
+            # eigenes Fenster: der Server läuft im Hintergrund, das Fenster
+            # bestimmt, wann Schluss ist
+            threading.Thread(target=lambda: server.serve_forever(0.2),
+                             daemon=True).start()
+            window.run(url)
+            server.shutdown()
+        else:
+            if show:
+                if not open_window(url):
+                    print(f"Bitte diese Adresse im Browser öffnen:\n  {url}")
+                print("Fenster schließen beendet das Programm.", flush=True)
+                watch_window(app, server)
+            else:
+                print(f"  {url}", flush=True)
+            server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:

@@ -239,7 +239,8 @@ def listeners(client):
             "mode": row.get("mode", ""), "bind": bind, "ports": ports,
             "addresses": bind_addresses(bind),
             "enabled": str(row.get("enabled", "1")) == "1",
-            "rules": rules, "rule_count": len(rules), "https": 443 in ports})
+            "rules": rules, "rule_count": len(rules), "https": 443 in ports,
+            "default_backend": str(row.get("defaultBackend", ""))})
     found.sort(key=lambda i: (not i["enabled"], not i["https"],
                               -i["rule_count"], i["name"].lower()))
     if found:
@@ -270,31 +271,57 @@ def hosts(client, frontends=None):
     backend_by = {row["uuid"]: row for row in backends}
     server_by = {row["uuid"]: row for row in servers}
 
+    def count(items, field, wanted):
+        return sum(1 for item in items if wanted in _list(item.get(field)))
+
     found = []
     for row in actions:
-        host, path = "", ""
+        host, path, host_acl, expression = "", "", "", ""
         for acl_uuid in _list(row.get("linkedAcls")):
             acl = acl_by.get(acl_uuid) or {}
-            expression = acl.get("expression", "")
-            value = acl.get(expression, "")
-            if expression in ("hdr", "hdr_beg", "hdr_end", "ssl_sni"):
-                host = value
-            elif expression == "path_beg":
+            kind = acl.get("expression", "")
+            value = acl.get(kind, "")
+            if kind in ("hdr", "hdr_beg", "hdr_end", "ssl_sni"):
+                host, host_acl, expression = value, acl_uuid, kind
+            elif kind == "path_beg":
                 path = value
         if not host:
             continue
         target, ssl_on = "", False
-        backend = backend_by.get(row.get("use_backend", ""))
-        server = server_by.get((_list(backend.get("linkedServers")) or [""])[0]) if backend else None
+        backend_uuid = row.get("use_backend", "")
+        backend = backend_by.get(backend_uuid)
+        server_uuids = _list(backend.get("linkedServers")) if backend else []
+        server_uuid = server_uuids[0] if len(server_uuids) == 1 else ""
+        server = server_by.get(server_uuid)
         if server:
             target = f"{server.get('address', '')}:{server.get('port', '')}"
             ssl_on = str(server.get("ssl", "0")) == "1"
         frontend = linked.get(row["uuid"])
+
+        # Bearbeiten ist nur sicher, wenn alles genau zu dieser Regel gehört
+        reason = ""
+        if row.get("type") != "use_backend" or not backend:
+            reason = "Die Regel leitet nicht auf einen Pool."
+        elif expression not in ("hdr", "ssl_sni"):
+            reason = "Die Bedingung vergleicht nicht auf Gleichheit."
+        elif len(server_uuids) != 1 or not server:
+            reason = "Der Pool hat nicht genau einen Server."
+        elif (count(actions, "linkedAcls", host_acl) != 1
+              or sum(1 for a in actions if a.get("use_backend") == backend_uuid) != 1
+              or any(f["default_backend"] == backend_uuid for f in frontends)
+              or count(backends, "linkedServers", server_uuid) != 1):
+            reason = "Teile davon werden von anderen Regeln mitbenutzt."
+        elif frontend is None:
+            reason = "Die Regel hängt an keinem Listener."
         found.append({
             "uuid": row["uuid"], "host": host, "path": path, "target": target,
             "ssl": ssl_on, "name": row.get("name", ""),
             "managed": str(row.get("description", "")).startswith(MANAGED),
-            "listener": frontend["name"] if frontend else ""})
+            "listener": frontend["name"] if frontend else "",
+            "listener_uuid": frontend["uuid"] if frontend else "",
+            "editable": not reason, "reason": reason,
+            "acl_uuid": host_acl, "backend_uuid": backend_uuid,
+            "server_uuid": server_uuid})
     found.sort(key=lambda i: i["host"])
     return found
 
@@ -513,6 +540,143 @@ def create_host(client, *, label, domain, target, listener_uuid,
         rollback(client, created, say, adguard)
         raise
     return {"host": host, "warnings": warnings}
+
+
+# --------------------------------------------------------------------------
+# Ändern
+# --------------------------------------------------------------------------
+
+
+def _plain(value):
+    return selected_value(value) if isinstance(value, dict) else value
+
+
+def update_host(client, action_uuid, *, label, domain, target, listener_uuid,
+                adguard=None, dns_target="", say=print):
+    """Name, Ziel und Eingang eines vorhandenen Hosts ändern.
+
+    Es werden nur Felder von Objekten geändert, die ausschließlich zu dieser
+    Regel gehören. Von hier angelegte Objekte bekommen dabei auch die neuen
+    Namen. Geht etwas schief oder lehnt HAProxy die Konfiguration ab, ist
+    danach alles wieder wie vorher.
+    """
+    current = next((h for h in hosts(client) if h["uuid"] == action_uuid), None)
+    if current is None:
+        raise PforteError("Diesen Host gibt es nicht mehr.")
+    if not current["editable"]:
+        raise PforteError(f"Der kann hier nicht geändert werden: {current['reason']} "
+                          "Bitte in OPNsense selbst ändern.")
+
+    label = check_label(label)
+    host = build_fqdn(label, domain)
+    address, port, ssl_on = parse_target(target)
+    old_host = current["host"]
+    old_target = current["target"]
+    new_target = f"{address}:{port}"
+
+    host_changed = host != old_host
+    target_changed = (new_target, ssl_on) != (old_target, current["ssl"])
+    listener_changed = listener_uuid != current["listener_uuid"]
+    if not (host_changed or target_changed or listener_changed):
+        return {"host": host, "changed": False, "warnings": []}
+
+    frontend = client.get("frontend", listener_uuid)
+    mode = selected_value(frontend.get("mode"))
+    if mode not in ("http", *SNI_MODES):
+        raise PforteError(f"Der Listener „{frontend.get('name', '')}“ hat einen "
+                          f"unbekannten Modus ({mode or '?'})")
+    if listener_changed and (mode in SNI_MODES) != (
+            selected_value(client.get("backend", current["backend_uuid"]).get("mode")) == "tcp"):
+        raise PforteError("Der neue Eingang arbeitet anders (TCP/SNI statt HTTP) — "
+                          "dafür bitte einen neuen Host anlegen.")
+
+    names = Names(host)
+    rename = current["managed"] and host_changed
+    if rename:
+        own = {current["server_uuid"], current["backend_uuid"],
+               current["acl_uuid"], action_uuid}
+        for kind, name in (("server", names.server), ("backend", names.backend),
+                           ("acl", names.acl), ("action", names.action)):
+            clash = client.find(kind, name)
+            if clash and clash["uuid"] not in own:
+                raise PforteError(f"{host} gibt es schon.")
+    elif host_changed and any(
+            h["host"] == host and h["uuid"] != action_uuid for h in hosts(client)):
+        raise PforteError(f"{host} gibt es schon.")
+
+    warnings, undo = [], []
+
+    def change(kind, uuid, fields):
+        before = client.get(kind, uuid)
+        undo.append(("fields", kind, uuid, {k: _plain(before.get(k, "")) for k in fields}))
+        client.update(kind, uuid, fields)
+
+    note = {"description": f"{MANAGED} {host}"} if rename else {}
+    try:
+        if target_changed or rename:
+            say("Server ändern")
+            fields = dict(note)
+            if rename:
+                fields["name"] = names.server
+            if target_changed:
+                fields.update(address=address, port=str(port), ssl="1" if ssl_on else "0")
+            change("server", current["server_uuid"], fields)
+        if rename:
+            say("Pool ändern")
+            change("backend", current["backend_uuid"], {"name": names.backend, **note})
+        if host_changed:
+            say("Regel ändern")
+            acl = client.get("acl", current["acl_uuid"])
+            expression = selected_value(acl.get("expression"))
+            fields = {expression: host}
+            if rename:
+                fields.update(name=names.acl, **note)
+            change("acl", current["acl_uuid"], fields)
+            if rename:
+                change("action", action_uuid, {"name": names.action, **note})
+        if listener_changed:
+            say(f"In „{frontend.get('name', '')}“ einhängen")
+            old_frontend = client.get("frontend", current["listener_uuid"])
+            old_rules = selected_values(old_frontend.get("linkedActions"))
+            new_rules = selected_values(frontend.get("linkedActions"))
+            link_rules(client, current["listener_uuid"],
+                       [u for u in old_rules if u != action_uuid])
+            undo.append(("link", current["listener_uuid"], old_rules))
+            link_rules(client, listener_uuid, new_rules + [action_uuid])
+            undo.append(("link", listener_uuid, new_rules))
+        if adguard is not None and dns_target and host_changed:
+            say("DNS-Eintrag umziehen")
+            old = adguard.find_rewrite(old_host)
+            if old is not None and str(old.get("answer", "")) == dns_target:
+                adguard.delete_rewrite(old_host, dns_target)
+                undo.append(("dns-add", old_host, dns_target))
+            existing = adguard.find_rewrite(host)
+            if existing is None:
+                adguard.add_rewrite(host, dns_target)
+                undo.append(("dns-del", host, dns_target))
+            elif str(existing.get("answer", "")) != dns_target:
+                warnings.append(f"AdGuard leitet {host} bereits auf "
+                                f"{existing.get('answer')} — nicht verändert.")
+        elif adguard is None and host_changed:
+            warnings.append("Kein AdGuard eingerichtet — den DNS-Eintrag musst "
+                            "du selbst anpassen.")
+        apply(client, say)
+    except Exception:
+        say("Etwas ging schief — alles wird zurückgenommen", "warn")
+        for step in reversed(undo):
+            try:
+                if step[0] == "fields":
+                    client.update(step[1], step[2], step[3])
+                elif step[0] == "link":
+                    link_rules(client, step[1], step[2])
+                elif step[0] == "dns-add":
+                    adguard.add_rewrite(step[1], step[2])
+                elif step[0] == "dns-del":
+                    adguard.delete_rewrite(step[1], step[2])
+            except (ApiError, PforteError, AttributeError) as exc:
+                say(f"Aufräumen: {step[0]} blieb stehen ({exc})", "warn")
+        raise
+    return {"host": host, "changed": True, "warnings": warnings}
 
 
 # --------------------------------------------------------------------------

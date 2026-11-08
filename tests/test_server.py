@@ -172,6 +172,32 @@ class Working(Setup):
         self.assertTrue(gone["ok"], gone["error"])
         self.assertEqual(len(self.app.overview()["hosts"]), 2)
 
+    def test_edit_through_a_job(self):
+        ov = self.app.overview()
+        wiki = next(h for h in ov["hosts"] if h["host"] == "wiki.home.example.com")
+        self.assertTrue(wiki["editable"])
+        job = self.wait(self.app.edit({
+            "uuid": wiki["uuid"], "label": "wiki2", "domain": "home.example.com",
+            "target": "192.168.0.77:9000", "listener": wiki["listener_uuid"]}))
+        self.assertTrue(job["ok"], job["error"])
+        self.assertTrue(job["result"]["changed"])
+        moved = next(h for h in self.app.overview()["hosts"] if h["host"] == "wiki2.home.example.com")
+        self.assertEqual(moved["target"], "192.168.0.77:9000")
+
+    def test_edit_needs_a_listener(self):
+        with self.assertRaises(PforteError):
+            self.app.edit({"uuid": "x", "label": "a", "domain": "b.de", "target": "1.2.3.4"})
+
+    def test_overview_is_cached_but_forgotten_after_changes(self):
+        first = self.app.overview()
+        self.assertIs(self.app.overview(), first)
+        self.assertIsNot(self.app.overview(fresh=True), first)
+        job = self.wait(self.app.create({
+            "label": "neu", "domain": "home.example.com", "target": "192.168.0.50:8080",
+            "listener": first["listeners"][0]["uuid"]}))
+        self.assertTrue(job["ok"], job["error"])
+        self.assertIn("neu.home.example.com", [h["host"] for h in self.app.overview()["hosts"]])
+
     def test_create_error_is_in_the_job(self):
         job = self.wait(self.app.create({
             "label": "wiki", "domain": "home.example.com", "target": "192.168.0.50",

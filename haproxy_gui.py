@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Doppelklick-Einstieg: ``python3 pforte.py``."""
+"""Einstieg: ``python3 haproxy_gui.py``.
+
+Der Dateiname stammt aus den Versionen 1 bis 3 und bleibt, damit Starter,
+Menüeinträge und der Updater einer älteren Installation weiter treffen.
+"""
 import os
 import sys
 

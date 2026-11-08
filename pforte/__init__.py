@@ -1,4 +1,5 @@
-"""Pforte — neue Hosts hinter HAProxy auf OPNsense, mit einem Klick."""
+"""Neue Hosts hinter HAProxy auf OPNsense, mit einem Klick."""
 
-NAME = "Pforte"          # der Name steht nur hier; überall sonst wird er gelesen
-VERSION = "4.0.0-dev"
+NAME = "Pforte"          # der Anzeigename steht nur hier
+# dieselbe Nummer steht in opnsense_haproxy.py (ein Test hält beide gleich)
+VERSION = "4.0.0"

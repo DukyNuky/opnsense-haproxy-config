@@ -1,4 +1,4 @@
-# Pforte
+# opnsense-haproxy — Version 4 („Pforte“)
 
 Neue Webseite im Heimnetz erreichbar machen: einen Namen wählen, das Ziel
 angeben, anlegen. Pforte legt dafür in OPNsense-HAProxy alles an, trägt den
@@ -10,11 +10,15 @@ DNS-Eintrag in AdGuard Home ein und lädt HAProxy neu.
 
 Gebraucht wird nur Python 3.9 oder neuer. Es muss nichts installiert werden.
 
-* **Windows:** `Pforte-Starter.bat` doppelklicken.
-* **Linux/Mac:** `python3 pforte.py`
+* **Windows:** `HAProxy-Starter.bat` doppelklicken.
+* **Linux/Mac:** `python3 haproxy_gui.py`
 
-Es öffnet sich ein eigenes Fenster (Chrome, Edge oder Chromium) oder ein
+Es öffnet sich ein eigenes Programmfenster. Unter Linux (Mint, Ubuntu, Debian)
+ist das ein natives Fenster mit GTK und WebKit, soweit `python3-gi` und
+`gir1.2-webkit2-4.1` installiert sind. Sonst nimmt Pforte ein App-Fenster von
+Edge oder Chrome (unter Windows ist Edge immer da) und erst zuletzt einen
 Browser-Tab. Wird das Fenster geschlossen, beendet sich das Programm.
+Mit `--browser` lässt sich der Tab erzwingen.
 
 ## Erster Start
 
@@ -52,6 +56,24 @@ Angelegte wieder entfernt. Unter **Deine Hosts** lassen sich von Pforte
 angelegte Hosts samt DNS-Eintrag wieder löschen; von Hand angelegte Regeln
 werden nur angezeigt.
 
+## Updates
+
+Pforte prüft beim Start, ob auf GitHub eine neuere Version veröffentlicht ist.
+Gibt es eine, erscheint oben der Knopf **Update x.y.z**. Ein Klick lädt die
+Version, sichert die alte in `backup-<Version>` (die letzten drei bleiben),
+ersetzt die Programmdateien und startet neu. Zugangsdaten und Einstellungen
+bleiben unberührt. In einer Git-Arbeitskopie wird nichts überschrieben, dort
+gilt `git pull`.
+
+**Von Version 1 bis 3 auf 4:** Der Updater der alten Version holt Version 4
+selbst, auch auf der Beta-Schiene. Dafür bleiben die alten Dateinamen
+(`haproxy_gui.py`, `opnsense_haproxy.py`, `HAProxy-Starter.bat`) und das Format
+der `channel.json` bestehen, und die Oberfläche liegt zusätzlich als
+`pforte/_web.py` im Archiv, weil ein alter Updater nur `.py`-Dateien und ein
+paar weitere Endungen mitnimmt. Die Einstellungen der alten Version lassen sich
+beim ersten Start übernehmen. Die Kommandozeile der alten Versionen gibt es
+nicht mehr.
+
 ## Wo liegen die Zugangsdaten?
 
 In `~/.config/pforte/config.json` (Windows: `%APPDATA%\pforte`), nur für den
@@ -61,8 +83,9 @@ verlangt einen Zufallsschlüssel.
 ## Entwicklung
 
 ```
-python3 tests/run.py                  # Tests, mit einer Attrappe von OPNsense/AdGuard/Portainer
+python3 tests/run.py                  # Tests, auch Update von 2.12 und 3.0-beta über deren echte Updater (braucht die Git-Tags)
+python3 tests/build_web.py            # nach jeder Änderung an pforte/web neu erzeugen (pforte/_web.py)
 python3 tests/mock_services.py 8999   # Attrappe zum Ausprobieren (key k, secret s)
 ```
 
-Der Programmname steht nur in `pforte/__init__.py`.
+Anzeigename und Version stehen in `pforte/__init__.py`; die Version steht zusätzlich in `opnsense_haproxy.py` (ein alter Updater liest sie dort), ein Test hält beide gleich.
