@@ -1,37 +1,14 @@
 #!/usr/bin/env python3
-"""Run every check in this folder and say how it went.
-
-No framework: the project is standard library only, and a test that needs an
-install before it can say yes or no is one more thing between a change and the
-answer to "did I break it".
-"""
-
+"""Alle Tests: ``python3 tests/run.py``."""
 import os
-import subprocess
 import sys
+import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-
-
-def main():
-    names = sorted(name for name in os.listdir(HERE)
-                   if name.startswith("test_") and name.endswith(".py"))
-    if not names:
-        print("no checks here")
-        return 0
-    bad = []
-    for name in names:
-        print(f"\n=== {name} " + "=" * max(0, 60 - len(name)))
-        result = subprocess.run([sys.executable, "-u", os.path.join(HERE, name)])
-        if result.returncode:
-            bad.append(name)
-    print()
-    if bad:
-        print(f"failed: {', '.join(bad)}")
-        return 1
-    print(f"all {len(names)} files passed")
-    return 0
-
+sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, HERE)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    suite = unittest.defaultTestLoader.discover(HERE, pattern="test_*.py")
+    result = unittest.TextTestRunner(verbosity=1).run(suite)
+    sys.exit(0 if result.wasSuccessful() else 1)
