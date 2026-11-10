@@ -2,7 +2,7 @@
 
 Die alten Installationen werden aus den Git-Tags gebaut (v2.12.0, v3.0.0-beta.1),
 ihr eigener Updater holt Version 4 von einem lokalen GitHub-Ersatz, und danach
-holt Version 4 mit ihrem eigenen Updater eine 4.0.1. Ohne Git oder ohne die
+holt Version 4 mit ihrem eigenen Updater eine 4.99.0. Ohne Git oder ohne die
 Tags wird übersprungen.
 """
 
@@ -150,9 +150,9 @@ class Migration(unittest.TestCase):
             self.assertIn("version", json.loads(running.get("/api/state")))
 
     def then_update_itself(self):
-        """Der zweite Schritt: Version 4 holt mit eigenem Updater die 4.0.1."""
-        self.fake.releases.insert(0, {"tag": "v4.0.1", "notes": "Kleinigkeiten",
-                                      "zip": make_zip(tree_files("4.0.1", "neu in 4.0.1"))})
+        """Der zweite Schritt: Version 4 holt mit eigenem Updater die 4.99.0."""
+        self.fake.releases.insert(0, {"tag": "v4.99.0", "notes": "Kleinigkeiten",
+                                      "zip": make_zip(tree_files("4.99.0", "neu in 4.99.0"))})
         code = (
             "import sys; sys.path.insert(0, sys.argv[1]);"
             "from pforte import update; update.API = sys.argv[2];"
@@ -160,13 +160,13 @@ class Migration(unittest.TestCase):
             "print('DONE', update.install(r, sys.argv[1])['version'])")
         out = subprocess.run([sys.executable, "-c", code, self.folder, self.fake.url],
                              capture_output=True, text=True, cwd=self.dir.name)
-        self.assertIn("FOUND 4.0.1", out.stdout, out.stderr)
-        self.assertIn("DONE 4.0.1", out.stdout, out.stderr)
+        self.assertIn("FOUND 4.99.0", out.stdout, out.stderr)
+        self.assertIn("DONE 4.99.0", out.stdout, out.stderr)
         with open(os.path.join(self.folder, "pforte", "web", "app.js")) as handle:
-            self.assertIn("neu in 4.0.1", handle.read())       # .js kommt jetzt als Datei an
+            self.assertIn("neu in 4.99.0", handle.read())       # .js kommt jetzt als Datei an
         self.assert_settings_survived()
         with Smoke(self.folder) as running:
-            self.assertIn("neu in 4.0.1", running.get("/app.js").decode())   # Datei geht vor Einbettung
+            self.assertIn("neu in 4.99.0", running.get("/app.js").decode())   # Datei geht vor Einbettung
 
     # ------------------------------------------------------------------
 

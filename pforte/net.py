@@ -14,9 +14,10 @@ class PforteError(RuntimeError):
     das Zertifikat nicht zu prüfen).
     """
 
-    def __init__(self, message, code=""):
+    def __init__(self, message, code="", status=0):
         super().__init__(message)
         self.code = code
+        self.status = status      # HTTP-Status der Gegenstelle, sonst 0
 
 
 class ApiError(PforteError):
@@ -69,8 +70,9 @@ def request_json(url, headers=None, payload=None, method=None, verify=True,
         detail = exc.read().decode(errors="replace").strip()[:300]
         if exc.code in (401, 403):
             raise ApiError(f"{who} hat die Anmeldung abgelehnt "
-                           f"({exc.code})") from None
-        raise ApiError(f"{who}: {exc.code} {exc.reason} {detail}".strip()) from None
+                           f"({exc.code})", status=exc.code) from None
+        raise ApiError(f"{who}: {exc.code} {exc.reason} {detail}".strip(),
+                       status=exc.code) from None
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, ssl.SSLError) or "CERTIFICATE_VERIFY" in str(reason):
@@ -86,3 +88,23 @@ def request_json(url, headers=None, payload=None, method=None, verify=True,
     except json.JSONDecodeError:
         raise ApiError(f"{who} antwortet nicht mit JSON — stimmt die "
                        "Adresse?") from None
+
+
+def reachable(url, verify=True, timeout=10, who="Gegenstelle"):
+    """Antwortet unter der Adresse ein Webserver? Der Inhalt ist egal."""
+    req = urllib.request.Request(url, headers={"Accept": "*/*"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout,
+                                    context=tls_context(verify)) as resp:
+            resp.read(1)
+    except urllib.error.HTTPError:
+        return True                       # eine Absage ist auch eine Antwort
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, ssl.SSLError) or "CERTIFICATE_VERIFY" in str(reason):
+            raise ApiError(f"{who}: Das Zertifikat ist nicht vertraut "
+                           "(selbst signiert?).", code="tls") from None
+        raise ApiError(f"{who} ist nicht erreichbar ({reason})") from None
+    except (TimeoutError, OSError) as exc:
+        raise ApiError(f"{who} ist nicht erreichbar ({exc})") from None
+    return True

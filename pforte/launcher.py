@@ -8,7 +8,7 @@ import webbrowser
 
 import threading
 
-from . import NAME, config, window
+from . import NAME, cli, config, window
 from .server import App, make_server, watch_window
 
 
@@ -51,6 +51,8 @@ def open_window(url):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if any(arg in cli.COMMANDS for arg in argv):
+        return cli.main(argv)
     port = 0
     show = "--no-window" not in argv
     force_browser = "--browser" in argv

@@ -1,5 +1,15 @@
 # Änderungen
 
+## 4.1.0 — 10.11.2026
+
+- **Einrichtung Schritt für Schritt.** Der Assistent nennt bei jedem Schritt die Stelle in OPNsense: Plugins, Benutzer, Rechte, API-Schlüssel. Passende Seiten der OPNsense öffnen sich per Klick.
+- **Schlüsseldatei auswählen.** Die von OPNsense geladene Datei füllt Key und Secret aus.
+- **Prüfung mit Abhilfe.** Anmeldung, Plugin, Dienst, Eingang auf Port 443 und Zertifikate werden einzeln geprüft. Zu jedem fehlenden Punkt steht die Anleitung, auch später in den Einstellungen.
+- **Installation unter Linux.** `install.sh` richtet Programm, Startmenü-Eintrag und den Befehl `pforte` ein, ohne Root.
+- **Ohne Fenster.** `pforte --check` prüft die Zugänge, `pforte --configure` legt ein Profil aus Umgebungsvariablen an.
+- **Anleitung für Claude.** `CLAUDE.md` beschreibt Installation und Einrichtung für Assistenten.
+- **Behoben:** Fenster und Startmenü-Eintrag gehören in der Taskleiste jetzt zusammen.
+
 ## 4.0.0 — 08.11.2026
 
 Version 4 ist ein Umbau desselben Projekts. Der Anzeigename ist „Pforte“. Die Versionen bis 3.0.0-beta.1 stehen in den Zweigen `main` und `beta`.

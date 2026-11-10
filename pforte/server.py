@@ -197,6 +197,30 @@ class App:
         return Portainer(settings.get("url", ""), settings["api_key"],
                          verify=verify).check()
 
+    def probe(self, body):
+        """Schritt eins der Einrichtung: ist die Adresse erreichbar?"""
+        settings = body.get("settings") or {}
+        info = opnsense.probe(settings.get("url", ""),
+                              verify=settings.get("verify", True) is not False)
+        info["address"] = guess_address(info["url"])
+        return info
+
+    def diagnose(self, body):
+        """Die OPNsense Punkt für Punkt prüfen, mit Abhilfe je Punkt."""
+        stored = None
+        if body.get("profile"):
+            stored = config.find(self.data(), body["profile"])
+        settings = merge_secrets("opnsense", body.get("settings"), stored)
+        if not (settings.get("key") and settings.get("secret")):
+            raise PforteError("Key und Secret fehlen noch.")
+        client = opnsense.Client(settings.get("url", ""), settings["key"],
+                                 settings["secret"],
+                                 verify=settings.get("verify", True) is not False)
+        checks = opnsense.diagnose(client)
+        return {"checks": checks, "url": client.base,
+                "ready": not any(c["state"] == "fail" for c in checks),
+                "address": guess_address(client.base)}
+
     def save_profile(self, body):
         data = self.data()
         name = (body.get("name") or "").strip()
@@ -481,6 +505,10 @@ def make_handler(app, port):
                 return {"ok": True}
             if route == ("POST", "test"):
                 return app.test(body)
+            if route == ("POST", "probe"):
+                return app.probe(body)
+            if route == ("POST", "diagnose"):
+                return app.diagnose(body)
             if route == ("POST", "profile"):
                 return app.save_profile(body)
             if route == ("POST", "import"):

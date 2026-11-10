@@ -5,7 +5,7 @@ Ein Updater aus Version 1 bis 3 verlangt diese Datei im Archiv und liest die
 Versionsnummer aus der Zeile ``VERSION`` weiter unten. Beides bleibt, auch
 wenn die Kommandozeile selbst seit Version 4 nicht mehr existiert.
 """
-VERSION = "4.0.0"
+VERSION = "4.1.0"
 
 import os
 import sys

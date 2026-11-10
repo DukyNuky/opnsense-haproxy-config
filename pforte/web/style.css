@@ -202,3 +202,30 @@ h2.first { margin-top: 6px; }
   .cols { grid-template-columns: minmax(0, 1fr); }
   .cols .left { position: static; }
 }
+
+/* geführte Einrichtung */
+.stepno { font-size: 12px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); margin: 0 0 8px 2px; }
+.dots { margin-bottom: 22px; }
+small.hint { display: block; color: var(--muted); font-size: 13px; margin: 6px 4px 0; }
+.btn.small { padding: 6px 12px; font-size: 13px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
+ol.todo { list-style: none; counter-reset: todo; padding: 0; margin: 0 0 20px; display: grid; gap: 8px; }
+ol.todo li { counter-increment: todo; display: flex; gap: 14px; align-items: flex-start; background: rgba(0, 0, 0, .2);
+  border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; line-height: 1.5; }
+ol.todo li::before { content: counter(todo); flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--grad); color: #07101a; font-weight: 700; font-size: 14px; }
+ol.todo li .btn { margin: 4px 0 0 2px; vertical-align: middle; }
+.need { display: grid; gap: 8px; margin: 0 0 20px; }
+.need > div { background: rgba(0, 0, 0, .2); border: 1px solid var(--line); border-radius: 14px; padding: 11px 14px; color: var(--muted); }
+.need b { color: var(--text); margin-right: 8px; }
+.checks { display: grid; gap: 8px; margin: 0 0 16px; }
+.check { display: flex; gap: 14px; align-items: flex-start; background: rgba(0, 0, 0, .2); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+.check > div { min-width: 0; flex: 1; }
+.check .mark { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--panel-2); }
+.check .mark svg { width: 14px; height: 14px; }
+.check.ok .mark { background: var(--ok); color: #05210f; }
+.check.warn { border-color: rgba(251, 191, 36, .35); }
+.check.warn .mark { background: var(--warn); color: #2a1d00; }
+.check.bad { border-color: rgba(251, 113, 133, .4); }
+.check.bad .mark { background: var(--bad); color: #2a0610; }
+.check details { margin: 8px 0 0; }
+.check details li { margin: 4px 0; }

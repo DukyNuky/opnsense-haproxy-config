@@ -17,7 +17,7 @@ try:
     gi.require_version("Gdk", "3.0")
     gi.require_version("Gtk", "3.0")
     gi.require_version("WebKit2", "4.1")
-    from gi.repository import Gdk, Gio, Gtk, WebKit2
+    from gi.repository import Gdk, Gio, GLib, Gtk, WebKit2
 except (ImportError, ValueError):
     Gtk = None
 
@@ -29,6 +29,8 @@ def available():
 
 def run(url, on_close=None):
     """Das Fenster öffnen und blockieren, bis es geschlossen wird."""
+    # damit der Menüeintrag (StartupWMClass) und das Fenster zusammenfinden
+    GLib.set_prgname("opnsense-haproxy")
     window = Gtk.Window(title=NAME)
     window.set_default_size(1040, 780)
     window.set_position(Gtk.WindowPosition.CENTER)

@@ -6,12 +6,23 @@ DNS-Eintrag in AdGuard Home ein und lädt HAProxy neu.
 
 <img src="icon.png" alt="" width="96">
 
-## Starten
+## Installieren
 
-Gebraucht wird nur Python 3.9 oder neuer. Es muss nichts installiert werden.
+Gebraucht wird nur Python 3.9 oder neuer.
 
-* **Windows:** `HAProxy-Starter.bat` doppelklicken.
-* **Linux/Mac:** `python3 haproxy_gui.py`
+* **Linux:** im entpackten Ordner `bash install.sh`, oder ohne Download:
+
+  ```
+  curl -fsSL https://raw.githubusercontent.com/DukyNuky/opnsense-haproxy-config/main/install.sh | bash
+  ```
+
+  Das Skript legt das Programm nach `~/.local/share/opnsense-haproxy`, einen
+  Eintrag „Pforte“ ins Startmenü und den Befehl `pforte` nach `~/.local/bin`.
+  Root wird nicht gebraucht. `install.sh --deps` installiert zusätzlich die
+  Pakete für das eigene Fenster per `sudo apt`, `install.sh --uninstall`
+  entfernt alles außer den Zugangsdaten.
+* **Windows:** Archiv entpacken, `HAProxy-Starter.bat` doppelklicken.
+* **Ohne Installation:** `python3 haproxy_gui.py`
 
 Es öffnet sich ein eigenes Programmfenster. Unter Linux (Mint, Ubuntu, Debian)
 ist das ein natives Fenster mit GTK und WebKit, soweit `python3-gi` und
@@ -22,23 +33,34 @@ Mit `--browser` lässt sich der Tab erzwingen.
 
 ## Erster Start
 
-Ein Assistent fragt drei Zugänge ab und testet jeden sofort:
+Ein Assistent führt in sieben Schritten durch die Einrichtung und sagt bei
+jedem, was wo in OPNsense einzustellen ist:
 
-1. **OPNsense** (Pflicht): Adresse, API-Key und API-Secret.
-2. **AdGuard Home** (optional): damit der DNS-Eintrag automatisch entsteht.
-3. **Portainer** (optional): damit beim Ziel die laufenden Container samt Port
+1. **Adresse** der OPNsense. Pforte prüft, ob sie erreichbar ist.
+2. **Plugins:** `os-haproxy` und, für Zertifikate, `os-acme-client`.
+3. **Benutzer** für Pforte mit den Rechten „Services: HAProxy“ und
+   „Services: ACME Client“.
+4. **API-Schlüssel:** die von OPNsense geladene Datei auswählen oder Key und
+   Secret eintragen.
+5. **Prüfung:** Anmeldung, Plugin, laufender Dienst, Eingang auf Port 443 und
+   Zertifikate, je Punkt mit Anleitung, falls etwas fehlt.
+6. **AdGuard Home** (optional): damit der DNS-Eintrag automatisch entsteht.
+7. **Portainer** (optional): damit beim Ziel die laufenden Container samt Port
    vorgeschlagen werden.
 
 Hat die OPNsense ein selbst signiertes Zertifikat, bietet der Assistent
 „Trotzdem verbinden“ an. Einstellungen aus Version 3 lassen sich übernehmen.
+Die Prüfung steht später in den Einstellungen unter „Einrichtung prüfen“.
 
-### API-Schlüssel in OPNsense
+## Ohne Fenster
 
-1. *System → Zugriff → Benutzer*: neuen Benutzer anlegen, z. B. `pforte`.
-2. Benutzer öffnen, unter *Effektive Berechtigungen* **Services: HAProxy** und
-   **Services: ACME Client** hinzufügen (ACME liefert die Domainliste).
-3. In der Benutzerübersicht das Schlüssel-Symbol der Zeile anklicken. Die
-   heruntergeladene Datei enthält `key=…` und `secret=…`.
+```
+pforte --check        # gespeicherte Zugänge prüfen: 0 bereit, 1 etwas fehlt, 2 nichts eingerichtet
+pforte --configure    # Profil aus Umgebungsvariablen anlegen (siehe pforte --help)
+```
+
+Für Claude und andere Assistenten, die Pforte für jemanden einrichten, steht
+der ganze Ablauf in [CLAUDE.md](CLAUDE.md).
 
 ## Neuen Host anlegen
 

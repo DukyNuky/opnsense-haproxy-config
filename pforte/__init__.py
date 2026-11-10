@@ -2,4 +2,4 @@
 
 NAME = "Pforte"          # der Anzeigename steht nur hier
 # dieselbe Nummer steht in opnsense_haproxy.py (ein Test hält beide gleich)
-VERSION = "4.0.0"
+VERSION = "4.1.0"

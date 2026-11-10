@@ -11,7 +11,7 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from .net import ApiError, PforteError, base_url, request_json
+from .net import ApiError, PforteError, base_url, reachable, request_json
 
 MANAGED = "managed:"          # Vorspann der Beschreibung aller Objekte von hier
 SNI_MODES = ("ssl", "tcp")    # Listener, die nur den TLS-Handshake sehen
@@ -142,6 +142,176 @@ def check(client):
                            "Plugin os-haproxy?") from None
         raise
     return {"listeners": len(client.search("frontend"))}
+
+
+# --------------------------------------------------------------------------
+# Einrichtung prüfen: was fehlt, und wo es eingestellt wird
+# --------------------------------------------------------------------------
+
+PAGE_PLUGINS = "/ui/core/firmware#plugins"
+PAGE_HAPROXY = "/ui/haproxy"
+PAGE_ACME = "/ui/acmeclient/certificates"
+
+STEPS_KEY = (
+    "In OPNsense: System → Zugang → Benutzer (englisch: System → Access → Users).",
+    "In der Zeile des Benutzers das Symbol „API-Schlüssel erstellen“ anklicken "
+    "(ältere Versionen: Benutzer öffnen, unten bei „API-Schlüssel“ auf +).",
+    "Die heruntergeladene Datei enthält key=… und secret=…; beide Werte neu "
+    "eintragen oder die Datei auswählen.")
+STEPS_RIGHTS = (
+    "In OPNsense: System → Zugang → Benutzer, den Benutzer öffnen.",
+    "Bei den Rechten (Privileges) „Services: HAProxy“ und „Services: ACME "
+    "Client“ ankreuzen und speichern.",
+    "Fehlt „Services: HAProxy“ in der Liste, ist das Plugin noch nicht "
+    "installiert: System → Firmware → Plugins (Erweiterungen), os-haproxy "
+    "mit + installieren.")
+STEPS_PLUGIN = (
+    "In OPNsense: System → Firmware → Plugins (Erweiterungen).",
+    "os-haproxy suchen und mit + installieren.",
+    "Seite neu laden; danach gibt es den Menüpunkt Dienste → HAProxy.")
+STEPS_ENABLE = (
+    "In OPNsense: Dienste → HAProxy → Settings (Einstellungen).",
+    "Unter Service den Haken bei „Enable HAProxy“ setzen.",
+    "Mit Apply übernehmen.")
+STEPS_LISTENER = (
+    "Liegt die OPNsense-Oberfläche selbst auf Port 443, zuerst unter System → "
+    "Einstellungen → Verwaltung den TCP-Port ändern (z. B. 8443) und die "
+    "HTTP-Umleitung abschalten. Danach ist die Oberfläche unter dem neuen "
+    "Port erreichbar.",
+    "Dienste → HAProxy → Settings → Virtual Services → Public Services, mit + "
+    "einen neuen anlegen.",
+    "Name z. B. https_frontend, Listen Addresses 0.0.0.0:443, Type „HTTP / "
+    "HTTPS (SSL offloading)“.",
+    "Unter SSL Offloading das Zertifikat für die eigene Domain auswählen.",
+    "Speichern und mit Apply übernehmen.")
+STEPS_ACME_PLUGIN = (
+    "In OPNsense: System → Firmware → Plugins (Erweiterungen).",
+    "os-acme-client suchen und mit + installieren.",
+    "Danach unter Dienste → ACME Client ein Zertifikat ausstellen.")
+STEPS_ACME_RIGHTS = (
+    "In OPNsense: System → Zugang → Benutzer, den Benutzer öffnen.",
+    "Bei den Rechten (Privileges) „Services: ACME Client“ ankreuzen und "
+    "speichern.")
+STEPS_ACME_CERT = (
+    "Dienste → ACME Client → Settings: Plugin einschalten.",
+    "Accounts: ein Konto bei Let’s Encrypt anlegen und registrieren.",
+    "Challenge Types: eine DNS-01-Prüfung für den eigenen DNS-Anbieter "
+    "anlegen (nur damit gibt es Platzhalterzertifikate).",
+    "Certificates: Zertifikat für *.deine-domain.de anlegen und ausstellen.",
+    "Das Zertifikat anschließend im Public Service unter SSL Offloading "
+    "auswählen.")
+
+
+def _item(ident, state, title, text="", steps=(), page=""):
+    return {"id": ident, "state": state, "title": title, "text": text,
+            "steps": list(steps), "page": page}
+
+
+def diagnose(client):
+    """Die Einrichtung Punkt für Punkt prüfen.
+
+    Jeder Punkt hat einen Zustand (``ok``, ``warn``, ``fail``) und sagt, wo in
+    OPNsense das Fehlende eingestellt wird. Nur ``fail`` verhindert die
+    Arbeit; mit ``warn`` läuft Pforte eingeschränkt. Ein nicht vertrautes
+    Zertifikat wird weiter als Fehler mit dem Kürzel ``tls`` gemeldet.
+    """
+    checks = []
+    try:
+        status = client.call("haproxy/service/status")
+    except ApiError as exc:
+        if exc.code == "tls":
+            raise
+        if exc.status == 401:
+            checks.append(_item("login", "fail", "Anmeldung",
+                                "OPNsense kennt diesen Schlüssel nicht. Key "
+                                "und Secret wurden vertauscht, unvollständig "
+                                "kopiert oder der Schlüssel wurde gelöscht.",
+                                STEPS_KEY))
+        elif exc.status == 403:
+            checks.append(_item("login", "ok", "Anmeldung",
+                                "Key und Secret stimmen."))
+            checks.append(_item("rights", "fail", "Recht auf HAProxy",
+                                "Der Benutzer darf HAProxy nicht bedienen, "
+                                "oder das Plugin os-haproxy fehlt noch.",
+                                STEPS_RIGHTS, PAGE_PLUGINS))
+        elif exc.status == 404:
+            checks.append(_item("login", "ok", "Anmeldung",
+                                "Key und Secret stimmen."))
+            checks.append(_item("plugin", "fail", "HAProxy-Plugin",
+                                "Diese OPNsense kennt HAProxy nicht.",
+                                STEPS_PLUGIN, PAGE_PLUGINS))
+        else:
+            checks.append(_item("login", "fail", "Verbindung", str(exc)))
+        return checks
+    checks.append(_item("login", "ok", "Anmeldung", "Key und Secret stimmen."))
+    checks.append(_item("plugin", "ok", "HAProxy-Plugin",
+                        "Installiert, der Benutzer darf es bedienen."))
+
+    running = str(status.get("status", "")).lower()
+    if running and running != "running":
+        checks.append(_item("service", "warn", "HAProxy läuft",
+                            "HAProxy ist installiert, aber nicht gestartet.",
+                            STEPS_ENABLE, PAGE_HAPROXY))
+    else:
+        checks.append(_item("service", "ok", "HAProxy läuft"))
+
+    try:
+        found = [entry for entry in listeners(client)
+                 if entry["enabled"] and entry["https"]]
+    except ApiError as exc:
+        found = None
+        checks.append(_item("listener", "fail", "Eingang auf Port 443", str(exc)))
+    if found:
+        best = found[0]
+        checks.append(_item("listener", "ok", "Eingang auf Port 443",
+                            f"{best['name']} mit {best['rule_count']} Regeln."))
+    elif found is not None:
+        checks.append(_item("listener", "warn", "Eingang auf Port 443",
+                            "Es gibt noch keinen Public Service, der auf Port "
+                            "443 lauscht. Ohne ihn lässt sich kein Host "
+                            "anlegen.", STEPS_LISTENER, PAGE_HAPROXY))
+
+    try:
+        reply = client.call("acmeclient/certificates/search",
+                            {"current": 1, "rowCount": -1, "searchPhrase": ""})
+    except ApiError as exc:
+        if exc.status == 403:
+            checks.append(_item("acme", "warn", "Zertifikate (ACME)",
+                                "Der Benutzer darf die Zertifikate nicht "
+                                "lesen. Die Domainliste bleibt dadurch leer "
+                                "oder unvollständig.", STEPS_ACME_RIGHTS))
+        elif exc.status == 404:
+            checks.append(_item("acme", "warn", "Zertifikate (ACME)",
+                                "Das Plugin os-acme-client fehlt. Domains "
+                                "werden dann nur aus vorhandenen Hosts "
+                                "abgeleitet.", STEPS_ACME_PLUGIN, PAGE_PLUGINS))
+        else:
+            checks.append(_item("acme", "warn", "Zertifikate (ACME)", str(exc)))
+    else:
+        names = []
+        for row in reply.get("rows", []):
+            if str(row.get("enabled", "1")) == "1" and row.get("name"):
+                names.append(str(row["name"]))
+        if names:
+            shown = ", ".join(names[:4]) + (" …" if len(names) > 4 else "")
+            checks.append(_item("acme", "ok", "Zertifikate (ACME)", shown))
+        else:
+            checks.append(_item("acme", "warn", "Zertifikate (ACME)",
+                                "Es gibt noch kein Zertifikat. Die Domain "
+                                "für neue Hosts stammt aus den Zertifikaten.",
+                                STEPS_ACME_CERT, PAGE_ACME))
+    return checks
+
+
+def probe(url, verify=True, timeout=10):
+    """Antwortet unter dieser Adresse überhaupt etwas? Ohne Anmeldung.
+
+    Jede Antwort eines Webservers zählt als erreichbar; ob Schlüssel und
+    Plugin stimmen, klärt danach ``diagnose``.
+    """
+    base = base_url(url, "OPNsense-Adresse")
+    reachable(base + "/", verify=verify, timeout=timeout, who="OPNsense")
+    return {"url": base}
 
 
 # --------------------------------------------------------------------------

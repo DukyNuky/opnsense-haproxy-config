@@ -280,7 +280,7 @@ function renderMain(extra) {
   const notices = [];
   if (!ov.listeners.length) notices.push(h("div", { class: "notice bad" }, "Auf dieser OPNsense gibt es noch keinen Public Service. Lege in HAProxy zuerst einen an (Services → HAProxy → Einstellungen), dann geht es hier weiter."));
   if (!ov.domains.length && ov.listeners.length) notices.push(h("div", { class: "notice info" }, "Keine Zertifikate gefunden — tippe die Domain selbst ein."));
-  if (!ov.dns.enabled) notices.push(h("div", { class: "notice info" }, "Ohne AdGuard musst du den DNS-Eintrag selbst anlegen. ", h("button", { class: "link", onclick: () => startWizard({ edit: S.cfg.profiles.find((p) => p.name === S.cfg.active), step: 2 }) }, "AdGuard einrichten")));
+  if (!ov.dns.enabled) notices.push(h("div", { class: "notice info" }, "Ohne AdGuard musst du den DNS-Eintrag selbst anlegen. ", h("button", { class: "link", onclick: () => startWizard({ edit: S.cfg.profiles.find((p) => p.name === S.cfg.active), step: "adguard" }) }, "AdGuard einrichten")));
   for (const [what, text] of Object.entries(ov.problems || {})) notices.push(h("div", { class: "notice" }, what + ": " + text));
 
   go.addEventListener("click", () => submit());
@@ -535,44 +535,59 @@ async function removeHost(host) {
 
 /* ---------- Einrichtung (Wizard) ---------- */
 
+// Geführt: jeder Schritt sagt, was wo einzustellen ist. Zum Ändern
+// vorhandener Zugänge reicht die kurze Fassung.
+const GUIDED = ["welcome", "address", "plugin", "user", "key", "check", "adguard", "portainer", "done"];
+const SHORT = ["opnsense", "adguard", "portainer"];
+const SILENT = ["welcome", "done"];   // ohne Fortschrittsanzeige
+
 function startWizard(options) {
   const o = options || {};
   const base = o.edit || null;
   const blank = () => ({ url: "", verify: true });
+  const flow = base ? SHORT : GUIDED;
+  let at = o.first ? 0 : (base ? 0 : 1);
+  if (typeof o.step === "string") at = Math.max(0, flow.indexOf(o.step));
+  else if (o.step != null) at = Math.min(flow.length - 1, o.step);
   S.wiz = {
-    first: !!o.first, previous: base ? base.name : null,
-    step: o.step != null ? o.step : (o.first ? 0 : 1),
+    first: !!o.first, previous: base ? base.name : null, flow, at,
     draft: {
       opnsense: base ? { ...base.opnsense } : { ...blank(), key: "", secret: "" },
       adguard: base && base.adguard ? { ...base.adguard } : { ...blank(), username: "admin", password: "", target: "" },
       portainer: base && base.portainer ? { ...base.portainer } : { ...blank(), api_key: "" },
     },
     use: { adguard: !!(base && base.adguard), portainer: !!(base && base.portainer) },
-    tested: {},
+    info: {}, report: null,
     error: null, busy: false,
   };
-  if (base) { S.wiz.tested.opnsense = true; }
   renderWizard();
 }
 
-const STEPS = ["Willkommen", "OPNsense", "AdGuard", "Portainer"];
+function go(id) {
+  const w = S.wiz;
+  w.at = typeof id === "number" ? w.at + id : w.flow.indexOf(id);
+  w.error = null; w.busy = false;
+  renderWizard();
+}
 
 function renderWizard() {
-  const w = S.wiz;
-  const first = w.step === 0;
-  const dots = h("div", { class: "dots" }, STEPS.slice(1).map((_, i) => h("i", {
-    class: (w.step >= i + 1 ? "on" : "") + (w.previous ? " click" : ""),
-    onclick: w.previous ? () => { w.step = i + 1; w.error = null; renderWizard(); } : null })));
-  let body;
-  if (first) body = stepWelcome();
-  else if (w.step === 1) body = stepOpnsense();
-  else if (w.step === 2) body = stepAdguard();
-  else body = stepPortainer();
-  const back = (S.cfg && S.cfg.profiles.length && !w.previous && w.step <= 1)
-    ? h("button", { class: "link", onclick: loadMain }, "Abbrechen")
-    : (w.previous && w.step >= 1 ? h("button", { class: "link", onclick: loadMain }, "Schließen") : null);
-  mount(S.cfg && S.cfg.profiles.length ? header() : h("header", {}, h("div", { class: "brand" }, h("img", { src: "logo.svg", alt: "" }), "Pforte")),
-    h("div", { class: "card", id: "wizard" }, first ? null : dots, body), h("div", { class: "row", style: "margin-top:14px;justify-content:center" }, back));
+  const w = S.wiz, id = w.flow[w.at];
+  const shown = w.flow.filter((s) => !SILENT.includes(s));
+  const pos = shown.indexOf(id);
+  const progress = pos < 0 ? null : h("div", {},
+    h("div", { class: "stepno" }, "Schritt " + (pos + 1) + " von " + shown.length),
+    h("div", { class: "dots" }, shown.map((s, i) => h("i", {
+      class: (i <= pos ? "on" : "") + (w.previous ? " click" : ""),
+      onclick: w.previous ? () => go(s) : null }))));
+  const body = STEP[id]();
+  const have = S.cfg && S.cfg.profiles.length;
+  const links = [];
+  if (!w.previous && w.at > 0 && id !== "done") links.push(h("button", { class: "link", onclick: () => go(-1) }, "Zurück"));
+  if (w.previous) links.push(h("button", { class: "link", onclick: loadMain }, "Schließen"));
+  else if (have && id !== "done") links.push(h("button", { class: "link", onclick: loadMain }, "Abbrechen"));
+  mount(have ? header() : h("header", {}, h("div", { class: "brand" }, h("img", { src: "logo.svg", alt: "" }), "Pforte")),
+    h("div", { class: "card", id: "wizard" }, progress, body),
+    h("div", { class: "row", style: "margin-top:14px;justify-content:center;gap:18px" }, links));
 }
 
 function field(label, key, section, opts) {
@@ -581,85 +596,269 @@ function field(label, key, section, opts) {
   const secretSet = o.secret && S.wiz.previous && d.has_secret;
   return h("label", { class: "field" }, h("span", {}, label),
     h("input", { type: o.secret ? "password" : "text", placeholder: secretSet ? "unverändert — nur zum Ändern eintippen" : (o.placeholder || ""),
-      value: d[key] || "", autocomplete: "off", spellcheck: "false", autocapitalize: "off",
-      oninput: (e) => { d[key] = e.target.value; S.wiz.tested[section] = false; } }));
+      value: d[key] || "", autocomplete: "off", spellcheck: "false", autocapitalize: "off", id: o.id,
+      oninput: (e) => { d[key] = e.target.value; if (o.oninput) o.oninput(e); } }),
+    o.hint ? h("small", { class: "hint" }, o.hint) : null);
 }
 
-function errorBox(section) {
+function errorBox(section, retry) {
   const w = S.wiz;
   if (!w.error) return null;
   const box = h("div", { class: "notice bad" }, w.error.message);
   if (w.error.code === "tls") {
+    box.append(h("div", { class: "small", style: "margin-top:8px" }, section === "opnsense"
+      ? "Das ist bei einer OPNsense mit selbst erzeugtem Zertifikat normal. Im Heimnetz darf die Prüfung entfallen."
+      : "Bei einem selbst erzeugten Zertifikat im Heimnetz darf die Prüfung entfallen."));
     box.append(h("div", { style: "margin-top:10px" }, h("button", { class: "btn ghost", onclick: () => {
-      w.draft[section].verify = false; w.error = null; advance(section);
+      w.draft[section].verify = false; w.error = null; retry();
     } }, "Trotzdem verbinden")));
   }
   return box;
 }
 
-function stepWelcome() {
-  const w = S.wiz, imp = S.cfg.importable || [];
-  return h("div", {},
-    h("div", { class: "hero" }, h("img", { src: "logo.svg", alt: "" }), h("h1", {}, "Willkommen an der Pforte"),
-      h("p", { class: "lead" }, "Neue Webseiten im Heimnetz erreichbar machen — ein Name, ein Ziel, ein Klick. Dafür brauche ich einmalig drei Zugänge, zwei davon sind optional.")),
-    imp.length ? h("div", { class: "notice info" }, "Es gibt Einstellungen aus der alten Version (" + imp.join(", ") + "). ",
-      h("button", { class: "link", onclick: async () => { S.cfg = await api("/api/import", {}); toast("Übernommen"); loadMain(); } }, "Übernehmen")) : null,
-    h("button", { class: "btn big", onclick: () => { w.step = 1; renderWizard(); } }, "Los geht’s"));
+// Adresse einer Seite in der OPNsense, sobald die Adresse bekannt ist
+function osUrl(page) {
+  let base = (S.wiz.info.url || S.wiz.draft.opnsense.url || "").trim().replace(/\/+$/, "");
+  if (!base) return null;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(base)) base = "https://" + base;
+  return base + (page || "");
 }
 
-function stepOpnsense() {
+function openLink(text, page) {
+  const url = osUrl(page);
+  return url ? h("a", { class: "btn ghost small", href: url, target: "_blank", rel: "noopener" }, text, " ↗") : null;
+}
+
+function todo(items) {
+  return h("ol", { class: "todo" }, items.map((item) => h("li", {}, h("div", {}, item))));
+}
+
+function proceed(label, action, opts) {
+  const w = S.wiz, o = opts || {};
+  return h("div", { class: "row between", style: "margin-top:14px" },
+    o.skip ? h("button", { class: "link", onclick: o.skip[1] }, o.skip[0]) : h("span"),
+    h("button", { class: "btn", disabled: w.busy || o.disabled, onclick: action },
+      w.busy ? h("div", { class: "spinner" }) : null, w.busy ? "Prüfe …" : label));
+}
+
+const STEP = {
+  welcome() {
+    const imp = S.cfg.importable || [];
+    return h("div", {},
+      h("div", { class: "hero" }, h("img", { src: "logo.svg", alt: "" }), h("h1", {}, "Willkommen an der Pforte"),
+        h("p", { class: "lead" }, "Neue Webseiten im Heimnetz erreichbar machen — ein Name, ein Ziel, ein Klick. Die Einrichtung führt Schritt für Schritt durch alles, was dafür in OPNsense einzustellen ist.")),
+      h("div", { class: "need" },
+        h("div", {}, h("b", {}, "Gebraucht wird"), "eine OPNsense, auf der du dich als Administrator anmelden kannst."),
+        h("div", {}, h("b", {}, "Optional"), "AdGuard Home für den DNS-Eintrag und Portainer für Zielvorschläge."),
+        h("div", {}, h("b", {}, "Dauer"), "etwa fünf Minuten. Jede Eingabe wird sofort geprüft.")),
+      imp.length ? h("div", { class: "notice info" }, "Es gibt Einstellungen aus der alten Version (" + imp.join(", ") + "). ",
+        h("button", { class: "link", onclick: async () => { S.cfg = await api("/api/import", {}); toast("Übernommen"); loadMain(); } }, "Übernehmen")) : null,
+      h("button", { class: "btn big", onclick: () => go(1) }, "Los geht’s"));
+  },
+
+  address() {
+    return h("div", {},
+      h("h1", {}, "Wo ist deine OPNsense?"),
+      h("p", { class: "lead" }, "Gesucht ist die Adresse, unter der du die Oberfläche der OPNsense im Browser öffnest."),
+      field("Adresse der OPNsense", "url", "opnsense", { placeholder: "https://192.168.1.1", id: "first",
+        hint: "Meist die IP des Routers. Läuft die Oberfläche auf einem anderen Port, gehört er dazu: https://192.168.1.1:8443" }),
+      errorBox("opnsense", checkAddress),
+      S.wiz.error && S.wiz.error.code !== "tls" ? h("div", { class: "notice info" }, "Lässt sich die Adresse im Browser öffnen? Dann genau so eintragen, wie sie dort in der Adresszeile steht.") : null,
+      proceed("Verbindung prüfen", checkAddress));
+  },
+
+  plugin() {
+    return h("div", {},
+      h("h1", {}, "HAProxy in OPNsense"),
+      h("p", { class: "lead" }, "Pforte bedient das Plugin os-haproxy. Für die Zertifikate ist os-acme-client üblich. Beides wird in der OPNsense installiert."),
+      todo([
+        ["Die OPNsense im Browser öffnen und als Administrator anmelden. ", openLink("OPNsense öffnen", "")],
+        ["Im Menü: System → Firmware → Plugins (Erweiterungen). ", openLink("Plugins öffnen", "/ui/core/firmware#plugins")],
+        "In der Liste os-haproxy suchen und rechts mit + installieren.",
+        "Falls noch kein Zertifikat für die eigene Domain vorhanden ist: auf dieselbe Weise os-acme-client installieren.",
+        "Seite neu laden. Unter Dienste (Services) stehen jetzt HAProxy und ACME Client.",
+      ]),
+      h("div", { class: "notice info" }, "Schon installiert? Dann gleich weiter. Ob alles vorhanden ist, prüft Pforte in Schritt 5."),
+      proceed("Erledigt, weiter", () => go(1)));
+  },
+
+  user() {
+    return h("div", {},
+      h("h1", {}, "Einen Benutzer für Pforte anlegen"),
+      h("p", { class: "lead" }, "Pforte bekommt einen eigenen Benutzer, der nur HAProxy und die Zertifikate sehen darf. Dein Administrator-Passwort wird nie gebraucht."),
+      todo([
+        ["Im Menü der OPNsense: System → Zugang → Benutzer (englisch: System → Access → Users). ", openLink("OPNsense öffnen", "")],
+        "Mit + einen neuen Benutzer anlegen. Benutzername: pforte.",
+        "Passwort: ein beliebiges langes Passwort oder den Haken „Zufallspasswort erzeugen“ (Scrambled Password). Pforte meldet sich nicht damit an.",
+        "Bei den Rechten (Privileges) zwei Einträge ankreuzen: „Services: HAProxy“ und „Services: ACME Client“. Das Suchfeld über der Liste hilft.",
+        "Speichern.",
+      ]),
+      proceed("Erledigt, weiter", () => go(1)));
+  },
+
+  key() {
+    const w = S.wiz;
+    const pick = h("input", { type: "file", accept: ".txt,text/plain", style: "display:none", onchange: async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (useKeyText(await file.text())) toast("Schlüssel übernommen");
+      else { w.error = new Error("In dieser Datei stehen keine Zeilen key=… und secret=…"); }
+      renderWizard();
+    } });
+    const paste = (e) => {
+      const text = (e.clipboardData || window.clipboardData).getData("text");
+      if (/key\s*=/.test(text) && useKeyText(text)) { e.preventDefault(); toast("Schlüssel übernommen"); renderWizard(); }
+    };
+    return h("div", { onpaste: paste },
+      h("h1", {}, "Den API-Schlüssel erzeugen"),
+      h("p", { class: "lead" }, "Mit dem Schlüssel meldet sich Pforte als der eben angelegte Benutzer an."),
+      todo([
+        "In der Benutzerliste der OPNsense in der Zeile von pforte das Symbol „API-Schlüssel erstellen“ anklicken (ältere Versionen: Benutzer öffnen, ganz unten bei „API-Schlüssel“ auf +).",
+        "Der Browser lädt eine kleine Textdatei herunter (…apikey.txt). OPNsense zeigt das Secret nur dieses eine Mal.",
+        ["Die Datei hier auswählen, oder beide Werte von Hand eintragen. ", h("button", { class: "btn ghost small", onclick: () => pick.click() }, "Schlüsseldatei auswählen")],
+      ]),
+      pick,
+      field("API-Key", "key", "opnsense", { secret: true, hint: "Der Teil hinter key=" }),
+      field("API-Secret", "secret", "opnsense", { secret: true, hint: "Der Teil hinter secret=" }),
+      errorBox("opnsense", runCheck),
+      proceed("Prüfen", runCheck));
+  },
+
+  check() {
+    const w = S.wiz, r = w.report || { checks: [], ready: false };
+    const warn = r.checks.some((c) => c.state === "warn");
+    const head = !r.ready ? ["Noch nicht ganz", "Mindestens ein Punkt fehlt. Unter jedem steht, wo er in OPNsense eingestellt wird. Danach erneut prüfen."]
+      : warn ? ["Fast alles da", "Die Verbindung steht. Die markierten Punkte schränken Pforte ein und lassen sich jetzt oder später erledigen."]
+      : ["Alles bereit", "OPNsense ist vollständig eingerichtet."];
+    return h("div", {},
+      h("h1", {}, head[0]),
+      h("p", { class: "lead" }, head[1]),
+      h("div", { class: "checks" }, r.checks.map(checkRow)),
+      errorBox("opnsense", runCheck),
+      h("div", { class: "row between", style: "margin-top:14px" },
+        h("button", { class: "btn ghost", disabled: w.busy, onclick: runCheck }, w.busy ? h("div", { class: "spinner light" }) : null, "Erneut prüfen"),
+        h("button", { class: "btn", disabled: !r.ready || w.busy, onclick: () => go(1) }, warn && r.ready ? "Trotzdem weiter" : "Weiter")));
+  },
+
+  opnsense() {
+    return h("div", {},
+      h("h1", {}, "OPNsense"),
+      h("p", { class: "lead" }, "Pforte meldet sich mit einem API-Schlüssel an, nicht mit deinem Passwort."),
+      field("Adresse der OPNsense", "url", "opnsense", { placeholder: "https://192.168.1.1" }),
+      field("API-Key", "key", "opnsense", { secret: true }),
+      field("API-Secret", "secret", "opnsense", { secret: true }),
+      S.wiz.report ? h("div", { class: "checks" }, S.wiz.report.checks.map(checkRow)) : null,
+      errorBox("opnsense", () => advance("opnsense")),
+      h("div", { class: "row between", style: "margin-top:14px" },
+        h("button", { class: "btn ghost", disabled: S.wiz.busy, onclick: runCheck }, "Einrichtung prüfen"),
+        h("button", { class: "btn", disabled: S.wiz.busy, onclick: () => advance("opnsense") }, S.wiz.busy ? h("div", { class: "spinner" }) : null, S.wiz.busy ? "Prüfe …" : "Prüfen und weiter")));
+  },
+
+  adguard() {
+    const w = S.wiz;
+    return h("div", {},
+      h("h1", {}, "AdGuard Home"),
+      h("p", { class: "lead" }, "Optional. Damit ein neuer Name im Heimnetz gefunden wird, braucht er einen DNS-Eintrag. Mit AdGuard Home legt Pforte ihn selbst an, als DNS-Umschreibung."),
+      todo([
+        "Die Adresse ist die, unter der du die Oberfläche von AdGuard Home öffnest, samt Port.",
+        "Benutzer und Passwort sind dieselben wie bei der Anmeldung an dieser Oberfläche.",
+        "Das Ziel ist die IP, auf der HAProxy lauscht. Das ist fast immer die LAN-Adresse der OPNsense.",
+      ]),
+      field("Adresse von AdGuard", "url", "adguard", { placeholder: "http://192.168.1.2:3000" }),
+      field("Benutzer", "username", "adguard"),
+      field("Passwort", "password", "adguard", { secret: true }),
+      field("Neue Namen zeigen auf (IP von HAProxy)", "target", "adguard", { placeholder: "192.168.1.1",
+        hint: w.info.address ? "Vorschlag aus der Adresse der OPNsense: " + w.info.address : "" }),
+      h("div", { class: "small muted", style: "margin:0 4px 14px" }, "Die Einträge wirken für alle Geräte, die AdGuard Home als DNS-Server verwenden."),
+      errorBox("adguard", () => advance("adguard")),
+      proceed("Prüfen und weiter", () => advance("adguard"), { skip: ["Ohne AdGuard weiter", () => skip("adguard")] }));
+  },
+
+  portainer() {
+    return h("div", {},
+      h("h1", {}, "Portainer"),
+      h("p", { class: "lead" }, "Optional. Mit Portainer schlägt Pforte beim Ziel die laufenden Container samt Port vor."),
+      todo([
+        "Portainer öffnen und anmelden.",
+        "Oben rechts auf den Benutzernamen klicken, dann „Mein Konto“ (My account).",
+        "Unter „Zugriffstoken“ (Access tokens) auf „Zugriffstoken hinzufügen“ klicken, eine Beschreibung wie pforte eintragen und bestätigen.",
+        "Den angezeigten Token kopieren. Portainer zeigt ihn nur dieses eine Mal.",
+      ]),
+      field("Adresse von Portainer", "url", "portainer", { placeholder: "https://192.168.1.20:9443" }),
+      field("Zugriffstoken", "api_key", "portainer", { secret: true }),
+      errorBox("portainer", () => advance("portainer")),
+      proceed(S.wiz.previous ? "Prüfen und fertig" : "Prüfen und weiter", () => advance("portainer"), { skip: ["Ohne Portainer fertig", () => skip("portainer")] }));
+  },
+
+  done() {
+    const w = S.wiz, r = w.report || { checks: [] };
+    const open = r.checks.filter((c) => c.state !== "ok");
+    const line = (ok, title, text) => h("div", { class: "check " + (ok ? "ok" : "off") },
+      h("span", { class: "mark", html: ok ? ICON.check : "" }), h("div", {}, h("b", {}, title), h("div", { class: "small muted" }, text)));
+    return h("div", {},
+      h("div", { class: "hero" }, h("h1", {}, "Eingerichtet")),
+      h("div", { class: "checks" },
+        line(true, "OPNsense", w.info.url || w.draft.opnsense.url),
+        line(w.use.adguard, "AdGuard Home", w.use.adguard ? "DNS-Einträge entstehen automatisch." : "Übersprungen. DNS-Einträge legst du selbst an."),
+        line(w.use.portainer, "Portainer", w.use.portainer ? "Container werden als Ziel vorgeschlagen." : "Übersprungen.")),
+      open.length ? h("div", { class: "notice" }, "Noch offen in OPNsense: " + open.map((c) => c.title).join(", ") + ". Die Anleitung dazu steht jederzeit in den Einstellungen (Zahnrad oben rechts).") : null,
+      h("p", { class: "lead", style: "margin-top:18px" }, "Als Nächstes: Namen eintippen, Ziel angeben, anlegen. Die Zugänge lassen sich über das Zahnrad oben rechts ändern."),
+      h("button", { class: "btn big", onclick: () => { S.wiz = null; checkUpdate().then(refreshHeader); loadMain(); } }, "Zur Pforte"));
+  },
+};
+
+function checkRow(c) {
+  const cls = c.state === "ok" ? "ok" : (c.state === "warn" ? "warn" : "bad");
+  const help = c.steps && c.steps.length ? h("details", { open: c.state === "fail" },
+    h("summary", {}, "So wird es eingerichtet"),
+    h("div", { class: "body" }, h("ol", {}, c.steps.map((s) => h("li", {}, s))),
+      c.page ? h("div", { style: "margin:8px 0 4px" }, openLink("Seite in OPNsense öffnen", c.page)) : null)) : null;
+  return h("div", { class: "check " + cls },
+    h("span", { class: "mark", html: c.state === "ok" ? ICON.check : ICON.bang }),
+    h("div", {}, h("b", {}, c.title), c.text ? h("div", { class: "small muted" }, c.text) : null, help));
+}
+
+// „key=…“ und „secret=…“ aus der Schlüsseldatei der OPNsense lesen
+function useKeyText(text) {
+  const key = /^\s*key\s*=\s*(\S+)/m.exec(text || ""), secret = /^\s*secret\s*=\s*(\S+)/m.exec(text || "");
+  if (!key || !secret) return false;
+  S.wiz.draft.opnsense.key = key[1];
+  S.wiz.draft.opnsense.secret = secret[1];
+  S.wiz.error = null;
+  return true;
+}
+
+async function checkAddress() {
   const w = S.wiz, d = w.draft.opnsense;
-  return h("div", {},
-    h("h1", {}, "OPNsense"),
-    h("p", { class: "lead" }, "Hier wird HAProxy eingerichtet. Pforte meldet sich mit einem API-Schlüssel an, nicht mit deinem Passwort."),
-    field("Adresse der OPNsense", "url", "opnsense", { placeholder: "https://192.168.1.1" }),
-    field("API-Key", "key", "opnsense", { secret: true }),
-    field("API-Secret", "secret", "opnsense", { secret: true }),
-    h("details", {}, h("summary", {}, "Wo bekomme ich den Schlüssel?"),
-      h("div", { class: "body" }, h("ol", {},
-        h("li", {}, "OPNsense → System → Zugriff → Benutzer → neuen Benutzer anlegen (z. B. „pforte“)."),
-        h("li", {}, "Benutzer öffnen, unter „Effektive Berechtigungen“ hinzufügen: „Services: HAProxy“ und „Services: ACME Client“. Speichern."),
-        h("li", {}, "In der Benutzerübersicht in der Zeile des Benutzers das Schlüssel-Symbol („API-Schlüssel erstellen“) klicken."),
-        h("li", {}, "Die heruntergeladene Datei enthält zwei Zeilen: key=… und secret=… — jeweils nur den Teil hinter dem Gleichheitszeichen eintragen."))),
-      h("div", { class: "small", style: "padding:6px 4px" }, "Das Secret zeigt OPNsense nur dieses eine Mal an.")),
-    errorBox("opnsense"),
-    nav("opnsense", null));
+  w.error = null;
+  if (!(d.url || "").trim()) { w.error = new Error("Bitte die Adresse eintragen."); return renderWizard(); }
+  w.busy = true; renderWizard();
+  try {
+    const info = await api("/api/probe", { settings: d });
+    w.info.url = info.url; w.info.address = info.address;
+    if (info.address && !w.draft.adguard.target) w.draft.adguard.target = info.address;
+  } catch (e) {
+    w.busy = false; w.error = e; return renderWizard();
+  }
+  go(1);
 }
 
-function stepAdguard() {
-  const w = S.wiz;
-  return h("div", {},
-    h("h1", {}, "AdGuard Home"),
-    h("p", { class: "lead" }, "Damit neue Namen im Heimnetz auch gefunden werden, trägt Pforte den DNS-Eintrag gleich mit ein. Ohne AdGuard machst du das selbst."),
-    field("Adresse von AdGuard", "url", "adguard", { placeholder: "http://192.168.1.2:3000" }),
-    field("Benutzer", "username", "adguard"),
-    field("Passwort", "password", "adguard", { secret: true }),
-    field("Neue Namen sollen zeigen auf (IP von HAProxy)", "target", "adguard", { placeholder: "192.168.1.1" }),
-    errorBox("adguard"),
-    nav("adguard", "Ohne AdGuard weiter"));
-}
-
-function stepPortainer() {
-  return h("div", {},
-    h("h1", {}, "Portainer"),
-    h("p", { class: "lead" }, "Optional. Mit Portainer schlägt Pforte beim Ziel deine laufenden Container samt Port vor."),
-    field("Adresse von Portainer", "url", "portainer", { placeholder: "https://192.168.1.20:9443" }),
-    field("Zugriffstoken", "api_key", "portainer", { secret: true }),
-    h("details", {}, h("summary", {}, "Wo bekomme ich den Token?"),
-      h("div", { class: "body" }, "Portainer → oben rechts dein Benutzername → „Mein Konto“ → „Zugriffstoken hinzufügen“. Der Token wird nur einmal angezeigt.")),
-    errorBox("portainer"),
-    nav("portainer", "Ohne Portainer fertig"));
-}
-
-function nav(section, skipText) {
-  const w = S.wiz;
-  const last = section === "portainer";
-  const go = h("button", { class: "btn", disabled: w.busy, onclick: () => advance(section) },
-    w.busy ? h("div", { class: "spinner" }) : null, w.busy ? "Prüfe …" : (last ? "Fertig" : "Weiter"));
-  const row = h("div", { class: "row between", style: "margin-top:6px" },
-    skipText ? h("button", { class: "link", onclick: () => skip(section) }, skipText) : h("span"),
-    go);
-  return row;
+async function runCheck() {
+  const w = S.wiz, d = w.draft.opnsense;
+  w.error = null;
+  if (!filled("opnsense")) { w.error = new Error("Key und Secret werden gebraucht."); return renderWizard(); }
+  w.busy = true; renderWizard();
+  try {
+    w.report = await api("/api/diagnose", { settings: d, profile: w.previous });
+    w.info.url = w.report.url; w.info.address = w.report.address || w.info.address;
+    if (w.info.address && !w.draft.adguard.target) w.draft.adguard.target = w.info.address;
+  } catch (e) {
+    w.busy = false; w.error = e; return renderWizard();
+  }
+  w.busy = false;
+  if (w.flow.includes("check")) return go("check");
+  renderWizard();
+  return w.report.ready;
 }
 
 function filled(section) {
@@ -676,25 +875,26 @@ async function advance(section) {
     w.error = new Error(section === "opnsense" ? "Adresse, Key und Secret werden gebraucht." : "Bitte die Felder ausfüllen — oder überspringen.");
     return renderWizard();
   }
+  if (section === "opnsense") {           // kurze Fassung: prüfen, bei Fehlern stehen bleiben
+    if (await runCheck()) go(1);
+    return;
+  }
   w.busy = true; renderWizard();
   try {
-    const info = await api("/api/test", { kind: section, settings: d, profile: w.previous });
-    w.tested[section] = true;
-    if (section === "opnsense" && info.address && !w.draft.adguard.target) w.draft.adguard.target = info.address;
+    await api("/api/test", { kind: section, settings: d, profile: w.previous });
     w.use[section] = true;
   } catch (e) {
     w.busy = false; w.error = e; return renderWizard();
   }
   w.busy = false;
-  if (section === "opnsense") { w.step = 2; return renderWizard(); }
-  if (section === "adguard") { w.step = 3; return renderWizard(); }
+  if (section === "adguard") return go(1);
   return finish();
 }
 
 function skip(section) {
   const w = S.wiz;
   w.use[section] = false; w.error = null;
-  if (section === "adguard") { w.step = 3; return renderWizard(); }
+  if (section === "adguard") return go(1);
   return finish();
 }
 
@@ -707,6 +907,7 @@ async function finish() {
   } catch (e) {
     w.error = e; return renderWizard();
   }
+  if (w.flow.includes("done")) return go("done");
   S.wiz = null;
   loadMain();
 }
